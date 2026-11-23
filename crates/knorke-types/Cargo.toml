@@ -1,0 +1,13 @@
+[package]
+name = "knorke-types"
+description = "Small shared contracts of the Knorke Engine: handles, ticks, seeds, diagnostics. No runtime."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

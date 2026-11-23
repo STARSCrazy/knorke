@@ -1,0 +1,20 @@
+[package]
+name = "knorke-observe"
+description = "Shared debugging and analysis contracts of the Knorke Engine (traces, profiling probes, state inspection) plus a host-side recorder with Perfetto/JSON export."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Domain modules depend with `default-features = false` and get only the no_std contracts.
+# Hosts and tools enable `std` for the recorder and exporters.
+default = ["std"]
+std = []
+
+[dependencies]
+knorke-types = { workspace = true }
+
+[lints]
+workspace = true

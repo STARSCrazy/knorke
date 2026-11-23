@@ -1,0 +1,5 @@
+# LF everywhere: identical files on Windows, Linux and macOS (rustfmt check, golden data).
+* text=auto eol=lf
+*.png binary
+*.bmp binary
+*.bin binary

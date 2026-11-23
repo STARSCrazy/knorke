@@ -1,0 +1,54 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86_64 Windows/Linux and ARM macOS: the determinism fingerprint must match on all.
+        os: [windows-latest, ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked
+      - run: cargo test --workspace --all-features --locked
+      # Release: other float code generation, same fingerprint (ADR 0011).
+      - run: cargo test --workspace --all-features --release --locked
+      - run: cargo test --workspace --no-default-features --locked
+      - name: dependency rules (ADR 0001)
+        run: cargo xtask deps
+      - name: standalone builds (ADR 0001)
+        run: cargo xtask standalone
+
+  wasm-determinism:
+    # Same fingerprint on WebAssembly (ADR 0011). No threads on wasip1: serial executor only.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+      - run: cargo test -p knorke-contract-tests --test determinism --target wasm32-wasip1 --locked
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - run: cargo check --workspace --locked

@@ -1,0 +1,31 @@
+[package]
+name = "knorke-math"
+description = "Layout-stable math and color types of the Knorke Engine, castable without copies (bytemuck) and typed by coordinate space."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# From/Into conversions with the `mint` interop types (used by glam, nalgebra, cgmath, ...).
+mint = ["dep:mint"]
+
+[dependencies]
+bytemuck = { workspace = true }
+# Deterministic transcendental functions (ADR 0011). Pure Rust, no dependencies.
+libm = { workspace = true }
+# Only for `SnapshotValue` impls (ADR 0010); knorke-types itself has no dependencies.
+knorke-types = { workspace = true }
+mint = { workspace = true, optional = true }
+
+# Own lint table instead of `workspace = true`: identical, except that `unsafe_code` is
+# `deny` so that the bytemuck marker impls in `pod.rs` can opt in locally (ADR 0006).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
