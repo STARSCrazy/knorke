@@ -17,7 +17,12 @@ struct Rule {
     why: &'static str,
 }
 
-const DOMAIN_HEADLESS: &[&str] = &["knorke-ai", "knorke-navigation", "knorke-perception"];
+const DOMAIN_HEADLESS: &[&str] = &[
+    "knorke-ai",
+    "knorke-navigation",
+    "knorke-perception",
+    "knorke-grid",
+];
 const DEV_PLANE: &[&str] = &["knorke-agent", "knorke-cli", "knorke-mcp"];
 
 const RULES: &[Rule] = &[
@@ -38,6 +43,31 @@ const RULES: &[Rule] = &[
         ],
         except: &[],
         why: "AI, navigation and perception run headless without graphics, runtime or agent plane",
+    },
+    // The AI modules share only knorke-grid; knorke-integration joins them (ADR 0012).
+    Rule {
+        from: &["knorke-navigation"],
+        to: &["knorke-perception", "knorke-ai"],
+        except: &[],
+        why: "navigation, perception and AI are independent; only knorke-integration joins them",
+    },
+    Rule {
+        from: &["knorke-perception"],
+        to: &["knorke-navigation", "knorke-ai"],
+        except: &[],
+        why: "navigation, perception and AI are independent; only knorke-integration joins them",
+    },
+    Rule {
+        from: &["knorke-ai"],
+        to: &["knorke-navigation", "knorke-perception"],
+        except: &[],
+        why: "navigation, perception and AI are independent; only knorke-integration joins them",
+    },
+    Rule {
+        from: &["knorke-grid"],
+        to: &["*"],
+        except: &["knorke-types"],
+        why: "knorke-grid holds the shared space types; closed dependency list (ADR 0012)",
     },
     Rule {
         from: &["knorke-render"],
@@ -68,6 +98,7 @@ const RULES: &[Rule] = &[
             "knorke-ai",
             "knorke-navigation",
             "knorke-perception",
+            "knorke-grid",
         ],
         to: &["knorke-integration"],
         except: &[],
@@ -119,6 +150,7 @@ const RULES: &[Rule] = &[
             "knorke-ai",
             "knorke-navigation",
             "knorke-perception",
+            "knorke-grid",
             "knorke-render",
             "knorke-lighting",
         ],
@@ -398,6 +430,35 @@ mod tests {
         let v = violations(&m);
         assert_eq!(v.len(), 1);
         assert!(v[0].starts_with("knorke-math -> syn"), "{}", v[0]);
+    }
+
+    #[test]
+    fn ai_modules_stay_independent() {
+        let m = meta(
+            &["knorke-ai", "knorke-integration"],
+            vec![
+                node("knorke-ai", &[("knorke-navigation", "normal")]),
+                node(
+                    "knorke-integration",
+                    &[("knorke-ai", "normal"), ("knorke-perception", "normal")],
+                ),
+                node("knorke-navigation", &[]),
+                node("knorke-perception", &[]),
+            ],
+            &[
+                "knorke-ai",
+                "knorke-integration",
+                "knorke-navigation",
+                "knorke-perception",
+            ],
+        );
+        let v = violations(&m);
+        assert_eq!(v.len(), 1, "{v:?}");
+        assert!(
+            v[0].starts_with("knorke-ai -> knorke-navigation"),
+            "{}",
+            v[0]
+        );
     }
 
     #[test]
