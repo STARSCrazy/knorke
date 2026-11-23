@@ -21,6 +21,7 @@ Rust-first, agent-native, kompositionelle Game Engine. Fachmodule (Rendering, Be
 | `knorke-ai` | Entscheidungen: Utility-`Decider`, `StateMachine`, Gedächtnis (`Knowledge`, `Alertness`, `GoalGuess`), Missionen, Gruppen (`Crew`, `Squad`) |
 | `knorke-render` | CPU-Software-Renderer im Pixel-Look (aus pixelraum): Raster, Kamera, Gitter, Texturen, Sprites, Picking, Palette, Blending; liefert G-Buffer-Samples ans Licht, sRGB-Ausgabe einmal am Ende |
 | `knorke-lighting` | CPU-Licht und Schatten für `knorke-render` (Punktlichter, Sonne, Schattenkarten), linear gerechnet; eingefroren, neues Licht entsteht auf der GPU (ADR 0014) |
+| `knorke-light2d` | 2D-Licht aus Chiaro (ADR 0014), bisher der GPU-freie Teil: Projektion, Triangulierung, Pixel-/Material-Codecs, Licht-Store mit Handles und Snapshots, Lichtmathematik; GPU-Stufen folgen hinter Feature `gpu` |
 | `knorke-integration` | Verbindungscode zwischen den Modulen, Features je Profil: `ai` (Wahrnehmung → Gedächtnis → Navigation) und `pixel` (Renderer + Licht); Prelude, Szenario- und Bildtests |
 | `knorke-replay` | Replays: Aufzeichnung, Verifikation mit abweichendem Tick und Modul, Sprung zu Tick, Flight Recorder, Minimierung fehlerauslösender Commands |
 | `knorke-exec` | Executoren für `Parallel` auf Host-Seite: `Rayon` (Work-Stealing, Standard), `ScopedThreads` (ohne Abhängigkeit, nur für grobe Arbeit) |
