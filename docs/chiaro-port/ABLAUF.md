@@ -12,7 +12,7 @@
 
 ## Nächster Schritt
 
-- **Läuft:** P2 (Opus). Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten.
+- **Läuft:** Gate-Spike (Opus). Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten.
 - Danach **Gate-Spike** (Opus): ein Punktlicht + ein Schattenfall + Offscreen-Capture in Rust gegen die Golden Scenes `minimal_normal_map` und `wet_street` oder `iso_night_hard` (Schwelle STRICT aus `manifest.toml`). Bringt einen PNG-Decoder für den Pixelvergleich mit (nur dev-dependency). Passzeiten + Bilddiff messen; Ergebnis als ADR. Bei „nein“ stoppen und ADR 0014 ändern.
 
 ## Umgebung (wichtig für die Prüfungen)
@@ -29,13 +29,13 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 | Paket | Inhalt | Ziel | Modell | Abhängig von | Status |
 |---|---|---|---|---|---|
 | P1 | GPU-Grundlagen: Handles, RenderTarget, Sampler, UploadBuffer | `knorke-gpu` | O | – | fertig (Merge 2026-11-24): `knorke-gpu` auf `sdl3-sys` 0.7.3 (SDL 3.4.20, zlib, alle 95 GPU-Funktionen); Features `sdl` (installiertes SDL3) / `sdl-build-static` (gebündelt, braucht CMake im PATH) |
-| P2 | ShaderLibrary, ProgramBinding, PipelineCache, Shader-Pakete pro Format laden (`.kpak`; Vulkan/Metal, D3D12 optional) | `knorke-gpu` | O | P1 | läuft (Worktree; Merge durch Koordinator) – inkl. `Formats.*` aus P4 |
+| P2 | ShaderLibrary, ProgramBinding, PipelineCache, Shader-Pakete pro Format laden (`.kpak`; Vulkan/Metal, D3D12 optional) | `knorke-gpu` | O | P1 | fertig (Merge 2026-11-24): `.kpak`-Format (`kpak.rs`, ohne Features), `ShaderLibrary`, `PipelineCache`, `bind_program`, `formats`; `cargo xtask shaders` (aus Chiaro-Blobs, ohne shadercross); volle Packs nach `target/shaders/` (nicht im Repo), Test-Packs in `crates/knorke-gpu/tests/data/` |
 | P3 | Golden Scenes aus C++-Demos + Paritätsmetrik | Tests | S | – | fertig (Merge 2026-11-24): 12 Szenen `tests/golden/chiaro/` (1,9 MB) + `manifest.toml`, Paritätsmetrik `tests/contracts/src/parity.rs` |
 | P4 | Farbe, Formate, Letterbox | `knorke-post` (CPU) | H | – | fertig (Merge 2026-11-24): ColorMath, Grading, Dither, OutputRect in `knorke-post`; `Formats.*` (SDL-Formattabellen) verschoben nach P2/`knorke-gpu` |
 | P5 | Projektion + Triangulierung | `knorke-light2d` (CPU) | S (mit P6, P7) | – | fertig (Merge 2026-11-24): `projection.rs`, `triangulate.rs` in `knorke-light2d` |
 | P6 | Pixel-/Normal-/Material-Codec | `knorke-light2d` (CPU) | S | – | fertig (Merge 2026-11-24): `codec.rs`, `material.rs`; 8-Bit-Rundung bitgleich zur C++-Referenz |
 | P7 | Licht: Store + Math | `knorke-light2d` (CPU) | S | – | fertig (Merge 2026-11-24): `light.rs`, `light_math.rs`, `light_store.rs` auf `Slots`, Snapshot `knorke.light2d.lights` v1; Ressourcen-Handles (Profil/Animation/Maske) sind Marker bis P8–P10 |
-| Gate | Spike Rust vs. C++ (Licht + Schatten + Capture) | – | O | P1, P2, P3 | offen |
+| Gate | Spike Rust vs. C++ (Licht + Schatten + Capture) | – | O | P1, P2, P3 | läuft (Worktree; Merge durch Koordinator) |
 | P8 | Licht: Culling, Fläche, Animation | `knorke-light2d` | S | P7, Gate | offen |
 | P9 | Profile + IES/EULUMDAT-Import | `knorke-light2d` | H | Gate | offen |
 | P10 | Masken (Gobo/Fenster) | `knorke-light2d` | H | P7, Gate | offen |
@@ -75,6 +75,7 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 
 Neueste oben. Datum · wer · was · Ergebnis (auch Fehlschläge, Messwerte).
 
+- 2026-11-24 · Opus-Agent + Claude · P2 gemerged. Packs Chiaro voll (151 Programme): SPIR-V 4,4 MB, MSL 10,2 MB, DXIL 2,2 MB. Noch ein gemeinsames Pack `knorke-chiaro`; Aufteilung light2d/post per `--only`, sobald die GPU-Stufen da sind. Chiaros feste Programmtabellen bleiben für P24. Prüfungen: 1126 Tests grün (all-features, auch `--release`), 1109 (no-default), 20 Regeln, standalone ok. Gate-Spike gestartet.
 - 2026-11-24 · Sonnet-Agent + Claude · P5–P7 gemerged: Crate `knorke-light2d` (80 Tests, nur `knorke-types`/`knorke-math`), Vertragstest `no_alloc_light2d` (0 Allokationen), typisierte Fehler `knorke.light2d.*`, keine C-ABI-Flags. Gesamt nach Merge: 1103 Tests grün (all-features), 1097 (no-default), 20 Abhängigkeitsregeln.
 - 2026-11-24 · Opus-Agent + Claude · P1 gemerged: `knorke-gpu` (Device geliehen, `GpuHandle` mit Lebendzähler, RenderTarget, Samplers, UploadBuffer, Staging), Diagnosecodes `knorke.gpu.*`, 9 Tests (4 echte GPU-Tests, überspringen ohne GPU), compile_fail-Test für Lebensdauer. `Device` bewusst weder `Send` noch `Sync`. P2 gestartet.
 - 2026-11-24 · Sonnet-Agent + Claude · P3 gemerged: 12 Golden Scenes (8 deterministisch), Rauschen gemessen (Vulkan↔D3D12 ≤ 0,098 % Pixel), Schwellen STRICT (Toleranz 2, ≤ 100 ppm, Grenze 128) / LOOSE; 4 Szenen hängen an Uhr/Maus.
