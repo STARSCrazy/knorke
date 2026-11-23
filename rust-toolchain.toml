@@ -1,3 +1,6 @@
+# Pinned, not "stable": rustfmt and clippy change with every Rust release, and CI must
+# check with the same versions as the developer. Raise deliberately (run fmt, clippy and
+# the determinism fingerprint afterwards).
 [toolchain]
-channel = "stable"
+channel = "1.99.1"
 components = ["rustfmt", "clippy"]
