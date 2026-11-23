@@ -50,8 +50,10 @@ name = "knorke-contract-tests"
 version = "0.0.1"
 dependencies = [
  "knorke-exec",
+ "knorke-integration",
  "knorke-math",
  "knorke-observe",
+ "knorke-render",
  "knorke-replay",
  "knorke-types",
 ]
@@ -62,6 +64,25 @@ version = "0.0.1"
 dependencies = [
  "knorke-types",
  "rayon",
+]
+
+[[package]]
+name = "knorke-integration"
+version = "0.0.1"
+dependencies = [
+ "knorke-exec",
+ "knorke-lighting",
+ "knorke-math",
+ "knorke-render",
+ "knorke-types",
+]
+
+[[package]]
+name = "knorke-lighting"
+version = "0.0.1"
+dependencies = [
+ "knorke-math",
+ "knorke-types",
 ]
 
 [[package]]
@@ -78,6 +99,14 @@ dependencies = [
 name = "knorke-observe"
 version = "0.0.1"
 dependencies = [
+ "knorke-types",
+]
+
+[[package]]
+name = "knorke-render"
+version = "0.0.1"
+dependencies = [
+ "knorke-math",
  "knorke-types",
 ]
 

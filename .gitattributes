@@ -3,3 +3,4 @@
 *.png binary
 *.bmp binary
 *.bin binary
+*.ppm binary

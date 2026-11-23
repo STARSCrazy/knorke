@@ -1,0 +1,18 @@
+[package]
+name = "knorke-integration"
+description = "Adapters that join Knorke modules (e.g. the software renderer with the light pass). Domain modules never depend on it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knorke-types = { workspace = true }
+knorke-math = { workspace = true }
+knorke-render = { workspace = true }
+knorke-lighting = { workspace = true }
+knorke-exec = { workspace = true }
+
+[lints]
+workspace = true

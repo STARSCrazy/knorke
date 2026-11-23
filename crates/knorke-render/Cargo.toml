@@ -1,0 +1,15 @@
+[package]
+name = "knorke-render"
+description = "Pixel-art 3D software renderer of the Knorke Engine: grid rooms, sprites, meshes, particles, backdrops, palette look, picking; writes into its own reused frame buffers."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knorke-types = { workspace = true }
+knorke-math = { workspace = true }
+
+[lints]
+workspace = true

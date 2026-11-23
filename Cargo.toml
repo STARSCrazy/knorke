@@ -6,6 +6,9 @@ members = [
     "crates/knorke-observe",
     "crates/knorke-exec",
     "crates/knorke-replay",
+    "crates/knorke-render",
+    "crates/knorke-lighting",
+    "crates/knorke-integration",
     "tests/contracts",
     "xtask",
 ]
@@ -27,6 +30,9 @@ libm = "0.2.16"
 knorke-exec = { path = "crates/knorke-exec", version = "0.0.1" }
 knorke-replay = { path = "crates/knorke-replay", version = "0.0.1" }
 rayon = "1.10"
+knorke-render = { path = "crates/knorke-render", version = "0.0.1" }
+knorke-lighting = { path = "crates/knorke-lighting", version = "0.0.1" }
+knorke-integration = { path = "crates/knorke-integration", version = "0.0.1" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1,0 +1,17 @@
+# Presentation crate (ADR 0013): its output is pixels, not simulation state, so the workspace
+# ban on platform-dependent float functions (`f32::min`/`max`, `sin`, `powf`, ...) is relaxed
+# here. The light pass stays deterministic on one platform and build (reference images are
+# compared bit for bit); cross-platform bit equality of images is not promised.
+# Clocks and randomly seeded hash maps stay forbidden: time comes from the host, iteration
+# order must not depend on a random seed.
+disallowed-methods = [
+    { path = "std::time::Instant::elapsed", reason = "modules take time from the host (ADR 0003)" },
+    { path = "std::time::SystemTime::elapsed", reason = "modules take time from the host (ADR 0003)" },
+    { path = "std::time::Instant::now", reason = "modules take time from the host (ADR 0003)" },
+    { path = "std::time::SystemTime::now", reason = "modules take time from the host (ADR 0003)" },
+]
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "iteration order is not deterministic; use BTreeMap or a sorted Vec (ADR 0003)" },
+    { path = "std::collections::HashSet", reason = "iteration order is not deterministic; use BitSet, BTreeSet or a sorted Vec (ADR 0003)" },
+    { path = "std::collections::hash_map::RandomState", reason = "randomly seeded; use knorke_types::StableState (ADR 0003)" },
+]
