@@ -82,6 +82,19 @@ const RULES: &[Rule] = &[
         why: "lighting works on host-provided targets without the renderer or a world runtime",
     },
     Rule {
+        from: &["knorke-post"],
+        to: &[
+            "knorke-light2d",
+            "knorke-lighting",
+            "knorke-render",
+            "knorke-ai",
+            "knorke-navigation",
+            "knorke-perception",
+        ],
+        except: &[],
+        why: "post-processing math is shared by 2D and 3D output and stays free of lighting, rendering and AI",
+    },
+    Rule {
         from: &["knorke-runtime"],
         to: DEV_PLANE,
         except: &[],
