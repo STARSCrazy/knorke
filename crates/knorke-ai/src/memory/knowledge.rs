@@ -1,5 +1,6 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax-decide/src/memory/knowledge.rs.
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 use super::{Pos, ZeroCapacity};
 
@@ -441,5 +442,66 @@ impl Knowledge {
         sink: &mut S,
     ) -> Option<Fact> {
         self.merge_traced(now, msg.to_fact(source), sink)
+    }
+}
+
+// --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
+
+impl SnapshotValue for Fact {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.subject);
+        w.put(&self.kind);
+        w.put(&self.pos);
+        w.put(&self.seen_at);
+        w.put(&self.strength);
+        w.put(&self.data);
+        w.put(&self.source);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Fact {
+            subject: r.get()?,
+            kind: r.get()?,
+            pos: r.get()?,
+            seen_at: r.get()?,
+            strength: r.get()?,
+            data: r.get()?,
+            source: r.get()?,
+        })
+    }
+}
+
+/// One character's memory with its capacity and eviction rule. Restore reuses the fact
+/// buffer and rejects more facts than the capacity or a zero capacity.
+impl SnapshotValue for Knowledge {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&(self.capacity as u64));
+        w.put(&(self.evict as u8));
+        w.put(&self.items);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut k = Knowledge {
+            items: Vec::new(),
+            capacity: 1,
+            evict: Evict::Oldest,
+        };
+        k.get_into(r)?;
+        Ok(k)
+    }
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        const BAD: SnapshotError = SnapshotError::Invalid("knorke.ai: knowledge capacity");
+        let capacity = usize::try_from(r.get::<u64>()?).map_err(|_| BAD)?;
+        let evict = match r.get::<u8>()? {
+            0 => Evict::Oldest,
+            1 => Evict::Weakest,
+            _ => return Err(SnapshotError::Invalid("knorke.ai: knowledge eviction")),
+        };
+        r.get_into_vec(&mut self.items)?;
+        if capacity == 0 || self.items.len() > capacity {
+            self.items.clear();
+            return Err(BAD);
+        }
+        self.capacity = capacity;
+        self.evict = evict;
+        Ok(())
     }
 }

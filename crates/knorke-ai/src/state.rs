@@ -18,6 +18,7 @@
 //! Everything is deterministic: same ticks, same states.
 
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 /// `from` of a transition that leaves any state (an abort). It does not
 /// fire in its own target state, so an abort does not restart that state.
@@ -262,6 +263,82 @@ impl StateMachine {
             sink.emit(StateTrace::Changed(change));
         }
         Some(change)
+    }
+}
+
+// --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
+
+impl SnapshotValue for Transition {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.from);
+        w.put(&self.to);
+        w.put(&self.mask);
+        w.put(&self.value);
+        w.put(&self.after);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Transition {
+            from: r.get()?,
+            to: r.get()?,
+            mask: r.get()?,
+            value: r.get()?,
+            after: r.get()?,
+        })
+    }
+}
+
+impl SnapshotValue for StateDef {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.timeout);
+        w.put(&self.next);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(StateDef {
+            timeout: r.get()?,
+            next: r.get()?,
+        })
+    }
+}
+
+/// The whole machine: its states and transitions (so a restored machine needs no setup
+/// code) and where it stands. Restore rejects state numbers outside the machine.
+impl SnapshotValue for StateMachine {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.states);
+        w.put(&self.transitions);
+        w.put(&self.current);
+        w.put(&self.entered);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut m = StateMachine {
+            states: Vec::new(),
+            transitions: Vec::new(),
+            current: 0,
+            entered: 0,
+        };
+        m.get_into(r)?;
+        Ok(m)
+    }
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        r.get_into_vec(&mut self.states)?;
+        r.get_into_vec(&mut self.transitions)?;
+        self.current = r.get()?;
+        self.entered = r.get()?;
+        let n = self.states.len() as u64;
+        let ok = |s: u32| u64::from(s) < n;
+        let valid = ok(self.current)
+            && self.states.iter().all(|d| ok(d.next))
+            && self
+                .transitions
+                .iter()
+                .all(|t| (t.from == ANY || ok(t.from)) && ok(t.to));
+        if !valid {
+            self.states.clear();
+            self.transitions.clear();
+            self.current = 0;
+            return Err(SnapshotError::Invalid("knorke.ai: state out of range"));
+        }
+        Ok(())
     }
 }
 

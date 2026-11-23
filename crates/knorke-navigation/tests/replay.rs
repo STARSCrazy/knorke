@@ -159,10 +159,10 @@ impl Simulation for Walk {
             return;
         };
         w.status = code(report.status);
-        if report.status == Status::Found {
-            if let Some(&next) = self.nav.path().iter().find(|&&c| c != w.at) {
-                w.at = next;
-            }
+        if report.status == Status::Found
+            && let Some(&next) = self.nav.path().iter().find(|&&c| c != w.at)
+        {
+            w.at = next;
         }
     }
 }
