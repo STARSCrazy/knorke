@@ -1,6 +1,6 @@
 [package]
 name = "knorke-integration"
-description = "Adapters joining Knorke modules: perception feeds memory, flow fields feed goal guesses and walking distances, navigation costs feed squad rules."
+description = "Adapters that join Knorke modules: AI glue (perception feeds memory, flow fields feed goal guesses, navigation costs feed squad rules) and the software renderer with its light pass. Domain modules never depend on it."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,12 +8,53 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-knorke-ai = { workspace = true }
-knorke-grid = { workspace = true }
-knorke-navigation = { workspace = true }
-knorke-observe = { workspace = true }
-knorke-perception = { workspace = true }
 knorke-types = { workspace = true }
+knorke-ai = { workspace = true, optional = true }
+knorke-grid = { workspace = true, optional = true }
+knorke-navigation = { workspace = true, optional = true }
+knorke-observe = { workspace = true, optional = true }
+knorke-perception = { workspace = true, optional = true }
+knorke-math = { workspace = true, optional = true }
+knorke-render = { workspace = true, optional = true }
+knorke-lighting = { workspace = true, optional = true }
+knorke-exec = { workspace = true, optional = true }
+
+[features]
+default = ["ai", "pixel"]
+ai = ["dep:knorke-ai", "dep:knorke-grid", "dep:knorke-navigation", "dep:knorke-observe", "dep:knorke-perception"]
+pixel = ["dep:knorke-math", "dep:knorke-render", "dep:knorke-lighting", "dep:knorke-exec"]
+
+[[example]]
+name = "ambush_rules"
+required-features = ["ai"]
+
+[[example]]
+name = "contagion_scene"
+required-features = ["ai"]
+
+[[example]]
+name = "goal_guess_scene"
+required-features = ["ai"]
+
+[[example]]
+name = "mission_guard"
+required-features = ["ai"]
+
+[[example]]
+name = "perception_scene"
+required-features = ["ai"]
+
+[[example]]
+name = "squad_walk"
+required-features = ["ai"]
+
+[[example]]
+name = "stealth_guard"
+required-features = ["ai"]
+
+[[example]]
+name = "walk_distance_scene"
+required-features = ["ai"]
 
 [lints]
 workspace = true

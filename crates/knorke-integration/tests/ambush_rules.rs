@@ -2,6 +2,7 @@
 //! The ambush of `examples/ambush_rules.rs`: a game builds sneaking, hand
 //! signs, a kill zone and a "seen" abort through the rules object alone.
 //! The trace is the golden text the C example is diffed against.
+#![cfg(feature = "ai")]
 
 // The example is shared with this test; its `pub` items are its public face as an example.
 #[allow(dead_code, unreachable_pub)]

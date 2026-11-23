@@ -17,3 +17,4 @@ Bindend für alle Änderungen (`CLAUDE.md`). Neue Grundsatzentscheidung → neue
 | [0010](0010-snapshot-replay-bug-detection.md) | Snapshots, Replay und automatische Fehlererkennung | angenommen |
 | [0011](0011-cross-platform-determinism-and-optional-features.md) | Plattformübergreifender Determinismus und abschaltbare Zusatzfeatures | angenommen (Windows und WASM lokal belegt; CI-Bestätigung Linux/ARM offen) |
 | [0012](0012-sagax-split.md) | Sagax-Neuschnitt: Grid, Navigation, Perception, AI, Integration | angenommen |
+| [0013](0013-cpu-rendering.md) | CPU-Rendering: pixelraum als `knorke-render` + `knorke-lighting` | angenommen (lineares Licht offen) |

@@ -4,6 +4,7 @@
 //! the cell entered, leave costs of zones, one-way walls, levels; square and
 //! hex. And the edges: a walker on a blocked cell, a destination that cannot
 //! be entered.
+#![cfg(feature = "ai")]
 
 use knorke_integration::nav::grid::Moves;
 use knorke_integration::prelude::*;

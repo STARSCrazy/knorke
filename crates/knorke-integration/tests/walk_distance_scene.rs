@@ -2,6 +2,7 @@
 //! The wall scene of `examples/walk_distance_scene.rs`: the plain crew
 //! sends the guard behind the wall, the walking one the guard who gets
 //! there. The trace is the golden text the C example is diffed against.
+#![cfg(feature = "ai")]
 
 // The example is shared with this test; its `pub` items are its public face as an example.
 #[allow(dead_code, unreachable_pub)]

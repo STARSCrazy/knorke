@@ -1,5 +1,6 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax/tests/perception.rs.
 //! `knorke_integration::perception`: the adapters from nav maps to sight.
+#![cfg(feature = "ai")]
 
 use knorke_integration::perception::*;
 use knorke_integration::prelude::*;

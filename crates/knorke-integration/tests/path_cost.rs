@@ -1,5 +1,6 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax/tests/path_cost.rs.
 //! `path_cost` and `PathCost`: member costs from the walking distance.
+#![cfg(feature = "ai")]
 
 use std::num::NonZeroUsize;
 

@@ -2,6 +2,7 @@
 //! The stealth guard example in `examples/stealth_guard.rs`: hearing gives
 //! a heard fact, the light decides how soon the sneaker is noticed, and
 //! the daylight scene's rounds are pinned.
+#![cfg(feature = "ai")]
 
 // The example is shared with this test; its `pub` items are its public face as an example.
 #[allow(dead_code, unreachable_pub)]

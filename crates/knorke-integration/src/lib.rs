@@ -1,5 +1,12 @@
-// Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax/src/lib.rs.
-//! Adapters that join the Knorke AI modules (ADR 0012).
+// AI adapters ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax/src/lib.rs.
+//! Adapters that join Knorke modules. Domain modules never depend on this crate (ADR 0001).
+//!
+//! Each profile is a feature, so a host pulls in only the modules it joins:
+//! - feature `ai`: navigation, perception and AI (ADR 0012), see below.
+//! - feature `pixel`: [`pixel`], software renderer (`knorke-render`) + light pass
+//!   (`knorke-lighting`), profile `scene.render.lighting` (ADR 0013).
+//!
+//! ## AI (feature `ai`)
 //!
 //! `knorke-navigation`, `knorke-perception` and `knorke-ai` do not know each other. This
 //! crate holds the glue that needs two of them: percepts feed memory
@@ -16,16 +23,28 @@
 //! from flow fields; [`debug`] holds
 //! everything trace related.
 
+#[cfg(feature = "pixel")]
+pub mod pixel;
+
+#[cfg(feature = "ai")]
 pub use knorke_ai as decide;
+#[cfg(feature = "ai")]
 pub use knorke_grid::{Cell, HexLayout, Pos};
+#[cfg(feature = "ai")]
 pub use knorke_navigation as nav;
 
+#[cfg(feature = "ai")]
 pub mod goal_guess;
+#[cfg(feature = "ai")]
 pub mod perception;
+#[cfg(feature = "ai")]
 pub mod prelude;
+#[cfg(feature = "ai")]
 pub mod rules;
+#[cfg(feature = "ai")]
 pub mod walk;
 
+#[cfg(feature = "ai")]
 pub mod debug {
     //! Everything for tracing, in one place: `use knorke_integration::debug::*;`.
     //!

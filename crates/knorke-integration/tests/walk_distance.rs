@@ -1,6 +1,7 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax/tests/walk_distance.rs.
 //! `FlowDistance`: walking distances from flow fields, the cache by
 //! destination, square and hex, and a crew that walks.
+#![cfg(feature = "ai")]
 
 use knorke_integration::prelude::*;
 

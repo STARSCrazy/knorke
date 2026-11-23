@@ -1,5 +1,6 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax/tests/prelude.rs.
 //! The prelude is enough for a path, a choice and a crew.
+#![cfg(feature = "ai")]
 
 use knorke_integration::prelude::*;
 

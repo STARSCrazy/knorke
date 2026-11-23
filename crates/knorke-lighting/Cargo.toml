@@ -1,0 +1,15 @@
+[package]
+name = "knorke-lighting"
+description = "Lighting of the Knorke Engine: sun, ambient and point lights with shadow maps over host-provided surface samples (CPU path; GPU path planned)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knorke-types = { workspace = true }
+knorke-math = { workspace = true }
+
+[lints]
+workspace = true

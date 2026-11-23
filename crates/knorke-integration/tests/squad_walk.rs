@@ -2,6 +2,7 @@
 //! The squad walk of `examples/squad_walk.rs`: the attack starts together,
 //! nobody walks through the wall, and the trace is the golden text the C
 //! and JavaScript examples are diffed against.
+#![cfg(feature = "ai")]
 
 // The example is shared with this test; its `pub` items are its public face as an example.
 #[allow(dead_code, unreachable_pub)]

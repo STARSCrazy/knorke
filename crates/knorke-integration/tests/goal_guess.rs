@@ -2,6 +2,7 @@
 //! Goal recognition from flow fields: square and hex, jumps, standing
 //! still, a walled-off goal, splitting hunters (no heap per step is
 //! checked in the C API tests, which may count allocations).
+#![cfg(feature = "ai")]
 
 use knorke_integration::debug::{Collector, GoalGuessTrace, Overflow};
 use knorke_integration::goal_guess::observe_flow_traced;
