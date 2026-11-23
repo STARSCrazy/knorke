@@ -12,6 +12,7 @@ members = [
     "crates/knorke-ai",
     "crates/knorke-render",
     "crates/knorke-lighting",
+    "crates/knorke-gpu",
     "crates/knorke-integration",
     "crates/knorke-post",
     "tests/contracts",
@@ -41,6 +42,8 @@ knorke-perception = { path = "crates/knorke-perception", version = "0.0.1" }
 knorke-ai = { path = "crates/knorke-ai", version = "0.0.1" }
 knorke-render = { path = "crates/knorke-render", version = "0.0.1" }
 knorke-lighting = { path = "crates/knorke-lighting", version = "0.0.1" }
+knorke-gpu = { path = "crates/knorke-gpu", version = "0.0.1" }
+sdl3-sys = { version = "0.7.3", default-features = false, features = ["debug-impls"] }
 knorke-integration = { path = "crates/knorke-integration", version = "0.0.1" }
 knorke-post = { path = "crates/knorke-post", version = "0.0.1" }
 
@@ -51,6 +54,13 @@ unreachable_pub = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# The bundled SDL3 (knorke-gpu, feature `sdl-build-static`) is built by CMake with a build
+# type derived from this opt-level. Debug (opt-level 0) links the debug C runtime, which
+# clashes with the release runtime Rust links on MSVC (LNK4098); opt-level 1 gives
+# RelWithDebInfo.
+[profile.dev.package.sdl3-sys]
+opt-level = 1
 
 [profile.release]
 codegen-units = 1
