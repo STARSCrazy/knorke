@@ -21,6 +21,7 @@
 //! guess is a plain value.
 
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 /// Most candidate goals one [`GoalGuess`] holds.
 pub const MAX_GOALS: usize = 8;
@@ -468,6 +469,58 @@ impl GoalGuess {
         out.fill(0);
         let fit = n.min(out.len());
         out[..fit].copy_from_slice(&all[..fit]);
+    }
+}
+
+impl SnapshotValue for GoalGuessConfig {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.beta);
+        w.put(&self.unit);
+        w.put(&self.forget);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(GoalGuessConfig {
+            beta: r.get()?,
+            unit: r.get()?,
+            forget: r.get()?,
+        })
+    }
+}
+
+/// One observer's guess with its config. Restore rejects more than [`MAX_GOALS`] goals,
+/// prior or chances that do not sum to 65536 (or are not all 0 without goals), entries
+/// past the goals that are not 0, and a chance for a goal the prior rules out: the update
+/// relies on all of it.
+impl SnapshotValue for GoalGuess {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.config);
+        w.put(&self.goals);
+        w.put(&self.prior);
+        w.put(&self.chance);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let g = GoalGuess {
+            config: r.get()?,
+            goals: r.get()?,
+            prior: r.get()?,
+            chance: r.get()?,
+        };
+        let n = usize::from(g.goals);
+        let sum = |a: &[u32]| a.iter().map(|&x| u64::from(x)).sum::<u64>();
+        let want = if n == 0 { 0 } else { u64::from(SCALE) };
+        let valid = n <= MAX_GOALS
+            && sum(&g.prior) == want
+            && sum(&g.chance) == want
+            && g.prior[n.min(MAX_GOALS)..].iter().all(|&p| p == 0)
+            && g.chance[n.min(MAX_GOALS)..].iter().all(|&c| c == 0)
+            && g.prior
+                .iter()
+                .zip(&g.chance)
+                .all(|(&p, &c)| p > 0 || c == 0);
+        if !valid {
+            return Err(SnapshotError::Invalid("knorke.ai: goal guess chances"));
+        }
+        Ok(g)
     }
 }
 

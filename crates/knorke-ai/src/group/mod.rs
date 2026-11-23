@@ -42,6 +42,7 @@ mod members;
 mod orders;
 pub mod rules;
 mod skill;
+mod snapshot;
 mod spots;
 mod squad;
 mod tactic;
@@ -52,6 +53,8 @@ mod crew_tests;
 mod layout_tests;
 #[cfg(test)]
 mod rules_tests;
+#[cfg(test)]
+mod snapshot_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

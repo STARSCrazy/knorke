@@ -5,13 +5,14 @@ use std::fs;
 use std::path::Path;
 
 /// The core files, fixed on purpose: a new core file must be added here.
-const CORE_FILES: [&str; 9] = [
+const CORE_FILES: [&str; 10] = [
     "crew.rs",
     "keeper.rs",
     "members.rs",
     "orders.rs",
     "rules.rs",
     "skill.rs",
+    "snapshot.rs",
     "spots.rs",
     "squad.rs",
     "tactic.rs",

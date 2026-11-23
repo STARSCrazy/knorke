@@ -11,7 +11,7 @@ use crate::mission::types::{
 };
 use crate::{Apply, Candidate, Consideration, Curve, Decider, ONE, choose};
 use knorke_observe::{MapSink, Sink};
-use knorke_types::Seed;
+use knorke_types::{Reader, Seed, SnapshotError, SnapshotValue, Writer};
 
 /// Row column: 1 when the candidate's conditions hold now and its first
 /// position can be filled, else 0.
@@ -84,14 +84,7 @@ impl Replan {
     pub(super) fn new(config: &MissionConfig) -> Self {
         let slots = config.max_playbook;
         let options = slots + 2;
-        let mut decider = Decider::new();
-        for _ in 0..options {
-            let o = decider.add_option(ONE);
-            let feasible = Consideration::new(IN_FEASIBLE as u32, Curve::Step, 1, 1);
-            let preference = Consideration::new(IN_PREF as u32, Curve::Linear, 0, ONE as i32);
-            let _ = decider.add_weighted(o, feasible, ONE, Apply::Multiply);
-            let _ = decider.add_weighted(o, preference, ONE, Apply::Multiply);
-        }
+        let decider = built_in_decider(options);
         // Not `vec![slot; n]`: a cloned plan would lose its capacity.
         let slot = || Slot {
             plan: Plan::with_capacity(config.max_steps),
@@ -128,6 +121,89 @@ impl Replan {
         c.extend(self.playbook.iter().map(|s| s.plan.capacity()));
         c
     }
+
+    /// Writes the playbook, the built-in plans with their flags and the decider; the
+    /// scratch rows, scores, options and order are not saved (rebuilt at each replan).
+    pub(super) fn put(&self, w: &mut Writer<'_>) {
+        w.put_len(self.playbook.len());
+        for s in &self.playbook {
+            w.put(&s.plan);
+            w.put(&s.preference);
+            w.put(&s.widening);
+            w.put(&s.used);
+        }
+        w.put(&self.default_plan);
+        w.put(&self.has_default);
+        w.put(&self.widen_plan);
+        w.put(&self.has_widen);
+        w.put(&self.decider);
+    }
+
+    /// Restores what [`Replan::put`] wrote into storage made for `config`, reusing every
+    /// buffer. Refuses a playbook length other than `max_playbook`, a plan beyond its
+    /// slot's capacity, a used slot or a flagged built-in plan without steps and a
+    /// preference above [`ONE`]. On error everything is emptied (the decider keeps its
+    /// options, or gets the built-in ones back).
+    pub(super) fn get_into(
+        &mut self,
+        r: &mut Reader<'_>,
+        config: &MissionConfig,
+    ) -> Result<(), SnapshotError> {
+        let result = self.read(r, config);
+        if result.is_err() {
+            for s in &mut self.playbook {
+                s.plan.set_steps(&[], false);
+                s.used = false;
+            }
+            self.default_plan.set_steps(&[], false);
+            self.has_default = false;
+            self.widen_plan.set_steps(&[], false);
+            self.has_widen = false;
+            if self.decider.option_count() < config.max_playbook + 2 {
+                self.decider = built_in_decider(config.max_playbook + 2);
+            }
+        }
+        result
+    }
+
+    fn read(&mut self, r: &mut Reader<'_>, config: &MissionConfig) -> Result<(), SnapshotError> {
+        if r.get_len()? != self.playbook.len() {
+            return Err(SnapshotError::Invalid("knorke.ai: mission playbook size"));
+        }
+        for s in &mut self.playbook {
+            s.plan.get_into_bounded(r, config.max_steps)?;
+            s.preference = r.get()?;
+            s.widening = r.get()?;
+            s.used = r.get()?;
+            if s.preference > ONE || (s.used && s.plan.steps().is_empty()) {
+                return Err(SnapshotError::Invalid("knorke.ai: mission playbook slot"));
+            }
+        }
+        self.default_plan.get_into_bounded(r, MAX_DEFAULT_STEPS)?;
+        self.has_default = r.get()?;
+        self.widen_plan.get_into_bounded(r, MAX_BUILT_IN_STEPS)?;
+        self.has_widen = r.get()?;
+        if (self.has_default && self.default_plan.steps().is_empty())
+            || (self.has_widen && self.widen_plan.steps().is_empty())
+        {
+            return Err(SnapshotError::Invalid("knorke.ai: mission built-in plan"));
+        }
+        self.decider.get_into(r)
+    }
+}
+
+/// The decider of a new mission: `options` options, each with the two built-in
+/// considerations.
+fn built_in_decider(options: usize) -> Decider {
+    let mut decider = Decider::new();
+    for _ in 0..options {
+        let o = decider.add_option(ONE);
+        let feasible = Consideration::new(IN_FEASIBLE as u32, Curve::Step, 1, 1);
+        let preference = Consideration::new(IN_PREF as u32, Curve::Linear, 0, ONE as i32);
+        let _ = decider.add_weighted(o, feasible, ONE, Apply::Multiply);
+        let _ = decider.add_weighted(o, preference, ONE, Apply::Multiply);
+    }
+    decider
 }
 
 impl Mission {

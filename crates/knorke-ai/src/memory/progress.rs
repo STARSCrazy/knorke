@@ -52,3 +52,19 @@ impl Progress {
         *self = Self::default();
     }
 }
+
+/// A plain value; every bit pattern is a valid progress check.
+impl knorke_types::SnapshotValue for Progress {
+    fn put(&self, w: &mut knorke_types::Writer<'_>) {
+        w.put(&self.best);
+        w.put(&self.since);
+        w.put(&self.started);
+    }
+    fn get(r: &mut knorke_types::Reader<'_>) -> Result<Self, knorke_types::SnapshotError> {
+        Ok(Progress {
+            best: r.get()?,
+            since: r.get()?,
+            started: r.get()?,
+        })
+    }
+}

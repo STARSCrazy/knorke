@@ -64,8 +64,8 @@ pub const MAX_ROLE_COUNTS: usize = 8;
 /// bits (see [`Squad::role_column`]).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct RoleCounts {
-    masks: [u32; MAX_ROLE_COUNTS],
-    len: u8,
+    pub(super) masks: [u32; MAX_ROLE_COUNTS],
+    pub(super) len: u8,
 }
 
 impl RoleCounts {

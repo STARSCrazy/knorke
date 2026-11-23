@@ -4,6 +4,7 @@
 use super::{Activity, Hooks, Mission, View};
 use crate::memory::{Knowledge, Pos};
 use crate::mission::types::{Action, Detour, DetourEnd, MissionEvent, OnLost, StepKind, Where};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 /// The search that runs when the subject of an `Engage` is lost and the
 /// leash says [`OnLost::Search`].
@@ -57,6 +58,54 @@ impl DetourState {
             end_asked: false,
             search: None,
         }
+    }
+
+    /// The search counter of the lost-subject search, while it runs (for restore checks).
+    pub(super) fn search_point(&self) -> Option<usize> {
+        self.search.map(|s| s.point)
+    }
+}
+
+impl SnapshotValue for LostSearch {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.centre);
+        w.put(&self.begun_at);
+        w.put(&(self.point as u64));
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Self {
+            centre: r.get()?,
+            begun_at: r.get()?,
+            point: usize::try_from(r.get::<u64>()?)
+                .map_err(|_| SnapshotError::Invalid("knorke.ai: mission search point"))?,
+        })
+    }
+}
+
+/// Everything a detour keeps. The mission checks the cross-field rules (resume activity,
+/// search counter) on restore.
+impl SnapshotValue for DetourState {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.kind);
+        w.put(&self.anchor);
+        w.put(&self.started_at);
+        w.put(&self.resume);
+        w.put(&self.step_elapsed);
+        w.put(&self.announce);
+        w.put(&self.end_asked);
+        w.put(&self.search);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Self {
+            kind: r.get()?,
+            anchor: r.get()?,
+            started_at: r.get()?,
+            resume: r.get()?,
+            step_elapsed: r.get()?,
+            announce: r.get()?,
+            end_asked: r.get()?,
+            search: r.get()?,
+        })
     }
 }
 

@@ -43,6 +43,8 @@ mod timers;
 #[cfg(test)]
 mod goal_guess_tests;
 #[cfg(test)]
+mod snapshot_tests;
+#[cfg(test)]
 mod tests;
 
 pub use alertness::{AlertConfig, Alertness};
@@ -73,3 +75,22 @@ impl std::fmt::Display for ZeroCapacity {
 }
 
 impl std::error::Error for ZeroCapacity {}
+
+/// Restore of a bounded table: reads the capacity (u64) and the items into `items`, reusing
+/// its buffer. A zero capacity or more items than it clears `items` and returns `bad`.
+pub(crate) fn get_bounded<T: knorke_types::SnapshotValue>(
+    r: &mut knorke_types::Reader<'_>,
+    items: &mut Vec<T>,
+    bad: knorke_types::SnapshotError,
+) -> Result<usize, knorke_types::SnapshotError> {
+    let capacity = usize::try_from(r.get::<u64>()?).map_err(|_| bad.clone())?;
+    if let Err(e) = r.get_into_vec(items) {
+        items.clear();
+        return Err(e);
+    }
+    if capacity == 0 || items.len() > capacity {
+        items.clear();
+        return Err(bad);
+    }
+    Ok(capacity)
+}

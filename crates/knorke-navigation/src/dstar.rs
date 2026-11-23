@@ -61,6 +61,7 @@ use std::hash::Hash;
 use crate::grid::{Cell, GridRules};
 use crate::hex::HexLayout;
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 use crate::search::{Cost, Graph, SearchStatus, SearchTrace};
 use crate::table::NodeTable;
@@ -591,5 +592,149 @@ impl<N: Copy + Eq + Hash, H: Heuristic<N>> DStarLite<N, H> {
         } else {
             self.records[index].queued = None;
         }
+    }
+}
+
+// --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
+
+impl SnapshotValue for HexHeuristic {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.layout);
+        w.put(&self.step_cost);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(HexHeuristic {
+            layout: r.get()?,
+            step_cost: r.get()?,
+        })
+    }
+}
+
+impl SnapshotValue for DStarStatus {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&match self {
+            DStarStatus::Idle => 0u8,
+            DStarStatus::Running => 1,
+            DStarStatus::Found => 2,
+            DStarStatus::Unreachable => 3,
+        });
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => DStarStatus::Idle,
+            1 => DStarStatus::Running,
+            2 => DStarStatus::Found,
+            3 => DStarStatus::Unreachable,
+            _ => return Err(SnapshotError::Invalid("knorke.navigation: d* status")),
+        })
+    }
+}
+
+impl<N: SnapshotValue> SnapshotValue for Record<N> {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.node);
+        w.put(&self.g);
+        w.put(&self.rhs);
+        w.put(&self.queued);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Record {
+            node: r.get()?,
+            g: r.get()?,
+            rhs: r.get()?,
+            queued: r.get()?,
+        })
+    }
+}
+
+impl SnapshotValue for Entry {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.key);
+        w.put(&self.index);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Entry {
+            key: r.get()?,
+            index: r.get()?,
+        })
+    }
+}
+
+/// The complete plan, so a planner stopped by its expansion budget or told about map
+/// changes continues after a restore exactly as it would have. The heuristic is saved with
+/// it (it is part of the keys). The node index is rebuilt from the records; the open list
+/// (including outdated entries) is written in heap order and read back unchanged. Restore
+/// rejects open entries past the records, a node known twice and more records than a
+/// `u32` index holds. The scratch lists are not saved.
+impl<N: Copy + Eq + Hash + SnapshotValue, H: Heuristic<N> + SnapshotValue> SnapshotValue
+    for DStarLite<N, H>
+{
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.records);
+        w.put_len(self.open.len());
+        for e in self.open.iter() {
+            w.put(e);
+        }
+        w.put(&self.heuristic);
+        w.put(&self.start);
+        w.put(&self.goal);
+        w.put(&self.km);
+        w.put(&self.computes);
+        w.put(&self.status);
+        w.put(&(self.expanded as u64));
+        w.put(&(self.max_nodes as u64));
+        w.put(&self.node_limit_hit);
+    }
+
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut d = DStarLite::new();
+        d.get_into(r)?;
+        Ok(d)
+    }
+
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        const BAD: SnapshotError = SnapshotError::Invalid("knorke.navigation: d* index");
+        let result = (|| {
+            r.get_into_vec(&mut self.records)?;
+            let mut open = std::mem::take(&mut self.open).into_vec();
+            let read = r.get_into_vec(&mut open);
+            // A valid heap is left as it is by `from`, so the order matches the saved one.
+            self.open = BinaryHeap::from(open);
+            read?;
+            self.heuristic = r.get()?;
+            self.start = r.get()?;
+            self.goal = r.get()?;
+            self.km = r.get()?;
+            self.computes = r.get()?;
+            self.status = r.get()?;
+            self.expanded = usize::try_from(r.get::<u64>()?).map_err(|_| BAD)?;
+            // A limit beyond this platform's `usize` cannot be reached: no limit.
+            self.max_nodes = usize::try_from(r.get::<u64>()?).unwrap_or(usize::MAX);
+            self.node_limit_hit = r.get()?;
+            let len = self.records.len();
+            if len > u32::MAX as usize || self.open.iter().any(|e| e.index as usize >= len) {
+                return Err(BAD);
+            }
+            self.index.clear();
+            for (i, rec) in self.records.iter().enumerate() {
+                if self.index.get(&rec.node).is_some() {
+                    return Err(SnapshotError::Invalid(
+                        "knorke.navigation: repeated d* node",
+                    ));
+                }
+                self.index.insert_new(rec.node, i as u32);
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            self.index.clear();
+            self.records.clear();
+            self.open.clear();
+            self.heuristic = None;
+            self.start = None;
+            self.goal = None;
+            self.status = DStarStatus::Idle;
+        }
+        result
     }
 }

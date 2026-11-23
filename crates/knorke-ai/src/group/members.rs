@@ -31,8 +31,8 @@ pub struct Member {
 /// A bounded list of members, in the order they were added.
 #[derive(Clone, Debug)]
 pub struct Group {
-    members: Vec<Member>,
-    capacity: usize,
+    pub(super) members: Vec<Member>,
+    pub(super) capacity: usize,
 }
 
 impl Group {

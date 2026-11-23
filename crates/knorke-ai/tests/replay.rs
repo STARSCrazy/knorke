@@ -1,8 +1,13 @@
-//! Replay test (CLAUDE.md, ADR 0010): a guard hears noises and sees intruders. Its
-//! `Alertness`, `Knowledge` and `StateMachine` are the AI state; record → verify → seek
-//! must reproduce them byte for byte.
+//! Replay test (CLAUDE.md, ADR 0010): a guard hears noises and sees intruders, reports
+//! them by radio to a partner who passes them back with a delay. Its `Alertness`,
+//! `Knowledge`, `StateMachine`, `Areas`, `Timers`, `Outbox`/`Inbox`, `Progress`,
+//! `Interval` and `GoalGuess` are the AI state; record → verify → seek must reproduce them
+//! byte for byte.
 
-use knorke_ai::memory::{AlertConfig, Alertness, Evict, Fact, Knowledge};
+use knorke_ai::memory::{
+    AlertConfig, Alertness, Area, Areas, Evict, Fact, GoalGuess, GoalGuessConfig, Inbox, Interval,
+    Knowledge, Message, Outbox, Progress, Timers,
+};
 use knorke_ai::state::{ANY, StateMachine, Transition};
 use knorke_replay::{RecordOptions, Recorder, ReplayHeader, ReplayLog, Simulation, seek, verify};
 use knorke_types::{
@@ -55,6 +60,19 @@ struct Guard {
     alert: Alertness,
     memory: Knowledge,
     mind: StateMachine,
+    /// Noisy places to avoid.
+    noisy: Areas,
+    /// Intruders not to report again for a while.
+    reported: Timers,
+    radio: Outbox,
+    inbox: Inbox,
+    /// Whether the chase of subject 0 still gets closer.
+    chase: Progress,
+    sweep: Interval,
+    /// Is subject 0 heading for the gate (0, 0) or the store (19, 19)?
+    guess: GoalGuess,
+    /// Where subject 0 was last seen.
+    last_seen: Option<(i32, i32)>,
 }
 
 impl Snapshot for Guard {
@@ -64,13 +82,37 @@ impl Snapshot for Guard {
         w.put(&self.alert);
         w.put(&self.memory);
         w.put(&self.mind);
+        w.put(&self.noisy);
+        w.put(&self.reported);
+        w.put(&self.radio);
+        w.put(&self.inbox);
+        w.put(&self.chase);
+        w.put(&self.sweep);
+        w.put(&self.guess);
+        w.put(&self.last_seen);
     }
     fn restore(&mut self, _: u16, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
         self.alert = r.get()?;
         self.memory.get_into(r)?;
-        self.mind.get_into(r)
+        self.mind.get_into(r)?;
+        self.noisy.get_into(r)?;
+        self.reported.get_into(r)?;
+        self.radio.get_into(r)?;
+        self.inbox.get_into(r)?;
+        self.chase = r.get()?;
+        self.sweep = r.get()?;
+        self.guess = r.get()?;
+        self.last_seen = r.get()?;
+        Ok(())
     }
 }
+
+/// Chebyshev distance.
+fn far(a: (i32, i32), b: (i32, i32)) -> i32 {
+    (a.0 - b.0).abs().max((a.1 - b.1).abs())
+}
+
+const GOALS: [(i32, i32); 2] = [(0, 0), (19, 19)];
 
 struct Post {
     guard: Guard,
@@ -94,6 +136,14 @@ impl Post {
                 alert: Alertness::default(),
                 memory: Knowledge::new(4, Evict::Weakest).unwrap(),
                 mind,
+                noisy: Areas::new(3).unwrap(),
+                reported: Timers::new(2).unwrap(),
+                radio: Outbox::new(3).unwrap(),
+                inbox: Inbox::new(2).unwrap(),
+                chase: Progress::default(),
+                sweep: Interval::default(),
+                guess: GoalGuess::new(GoalGuessConfig::default(), GOALS.len()),
+                last_seen: None,
             },
             cfg: AlertConfig {
                 max: 1000,
@@ -125,22 +175,96 @@ impl Simulation for Post {
         let g = &mut self.guard;
         for c in commands {
             match *c {
-                Cmd::Noise(amount) => g.alert.stimulus(amount, now, &self.cfg),
-                Cmd::Seen { subject, x, y } => {
-                    g.memory.learn(
+                Cmd::Noise(amount) => {
+                    g.alert.stimulus(amount, now, &self.cfg);
+                    let x = (amount % 20) as i32;
+                    g.noisy.add(
                         now,
-                        Fact {
-                            subject,
+                        Area {
                             kind: 1,
-                            pos: [x, y, 0],
-                            seen_at: now,
-                            strength: 100 + subject,
-                            data: 0,
-                            source: 0,
+                            pos: [x, 3, 0],
+                            radius: 2,
+                            strength: amount,
+                            lifetime: 25,
+                            ..Area::default()
                         },
                     );
                 }
+                Cmd::Seen { subject, x, y } => {
+                    let fact = Fact {
+                        subject,
+                        kind: 1,
+                        pos: [x, y, 0],
+                        seen_at: now,
+                        strength: 100 + subject,
+                        data: 0,
+                        source: 0,
+                    };
+                    g.memory.learn(now, fact);
+                    if !g.reported.active(subject, now) {
+                        let msg = Message {
+                            kind: 1,
+                            subject,
+                            pos: fact.pos,
+                            seen_at: now,
+                            strength: fact.strength,
+                            data: 0,
+                            sender: 1,
+                            keep_if_sender_gone: 0,
+                        };
+                        if g.radio.post(now, msg, 2 + subject, 3).is_ok() {
+                            g.reported.set(subject, now, 15);
+                        }
+                    }
+                    if subject == 0 {
+                        let dist = far((x, y), GOALS[0]);
+                        if g.chase.started == 0 || g.chase.stalled(now, 40) {
+                            g.chase.start(dist, now);
+                        } else {
+                            g.chase.update(dist, now, 2);
+                        }
+                        // What a step from the last place to here tells about the goal.
+                        if let Some(prev) = g.last_seen
+                            && prev != (x, y)
+                        {
+                            let mut moved = [0; 2];
+                            let mut options = [0; 2 * 8];
+                            for (k, &goal) in GOALS.iter().enumerate() {
+                                let before = far(prev, goal);
+                                moved[k] = far((x, y), goal) - before;
+                                let mut j = 0;
+                                for dy in -1..=1 {
+                                    for dx in -1..=1 {
+                                        if (dx, dy) != (0, 0) {
+                                            options[k * 8 + j] =
+                                                far((prev.0 + dx, prev.1 + dy), goal) - before;
+                                            j += 1;
+                                        }
+                                    }
+                                }
+                            }
+                            g.guess.observe(&moved, &options, 8).unwrap();
+                        }
+                        g.last_seen = Some((x, y));
+                    }
+                }
             }
+        }
+        // The partner hears the radio and tells the guard back, later.
+        let mut due = Vec::new();
+        g.radio.due(now, &mut due);
+        for m in due {
+            let _ = g.inbox.push(m, now + 4);
+        }
+        let mut told = Vec::new();
+        g.inbox.take_due(now, &mut told);
+        for m in told {
+            g.memory.learn(now, m.to_fact(2));
+        }
+        g.noisy.expire(now);
+        if g.sweep.due(now, 9) {
+            g.sweep.mark(now);
+            g.reported.remove(5);
         }
         g.memory.expire(now, 30, |_| {});
         g.alert.update(now, &self.cfg);
@@ -203,11 +327,21 @@ fn ai_replay_verifies_and_seeks() {
     // The guard must visit every state, or the test proves little.
     let mut probe = Post::new();
     let mut seen = [false; 3];
+    let (mut told, mut guessed, mut noisy, mut pending) = (false, false, false, false);
     for t in 0..400 {
         probe.step(Tick(t), &commands_for(t));
-        seen[probe.guard.mind.state() as usize] = true;
+        let g = &probe.guard;
+        seen[g.mind.state() as usize] = true;
+        told |= g.memory.iter().any(|f| f.source == 2);
+        guessed |= g.guess.chance(0) != 128;
+        noisy |= !g.noisy.is_empty();
+        pending |= g.radio.pending() > 0 && !g.inbox.is_empty();
     }
     assert_eq!(seen, [true; 3]);
+    assert!(
+        told && guessed && noisy && pending,
+        "{told} {guessed} {noisy} {pending}"
+    );
     let (_, log) = record(400);
     let report = verify(&mut Post::new(), &log).unwrap();
     assert_eq!(report.ticks, 400);

@@ -1,5 +1,6 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax-decide/src/memory/timers.rs.
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 use super::ZeroCapacity;
 
@@ -159,5 +160,54 @@ impl Timers {
     /// True if there are no timers.
     pub fn is_empty(&self) -> bool {
         self.items.is_empty()
+    }
+}
+
+impl SnapshotValue for Timer {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.id);
+        w.put(&self.since);
+        w.put(&self.duration);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Timer {
+            id: r.get()?,
+            since: r.get()?,
+            duration: r.get()?,
+        })
+    }
+}
+
+/// One character's timers with their capacity. Restore reuses the buffer and rejects a
+/// zero capacity, more timers than the capacity and an id that appears twice.
+impl SnapshotValue for Timers {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&(self.capacity as u64));
+        w.put(&self.items);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut t = Timers {
+            items: Vec::new(),
+            capacity: 1,
+        };
+        t.get_into(r)?;
+        Ok(t)
+    }
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        self.capacity = super::get_bounded(
+            r,
+            &mut self.items,
+            SnapshotError::Invalid("knorke.ai: timers capacity"),
+        )?;
+        let repeated = self
+            .items
+            .iter()
+            .enumerate()
+            .any(|(i, a)| self.items[..i].iter().any(|b| b.id == a.id));
+        if repeated {
+            self.items.clear();
+            return Err(SnapshotError::Invalid("knorke.ai: repeated timer id"));
+        }
+        Ok(())
     }
 }

@@ -2,6 +2,7 @@
 //! Running a plan: [`Mission`] and its tick.
 
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 use super::rules::{BuiltInRules, FailCtx, MissionRules, PlanCtx};
 use super::types::{
@@ -21,6 +22,10 @@ pub use replan::{
     KNOWN_CAP, WIDEN_PREFERENCE,
 };
 use replan::{MAX_BUILT_IN_STEPS, Replan};
+
+#[cfg(test)]
+#[path = "snapshot_tests.rs"]
+mod snapshot_tests;
 
 /// What one [`Mission::tick`] gives the game: the action to take now and
 /// what happened on the way.
@@ -712,6 +717,80 @@ impl Mission {
         }
     }
 
+    /// Reads the state [`SnapshotValue::put`] wrote; validation follows in `get_into`.
+    fn read_state(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        self.motive = r.get()?;
+        self.leeway = r.get()?;
+        let plan_max = self.config.max_steps.max(MAX_BUILT_IN_STEPS);
+        self.plan.get_into_bounded(r, plan_max)?;
+        self.has_plan = r.get()?;
+        self.running_option = r.get()?;
+        self.fallback_hold = r.get()?;
+        self.pending_start = r.get()?;
+        self.activity = r.get()?;
+        self.step = r.get()?;
+        self.last_pos = r.get()?;
+        self.detour = r.get()?;
+        self.replan.get_into(r, &self.config)?;
+        let n = r.get_len()?;
+        if n > MAX_EVENTS {
+            return Err(SnapshotError::Invalid("knorke.ai: mission too many events"));
+        }
+        self.events.clear();
+        for _ in 0..n {
+            self.events.push(r.get()?);
+        }
+        self.check()
+    }
+
+    /// The cross-field rules a restored mission must keep, or a later tick would panic.
+    fn check(&self) -> Result<(), SnapshotError> {
+        let bad = |what| Err(SnapshotError::Invalid(what));
+        let steps = self.plan.steps().len();
+        if self.has_plan && steps == 0 {
+            return bad("knorke.ai: mission plan without steps");
+        }
+        let resume_ok = !matches!(self.detour.resume, Activity::Detour | Activity::Returning);
+        if !resume_ok {
+            return bad("knorke.ai: mission resume activity");
+        }
+        let ongoing = matches!(self.activity, Activity::Detour | Activity::Returning);
+        let runs_plan =
+            self.activity == Activity::Plan || (ongoing && self.detour.resume == Activity::Plan);
+        let needs_plan = runs_plan || self.activity == Activity::Wander;
+        if needs_plan && !self.has_plan {
+            return bad("knorke.ai: mission activity without plan");
+        }
+        if runs_plan && self.step.index >= steps {
+            return bad("knorke.ai: mission step index out of range");
+        }
+        let points = self.search_points();
+        if self.step.search_point >= points
+            || self.detour.search_point().is_some_and(|p| p >= points)
+        {
+            return bad("knorke.ai: mission search point out of range");
+        }
+        if self.running_option.is_some_and(|o| o > self.widen_option()) {
+            return bad("knorke.ai: mission option out of range");
+        }
+        Ok(())
+    }
+
+    /// Back to the state of a new mission (playbook and decider stay as `Replan` left
+    /// them on its own error path).
+    fn clear_state(&mut self) {
+        self.plan.set_steps(&[], false);
+        self.has_plan = false;
+        self.running_option = None;
+        self.fallback_hold = false;
+        self.pending_start = false;
+        self.activity = Activity::Idle;
+        self.step = StepState::default();
+        self.last_pos = None;
+        self.detour = DetourState::new();
+        self.events.clear();
+    }
+
     fn pos_in(&self, p: Pos) -> Pos {
         self.config.hex_layout.map_or(p, |l| l.to_axial_pos(p))
     }
@@ -741,5 +820,100 @@ impl Mission {
             },
             Action::None | Action::Wait | Action::Wander => action,
         }
+    }
+}
+
+// --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
+
+impl SnapshotValue for Activity {
+    fn put(&self, w: &mut Writer<'_>) {
+        let tag: u8 = match self {
+            Self::Idle => 0,
+            Self::Plan => 1,
+            Self::Wander => 2,
+            Self::Detour => 3,
+            Self::Returning => 4,
+        };
+        w.put(&tag);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Self::Idle,
+            1 => Self::Plan,
+            2 => Self::Wander,
+            3 => Self::Detour,
+            4 => Self::Returning,
+            _ => return Err(SnapshotError::Invalid("knorke.ai: mission tag")),
+        })
+    }
+}
+
+impl SnapshotValue for StepState {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&(self.index as u64));
+        w.put(&self.begun_at);
+        w.put(&self.here);
+        w.put(&(self.search_point as u64));
+        w.put(&self.finished);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let bad = |_| SnapshotError::Invalid("knorke.ai: mission step index out of range");
+        Ok(Self {
+            index: usize::try_from(r.get::<u64>()?).map_err(bad)?,
+            begun_at: r.get()?,
+            here: r.get()?,
+            search_point: usize::try_from(r.get::<u64>()?).map_err(bad)?,
+            finished: r.get()?,
+        })
+    }
+}
+
+/// A mission is host-owned per figure: a value inside the host's section, without own
+/// section or version (like [`Knowledge`]).
+///
+/// Saved: motive, leeway, the running plan with its flags (`has_plan`, the running
+/// option, fallback hold, pending start), the activity, the step state, the last
+/// position, the detour state, the playbook slots, the default and widening plans with
+/// their flags, the decider and the events of the last tick. Not saved: the scratch rows,
+/// scores, options and order of a replan (rebuilt at each replan) and the
+/// [`MissionConfig`]: it is fixed at [`Mission::new`] and sets the capacities, so a
+/// snapshot is restored with [`SnapshotValue::get_into`] into a mission made with the
+/// same config, like a `Navigator`. Restore checks what the config bounds: the playbook
+/// has `max_playbook` slots, no plan exceeds its capacity, the step index lies in the
+/// plan, the search counters lie in the search pattern, at most [`MAX_EVENTS`] events,
+/// valid enum tags and resume activity. It allocates nothing as all buffers were reserved
+/// by [`Mission::new`]. On error the mission holds no plan (as a new mission; the playbook
+/// is either restored or emptied) and the error is [`SnapshotError::Invalid`].
+///
+/// [`SnapshotValue::get`] restores into `Mission::new(MissionConfig::default(),
+/// Motive::custom(0))`; it suits missions made with the default config only.
+impl SnapshotValue for Mission {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.motive);
+        w.put(&self.leeway);
+        w.put(&self.plan);
+        w.put(&self.has_plan);
+        w.put(&self.running_option);
+        w.put(&self.fallback_hold);
+        w.put(&self.pending_start);
+        w.put(&self.activity);
+        w.put(&self.step);
+        w.put(&self.last_pos);
+        w.put(&self.detour);
+        self.replan.put(w);
+        w.put_slice(&self.events);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut m = Mission::new(MissionConfig::default(), Motive::custom(0))
+            .map_err(|_| SnapshotError::Invalid("knorke.ai: mission config"))?;
+        m.get_into(r)?;
+        Ok(m)
+    }
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        let result = self.read_state(r);
+        if result.is_err() {
+            self.clear_state();
+        }
+        result
     }
 }

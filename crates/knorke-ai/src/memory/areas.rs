@@ -2,6 +2,7 @@
 use super::{Pos, ZeroCapacity};
 use knorke_grid::Cell;
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 /// A remembered or announced area: a centre and radius, how long it lasts,
 /// whether it can be walked through, and a little data.
@@ -229,5 +230,59 @@ impl Areas {
     /// Removes all areas.
     pub fn clear(&mut self) {
         self.items.clear();
+    }
+}
+
+impl SnapshotValue for Area {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.kind);
+        w.put(&self.pos);
+        w.put(&self.radius);
+        w.put(&self.strength);
+        w.put(&self.since);
+        w.put(&self.lifetime);
+        w.put(&self.data);
+        w.put(&self.source);
+        w.put(&self.blocking);
+        w.put(&self.has_source);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Area {
+            kind: r.get()?,
+            pos: r.get()?,
+            radius: r.get()?,
+            strength: r.get()?,
+            since: r.get()?,
+            lifetime: r.get()?,
+            data: r.get()?,
+            source: r.get()?,
+            blocking: r.get()?,
+            has_source: r.get()?,
+        })
+    }
+}
+
+/// One character's areas with their capacity. Restore reuses the buffer and rejects a zero
+/// capacity or more areas than the capacity.
+impl SnapshotValue for Areas {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&(self.capacity as u64));
+        w.put(&self.items);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut a = Areas {
+            items: Vec::new(),
+            capacity: 1,
+        };
+        a.get_into(r)?;
+        Ok(a)
+    }
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        self.capacity = super::get_bounded(
+            r,
+            &mut self.items,
+            SnapshotError::Invalid("knorke.ai: areas capacity"),
+        )?;
+        Ok(())
     }
 }

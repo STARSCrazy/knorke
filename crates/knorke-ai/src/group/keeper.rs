@@ -85,9 +85,9 @@ pub enum KeeperTrace {
 /// [`broken`](Self::broken). While suspended the clock does not run.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct GoalKeeper {
-    goal: Option<Goal>,
-    postponed_at: Option<u32>,
-    suspended: bool,
+    pub(super) goal: Option<Goal>,
+    pub(super) postponed_at: Option<u32>,
+    pub(super) suspended: bool,
 }
 
 impl GoalKeeper {

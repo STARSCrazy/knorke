@@ -1,5 +1,6 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax-decide/src/memory/messages.rs.
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 use super::{Fact, Pos, ZeroCapacity};
 
@@ -388,5 +389,105 @@ impl Inbox {
     /// Drops all messages.
     pub fn clear(&mut self) {
         self.items.clear();
+    }
+}
+
+impl SnapshotValue for Message {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.kind);
+        w.put(&self.subject);
+        w.put(&self.pos);
+        w.put(&self.seen_at);
+        w.put(&self.strength);
+        w.put(&self.data);
+        w.put(&self.sender);
+        w.put(&self.keep_if_sender_gone);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Message {
+            kind: r.get()?,
+            subject: r.get()?,
+            pos: r.get()?,
+            seen_at: r.get()?,
+            strength: r.get()?,
+            data: r.get()?,
+            sender: r.get()?,
+            keep_if_sender_gone: r.get()?,
+        })
+    }
+}
+
+impl SnapshotValue for Posted {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.msg);
+        w.put(&self.at);
+        w.put(&self.delay);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Posted {
+            msg: r.get()?,
+            at: r.get()?,
+            delay: r.get()?,
+        })
+    }
+}
+
+/// One sender's pending messages, capacity and cooldown. Restore reuses the buffer and
+/// rejects a zero capacity or more messages than the capacity.
+impl SnapshotValue for Outbox {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&(self.capacity as u64));
+        w.put(&self.items);
+        w.put(&self.last_post);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut o = Outbox {
+            items: Vec::new(),
+            capacity: 1,
+            last_post: None,
+        };
+        o.get_into(r)?;
+        Ok(o)
+    }
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        let capacity = super::get_bounded(
+            r,
+            &mut self.items,
+            SnapshotError::Invalid("knorke.ai: outbox capacity"),
+        )?;
+        match r.get() {
+            Ok(last) => self.last_post = last,
+            Err(e) => {
+                self.items.clear();
+                return Err(e);
+            }
+        }
+        self.capacity = capacity;
+        Ok(())
+    }
+}
+
+/// One receiver's messages on their way, with the capacity. Restore reuses the buffer and
+/// rejects a zero capacity or more messages than the capacity.
+impl SnapshotValue for Inbox {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&(self.capacity as u64));
+        w.put(&self.items);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut i = Inbox {
+            items: Vec::new(),
+            capacity: 1,
+        };
+        i.get_into(r)?;
+        Ok(i)
+    }
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        self.capacity = super::get_bounded(
+            r,
+            &mut self.items,
+            SnapshotError::Invalid("knorke.ai: inbox capacity"),
+        )?;
+        Ok(())
     }
 }

@@ -910,5 +910,7 @@ pub fn choose(scores: &[u32], pick: Pick, seed: u64, order: &mut Vec<usize>) -> 
     })
 }
 
+mod snapshot;
+
 #[cfg(test)]
 mod tests;

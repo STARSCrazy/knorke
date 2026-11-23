@@ -134,15 +134,15 @@ pub enum CrewEvent {
 
 /// One member's keeper and what the crew already told about its goal.
 #[derive(Clone, Copy, Debug)]
-struct Seat {
-    id: u32,
-    keeper: GoalKeeper,
+pub(super) struct Seat {
+    pub(super) id: u32,
+    pub(super) keeper: GoalKeeper,
     /// The keeper is suspended (its member is not active).
-    paused: bool,
-    start_at: Option<u32>,
-    started: bool,
-    arrived: bool,
-    broken: bool,
+    pub(super) paused: bool,
+    pub(super) start_at: Option<u32>,
+    pub(super) started: bool,
+    pub(super) arrived: bool,
+    pub(super) broken: bool,
 }
 
 impl Seat {
@@ -195,13 +195,13 @@ impl Seat {
 /// nothing beyond what the squad does.
 #[derive(Clone, Debug)]
 pub struct Crew {
-    squad: Squad,
-    seats: Vec<Seat>,
-    metric: Metric,
-    arrive_radius: u32,
-    hex: Option<HexLayout>,
-    orders: Vec<Order>,
-    spots: Vec<Spot>,
+    pub(super) squad: Squad,
+    pub(super) seats: Vec<Seat>,
+    pub(super) metric: Metric,
+    pub(super) arrive_radius: u32,
+    pub(super) hex: Option<HexLayout>,
+    pub(super) orders: Vec<Order>,
+    pub(super) spots: Vec<Spot>,
 }
 
 impl Crew {

@@ -123,3 +123,53 @@ pub fn route(
         }
     }
 }
+
+/// A routing rule, e.g. inside a host's command or order. `Nearest` saves its count as u64.
+impl knorke_types::SnapshotValue for Route {
+    fn put(&self, w: &mut knorke_types::Writer<'_>) {
+        match *self {
+            Route::Nearest(k) => {
+                w.put(&0u8);
+                w.put(&(k as u64));
+            }
+            Route::InRange(r) => {
+                w.put(&1u8);
+                w.put(&r);
+            }
+            Route::All => w.put(&2u8),
+            Route::To(id) => {
+                w.put(&3u8);
+                w.put(&id);
+            }
+        }
+    }
+    fn get(r: &mut knorke_types::Reader<'_>) -> Result<Self, knorke_types::SnapshotError> {
+        use knorke_types::SnapshotError;
+        Ok(match r.get::<u8>()? {
+            0 => Route::Nearest(
+                usize::try_from(r.get::<u64>()?)
+                    .map_err(|_| SnapshotError::Invalid("knorke.ai: route count"))?,
+            ),
+            1 => Route::InRange(r.get()?),
+            2 => Route::All,
+            3 => Route::To(r.get()?),
+            _ => return Err(SnapshotError::Invalid("knorke.ai: route rule")),
+        })
+    }
+}
+
+/// A plain value: the metric of a routing or walking rule.
+impl knorke_types::SnapshotValue for Metric {
+    fn put(&self, w: &mut knorke_types::Writer<'_>) {
+        w.put(&(*self as u8));
+    }
+    fn get(r: &mut knorke_types::Reader<'_>) -> Result<Self, knorke_types::SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Metric::Euclid,
+            1 => Metric::Manhattan,
+            2 => Metric::Chebyshev,
+            3 => Metric::Hex,
+            _ => return Err(knorke_types::SnapshotError::Invalid("knorke.ai: metric")),
+        })
+    }
+}

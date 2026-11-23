@@ -769,3 +769,533 @@ impl std::fmt::Display for MissionError {
 }
 
 impl std::error::Error for MissionError {}
+
+// --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
+
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
+
+const BAD_TAG: SnapshotError = SnapshotError::Invalid("knorke.ai: mission tag");
+
+impl SnapshotValue for Where {
+    fn put(&self, w: &mut Writer<'_>) {
+        match self {
+            Self::Fixed(p) => {
+                w.put(&0u8);
+                w.put(p);
+            }
+            Self::Subject(s) => {
+                w.put(&1u8);
+                w.put(s);
+            }
+            Self::MotivePlace => w.put(&2u8),
+            Self::MotiveSubject => w.put(&3u8),
+            Self::Here => w.put(&4u8),
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Self::Fixed(r.get()?),
+            1 => Self::Subject(r.get()?),
+            2 => Self::MotivePlace,
+            3 => Self::MotiveSubject,
+            4 => Self::Here,
+            _ => return Err(BAD_TAG),
+        })
+    }
+}
+
+impl SnapshotValue for StepKind {
+    fn put(&self, w: &mut Writer<'_>) {
+        match *self {
+            Self::GoTo(at) => {
+                w.put(&0u8);
+                w.put(&at);
+            }
+            Self::Wait(t) => {
+                w.put(&1u8);
+                w.put(&t);
+            }
+            Self::Pause => w.put(&2u8),
+            Self::Follow(s) => {
+                w.put(&3u8);
+                w.put(&s);
+            }
+            Self::WaitFor { subject, radius } => {
+                w.put(&4u8);
+                w.put(&subject);
+                w.put(&radius);
+            }
+            Self::Search {
+                centre,
+                radius,
+                ticks,
+            } => {
+                w.put(&5u8);
+                w.put(&centre);
+                w.put(&radius);
+                w.put(&ticks);
+            }
+            Self::Hold(at) => {
+                w.put(&6u8);
+                w.put(&at);
+            }
+            Self::Attack(s) => {
+                w.put(&7u8);
+                w.put(&s);
+            }
+            Self::Wander => w.put(&8u8),
+            Self::Signal(s) => {
+                w.put(&9u8);
+                w.put(&s);
+            }
+            Self::Custom { kind, at, param } => {
+                w.put(&10u8);
+                w.put(&kind);
+                w.put(&at);
+                w.put(&param);
+            }
+            Self::Call { channel, kind } => {
+                w.put(&11u8);
+                w.put(&channel);
+                w.put(&kind);
+            }
+            Self::Squad { tactic, target } => {
+                w.put(&12u8);
+                w.put(&tactic);
+                w.put(&target);
+            }
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Self::GoTo(r.get()?),
+            1 => Self::Wait(r.get()?),
+            2 => Self::Pause,
+            3 => Self::Follow(r.get()?),
+            4 => Self::WaitFor {
+                subject: r.get()?,
+                radius: r.get()?,
+            },
+            5 => Self::Search {
+                centre: r.get()?,
+                radius: r.get()?,
+                ticks: r.get()?,
+            },
+            6 => Self::Hold(r.get()?),
+            7 => Self::Attack(r.get()?),
+            8 => Self::Wander,
+            9 => Self::Signal(r.get()?),
+            10 => Self::Custom {
+                kind: r.get()?,
+                at: r.get()?,
+                param: r.get()?,
+            },
+            11 => Self::Call {
+                channel: r.get()?,
+                kind: r.get()?,
+            },
+            12 => Self::Squad {
+                tactic: r.get()?,
+                target: r.get()?,
+            },
+            _ => return Err(BAD_TAG),
+        })
+    }
+}
+
+impl SnapshotValue for Fail {
+    fn put(&self, w: &mut Writer<'_>) {
+        match *self {
+            Self::Unknown { subject } => {
+                w.put(&0u8);
+                w.put(&subject);
+            }
+            Self::Defeated { subject } => {
+                w.put(&1u8);
+                w.put(&subject);
+            }
+            Self::Fact {
+                subject,
+                kind,
+                mask,
+                value,
+            } => {
+                w.put(&2u8);
+                w.put(&subject);
+                w.put(&kind);
+                w.put(&mask);
+                w.put(&value);
+            }
+            Self::Flags { mask, value } => {
+                w.put(&3u8);
+                w.put(&mask);
+                w.put(&value);
+            }
+            Self::Custom(id) => {
+                w.put(&4u8);
+                w.put(&id);
+            }
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Self::Unknown { subject: r.get()? },
+            1 => Self::Defeated { subject: r.get()? },
+            2 => Self::Fact {
+                subject: r.get()?,
+                kind: r.get()?,
+                mask: r.get()?,
+                value: r.get()?,
+            },
+            3 => Self::Flags {
+                mask: r.get()?,
+                value: r.get()?,
+            },
+            4 => Self::Custom(r.get()?),
+            _ => return Err(BAD_TAG),
+        })
+    }
+}
+
+fn put_fails(w: &mut Writer<'_>, fails: &[Option<Fail>; MAX_FAILS]) {
+    for f in fails {
+        w.put(f);
+    }
+}
+
+fn get_fails(r: &mut Reader<'_>) -> Result<[Option<Fail>; MAX_FAILS], SnapshotError> {
+    let mut fails = [None; MAX_FAILS];
+    for f in &mut fails {
+        *f = r.get()?;
+    }
+    Ok(fails)
+}
+
+impl SnapshotValue for Step {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.kind);
+        put_fails(w, &self.fails);
+        w.put(&self.skip_if_impossible);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Self {
+            kind: r.get()?,
+            fails: get_fails(r)?,
+            skip_if_impossible: r.get()?,
+        })
+    }
+}
+
+impl Plan {
+    /// Restores into this plan, reusing its step buffer; refuses more than `max` steps
+    /// before reading them, so a bad length allocates nothing. On error the plan is empty.
+    pub(super) fn get_into_bounded(
+        &mut self,
+        r: &mut Reader<'_>,
+        max: usize,
+    ) -> Result<(), SnapshotError> {
+        let result = (|| {
+            let n = r.get_len()?;
+            if n > max {
+                return Err(SnapshotError::Invalid("knorke.ai: mission plan too long"));
+            }
+            self.steps.clear();
+            for _ in 0..n {
+                self.steps.push(r.get()?);
+            }
+            self.repeat = r.get()?;
+            self.fails = get_fails(r)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.set_steps(&[], false);
+        }
+        result
+    }
+}
+
+/// The steps, the loop flag and the plan's fail conditions. Restore reuses the step buffer.
+impl SnapshotValue for Plan {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put_slice(&self.steps);
+        w.put(&self.repeat);
+        put_fails(w, &self.fails);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut p = Self::with_capacity(0);
+        p.get_into(r)?;
+        Ok(p)
+    }
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        let result = (|| {
+            r.get_into_vec(&mut self.steps)?;
+            self.repeat = r.get()?;
+            self.fails = get_fails(r)?;
+            Ok(())
+        })();
+        if result.is_err() {
+            self.set_steps(&[], false);
+        }
+        result
+    }
+}
+
+impl SnapshotValue for MotiveKind {
+    fn put(&self, w: &mut Writer<'_>) {
+        match *self {
+            Self::Guard => w.put(&0u8),
+            Self::Defeat => w.put(&1u8),
+            Self::Reach => w.put(&2u8),
+            Self::Custom(k) => {
+                w.put(&3u8);
+                w.put(&k);
+            }
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Self::Guard,
+            1 => Self::Defeat,
+            2 => Self::Reach,
+            3 => Self::Custom(r.get()?),
+            _ => return Err(BAD_TAG),
+        })
+    }
+}
+
+impl SnapshotValue for Motive {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.kind);
+        w.put(&self.place);
+        w.put(&self.subject);
+        w.put(&self.radius);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Self {
+            kind: r.get()?,
+            place: r.get()?,
+            subject: r.get()?,
+            radius: r.get()?,
+        })
+    }
+}
+
+impl SnapshotValue for OnLost {
+    fn put(&self, w: &mut Writer<'_>) {
+        match *self {
+            Self::Return => w.put(&0u8),
+            Self::Search { ticks, radius } => {
+                w.put(&1u8);
+                w.put(&ticks);
+                w.put(&radius);
+            }
+            Self::Keep => w.put(&2u8),
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Self::Return,
+            1 => Self::Search {
+                ticks: r.get()?,
+                radius: r.get()?,
+            },
+            2 => Self::Keep,
+            _ => return Err(BAD_TAG),
+        })
+    }
+}
+
+impl SnapshotValue for Leash {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.distance);
+        w.put(&self.ticks);
+        w.put(&self.on_lost);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Self {
+            distance: r.get()?,
+            ticks: r.get()?,
+            on_lost: r.get()?,
+        })
+    }
+}
+
+impl SnapshotValue for Leeway {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.leash);
+        w.put(&self.replan);
+        w.put(&self.widen);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Self {
+            leash: r.get()?,
+            replan: r.get()?,
+            widen: r.get()?,
+        })
+    }
+}
+
+impl SnapshotValue for Detour {
+    fn put(&self, w: &mut Writer<'_>) {
+        match *self {
+            Self::Engage(s) => {
+                w.put(&0u8);
+                w.put(&s);
+            }
+            Self::Flee { from, to } => {
+                w.put(&1u8);
+                w.put(&from);
+                w.put(&to);
+            }
+            Self::Custom { kind, at, param } => {
+                w.put(&2u8);
+                w.put(&kind);
+                w.put(&at);
+                w.put(&param);
+            }
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Self::Engage(r.get()?),
+            1 => Self::Flee {
+                from: r.get()?,
+                to: r.get()?,
+            },
+            2 => Self::Custom {
+                kind: r.get()?,
+                at: r.get()?,
+                param: r.get()?,
+            },
+            _ => return Err(BAD_TAG),
+        })
+    }
+}
+
+impl SnapshotValue for BreakReason {
+    fn put(&self, w: &mut Writer<'_>) {
+        match self {
+            Self::Fail(f) => {
+                w.put(&0u8);
+                w.put(f);
+            }
+            Self::Impossible => w.put(&1u8),
+            Self::PlanEnded => w.put(&2u8),
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Self::Fail(r.get()?),
+            1 => Self::Impossible,
+            2 => Self::PlanEnded,
+            _ => return Err(BAD_TAG),
+        })
+    }
+}
+
+impl SnapshotValue for DetourEnd {
+    fn put(&self, w: &mut Writer<'_>) {
+        let tag: u8 = match self {
+            Self::Defeated => 0,
+            Self::Forgotten => 1,
+            Self::Lost => 2,
+            Self::Leash => 3,
+            Self::Safe => 4,
+            Self::Arrived => 5,
+            Self::Ended => 6,
+        };
+        w.put(&tag);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Self::Defeated,
+            1 => Self::Forgotten,
+            2 => Self::Lost,
+            3 => Self::Leash,
+            4 => Self::Safe,
+            5 => Self::Arrived,
+            6 => Self::Ended,
+            _ => return Err(BAD_TAG),
+        })
+    }
+}
+
+impl SnapshotValue for MissionEvent {
+    fn put(&self, w: &mut Writer<'_>) {
+        match *self {
+            Self::StepDone(i) => {
+                w.put(&0u8);
+                w.put(&i);
+            }
+            Self::Looped => w.put(&1u8),
+            Self::PlanDone => w.put(&2u8),
+            Self::Broken(b) => {
+                w.put(&3u8);
+                w.put(&b);
+            }
+            Self::Replanned { option } => {
+                w.put(&4u8);
+                w.put(&option);
+            }
+            Self::FellBack => w.put(&5u8),
+            Self::DetourStarted => w.put(&6u8),
+            Self::DetourEnded(e) => {
+                w.put(&7u8);
+                w.put(&e);
+            }
+            Self::Returned => w.put(&8u8),
+            Self::Signal(s) => {
+                w.put(&9u8);
+                w.put(&s);
+            }
+            Self::Call {
+                channel,
+                kind,
+                pos,
+                motive,
+            } => {
+                w.put(&10u8);
+                w.put(&channel);
+                w.put(&kind);
+                w.put(&pos);
+                w.put(&motive);
+            }
+            Self::WantsSquad {
+                tactic,
+                target,
+                subject,
+            } => {
+                w.put(&11u8);
+                w.put(&tactic);
+                w.put(&target);
+                w.put(&subject);
+            }
+        }
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Self::StepDone(r.get()?),
+            1 => Self::Looped,
+            2 => Self::PlanDone,
+            3 => Self::Broken(r.get()?),
+            4 => Self::Replanned { option: r.get()? },
+            5 => Self::FellBack,
+            6 => Self::DetourStarted,
+            7 => Self::DetourEnded(r.get()?),
+            8 => Self::Returned,
+            9 => Self::Signal(r.get()?),
+            10 => Self::Call {
+                channel: r.get()?,
+                kind: r.get()?,
+                pos: r.get()?,
+                motive: r.get()?,
+            },
+            11 => Self::WantsSquad {
+                tactic: r.get()?,
+                target: r.get()?,
+                subject: r.get()?,
+            },
+            _ => return Err(BAD_TAG),
+        })
+    }
+}
