@@ -22,7 +22,9 @@ Plan-Prinzip 1 (Standalone) und 2 (Komposition) widersprechen sich, sobald Beque
 
 | Von | Darf nicht (transitiv) nach | Grund |
 |---|---|---|
-| `knorke-ai`, `-navigation`, `-perception` | render, lighting, gpu, runtime, scene, integration, agent, cli, mcp, `sdl3*`, `wgpu*` | headless |
+| `knorke-ai`, `-navigation`, `-perception`, `knorke-grid` | render, lighting, gpu, runtime, scene, integration, agent, cli, mcp, `sdl3*`, `wgpu*` | headless |
+| `knorke-navigation`, `-perception`, `-ai` | jeweils die beiden anderen | unabhängig; nur `knorke-integration` verbindet sie (ADR 0012) |
+| `knorke-grid` | `*` außer `knorke-types` | gemeinsame Raumtypen, geschlossene Abhängigkeitsliste (ADR 0012) |
 | `knorke-render` | `knorke-lighting` | unabhängig; nur Integration verbindet |
 | `knorke-lighting` | render, runtime, scene | arbeitet auf Host-Targets |
 | `knorke-runtime` | agent, cli, mcp | Release-Spiel ohne Development Plane |

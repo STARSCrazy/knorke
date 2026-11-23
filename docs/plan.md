@@ -33,6 +33,8 @@ Repository: https://github.com/STARSCrazy/sagax
 
 Bei der Bestandsaufnahme sichtbarer Stand: Cargo-Workspace Version `0.16.0`; unter anderem `sagax-core`, `sagax-nav`, `sagax-decide`, `sagax-perception`, `sagax-debug`, `sagax-ffi`, `sagax-wasm`, `sagax-abi` sowie Umbrella-Crate. Enthält A*/Dijkstra, Hex-/Grid-Navigation, D* Lite, Flow Fields, Utility AI, Missionen, Wahrnehmung, Gruppentaktiken, Tracing, deterministische Ansätze und C-/JS/WASM-Anbindung.
 
+**Stand 2026-11-23:** umgebaut in `knorke-grid`, `knorke-navigation`, `knorke-perception`, `knorke-ai`, `knorke-integration` (ADR 0012, Abschnitt 16); Bindings (`sagax-abi/ffi/wasm`) nicht übernommen (17.5).
+
 **Neuer Auftrag:** Nicht bloß eine `knorke-sagax`-Fassade darum schreiben. Prüfen und, wenn sinnvoll, **interne Crate-Grenzen, Begriffe, Zustands-/Query-Verträge, Ownership, allgemeine Datentypen, Navigations-/Entscheidungs-APIs und Paketstruktur grundlegend verändern**. Bisherige Algorithmen dürfen wiederverwendet werden; öffentliche Kompatibilität ist kein Selbstzweck.
 
 ### 2.2 Chiaro – bestehende C++-Beleuchtungsbibliothek
@@ -568,6 +570,7 @@ Details in den ADRs unter `docs/adr/`, Inventuren unter `docs/inventory/`.
 | Review: `det::min`/`det::max` (std-Varianten sind nicht deterministisch, gemessen Debug ≠ Release), `det::powi` für alle Exponenten, Schnitt-Tests unabhängig vom Maßstab der Welt, definierte Antworten für entartete Formen, `Pod`-Impls aus Feldlisten geprüft, Clippy-Regeln erweitert | `knorke-math`, `clippy.toml` | 0006, 0011 |
 | Review: `ReplayLog::read` prüft Tick-Folge und Keyframes, Index-Überlauf als Panic statt Umbruch, `seek` sucht binär; Tests für Fensterränder des Flight Recorders und 1-Minimalität | `knorke-replay` | 0010 |
 | Fingerprint auf `wasm32-wasip1` lokal belegt (Node/V8, `xtask/wasi-run.mjs`) | `knorke-contract-tests`, `xtask` | 0011 |
+| **Sagax-Umbau** (Sagax `fab00c0`): Raumtypen `Cell`/`Pos`/`HexLayout`/`sine` → `knorke-grid`; Wegsuche (A*, Dijkstra, D* Lite, Flow Fields, Glättung, Formationen, `Navigator`) → `knorke-navigation`; Sicht, Hören, Awareness, Contagion → `knorke-perception`; Utility-Decider, State Machine, Gedächtnis, Missionen, Crew/Squad → `knorke-ai`; Verbindungscode der Fassade + 13 Szenario-Tests → `knorke-integration`; `Collector` → `knorke-observe`. Traces über `knorke_observe::Sink`, Zufall über `Seed::derive`. Snapshot: `Navigator` (Abschnitt `knorke.navigation`, auch mitten in einer Budget-Suche), `Search`, `FlowField`, `Awareness`, `Contagion`, `StateMachine`, `Knowledge`, `Alertness`; Replay-Test je Modul; Diagnosecodes `knorke.ai.*`; Abhängigkeitsregeln (die drei Fachmodule unabhängig, `knorke-grid` nur `knorke-types`). Alle 595 Tests der übernommenen Sagax-Crates laufen (Baseline Sagax: 785 bestanden, 1 ignoriert, inkl. FFI) | `knorke-grid`, `-navigation`, `-perception`, `-ai`, `-integration`, `knorke-observe`, `xtask` | 0001, 0010, 0012 |
 | Entscheidungen 2026-11-23: `HashMap`/`HashSet` in Simulationscode verboten (Clippy-Typverbot); `Seed::derive` mit zwei Mischrunden, Fingerprint neu `0x8E13_81FE_2691_7217`; Lizenz `MIT OR Apache-2.0` mit Lizenzdateien; kein Browser-Ziel | `clippy.toml`, `knorke-types` | 0003, 0011 |
 
 Entscheidungen aus Gesprächen:
@@ -609,7 +612,7 @@ Entscheidungen aus Gesprächen:
 | **`ColumnMut` parallel beschreiben** (`project_mut` lässt sich nicht in Chunks teilen; `for_each_chunk_mut` braucht `&mut [T]`) | offen | erstes Modul, das Ergebnisse parallel direkt in Host-Structs schreiben will; bis dahin Host-Puffer als Slice |
 | **2D-Raster als geliehene Sicht** (`Grid<T>`: Breite, Höhe, Schrittweite) für Navigation, Wahrnehmung, Lighting | offen | sobald zwei Module dasselbe Raster lesen; Sagax `CellMap` ist ein Query-Trait, kein Massendaten-Vertrag |
 | **Rechnen mit `At<S, V>`** (`At + At`, `map`) fehlt; Module greifen auf `.value`/`.raw()` zu | offen | mit dem ersten Fachmodul entscheiden, welche Operationen raumtreu sind (Punkt − Punkt = Vektor) |
-| **`Seed::derive` vermischte Seed und Stream linear** | erledigt (Abschnitt 16, ADR 0003): zwei Mischrunden | **Mit dem Sagax-Umbau einfrieren**; Sagax übernimmt `Seed::derive` statt `sagax_core::mix` |
+| **`Seed::derive` vermischte Seed und Stream linear** | erledigt (Abschnitt 16, ADR 0003): zwei Mischrunden | eingefroren mit dem Sagax-Umbau; die KI-Module nutzen `Seed::derive` statt `sagax_core::mix` (ADR 0012) |
 | **`normalize_or_zero` mit fester Schwelle** (`len > f32::EPSILON`): in Welten mit sehr kleinen Einheiten werden kurze Vektoren zu Null; ab ~1,8e19 läuft `length_squared` über | offen | Schnitt-Tests sind schon maßstabsunabhängig; hier erst mit einem Verbraucher ändern (ändert Simulationsergebnisse) |
 | **Snapshot-Längen bei nullgroßen Elementen** (`Vec<()>` mit Länge 2³² kostet beim Lesen Milliarden Schleifendurchläufe ohne Daten) | offen | nur relevant für nicht vertrauenswürdige Replays; Obergrenze im `Reader` einführen, wenn Replays aus dem Netz kommen |
 | **`minimize` kopiert den Start-Keyframe pro Kandidat** (`filtered` klont den Startzustand) | offen | bei großen Welten: Kandidat als Sicht auf das Original statt als eigenes Log |
@@ -668,7 +671,15 @@ Zwei Modelle, beide brauchen dieselben Grundlagen:
 | Parallele KI über `Parallel`, Entscheidungen als Commands | vorbereitet | ADR 0008 |
 | **Arbeitsbudget / Zeitscheiben** (KI über mehrere Ticks verteilen) | offen | Sagax hat `Budget`; als gemeinsamen Begriff prüfen |
 | Gemeinsamer Raum-Index für Wahrnehmung | offen | 17.1 |
-| Sagax-Neuschnitt (`navigation`, `perception`, `ai`) | geplant | nach den Grundlagen; Inventur `docs/inventory/sagax.md` |
+| Sagax-Neuschnitt (`navigation`, `perception`, `ai`) | erledigt (Abschnitt 16, ADR 0012) | `knorke-grid`, `-navigation`, `-perception`, `-ai`, `-integration` |
+| **Bindings `sagax-abi`/`-ffi`/`-wasm`** (C-ABI 23,8 kLOC, WASM 4,8 kLOC) | verworfen (vorerst) | Plan 6.2 §6: nur für einen konkreten Verbraucher, dann neu gegen `knorke-*` entworfen (zusammen mit `knorke-abi`, 17.1); externe Verbraucher der Sagax-C-ABI noch nicht ermittelt |
+| **Snapshot der übrigen KI-Zustandstypen**: `DStarLite`, `GoalGuess`, `Mission`, `Crew`, `Squad`, `GoalKeeper`, `Areas`, `Timers`, `Inbox`/`Outbox`, `Route`/`Progress`, `Spots` | offen | Navigator, Search, FlowField, Awareness, Contagion, StateMachine, Knowledge, Alertness sind fertig (ADR 0012); Rest vor dem ersten Replay mit Missionen/Gruppen |
+| **`Parallel`-Vertrag in den KI-Modulen** | offen | Sagax rechnet pro Figur seriell; parallel heute nur der Host über Figuren. Kandidaten: `look` über viele Beobachter, Flow-Field-Abfragen, Decider über Figuren – mit Messung (Chunk ≥ 10 µs) |
+| **`Column`-Eingaben statt Slices** (`&[Candidate]`, `&[Target]`, Decider-Eingabezeilen) | offen | ADR 0006; mit dem ersten Host, der diese Daten in eigenen Structs hält |
+| **`Seed`/`Tick` in KI-Signaturen** (heute `u64`-Seeds, `u32`-Zeit wie in Sagax) | offen | API-Umbau ohne Ergebnisänderung möglich; zusammen mit `knorke-runtime` |
+| **`Invariants`/`ProgressWatch` für KI-Module** (z. B. Squad hängt fest, Mission ohne Fortschritt) | offen | ADR 0010; mit dem ersten Vertical Slice |
+| **Benchmarks gegen Sagax** | offen | Sagax hat keine Bench-Ziele; mit `cargo bench -p knorke-contract-tests` neu aufbauen |
+| **`knorke-ai` weiter teilen** (`memory`, `mission`, `group` als eigene Crates) | offen | erst bei einem Verbraucher, der einen Teil ohne den Rest braucht (ADR 0012) |
 | LLM-gestützte NPCs (Dialog, Absichten) | offen | nicht deterministisch und asynchron: nur außerhalb der Simulation; Ergebnisse kommen als Commands an einem Sync-Punkt herein und werden für Replays aufgezeichnet (17.10) |
 
 ### 17.6 Sound
