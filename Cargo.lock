@@ -145,6 +145,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "knorke-post"
+version = "0.0.1"
+dependencies = [
+ "knorke-math",
+]
+
+[[package]]
 name = "knorke-render"
 version = "0.0.1"
 dependencies = [

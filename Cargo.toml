@@ -13,6 +13,7 @@ members = [
     "crates/knorke-render",
     "crates/knorke-lighting",
     "crates/knorke-integration",
+    "crates/knorke-post",
     "tests/contracts",
     "xtask",
 ]
@@ -41,6 +42,7 @@ knorke-ai = { path = "crates/knorke-ai", version = "0.0.1" }
 knorke-render = { path = "crates/knorke-render", version = "0.0.1" }
 knorke-lighting = { path = "crates/knorke-lighting", version = "0.0.1" }
 knorke-integration = { path = "crates/knorke-integration", version = "0.0.1" }
+knorke-post = { path = "crates/knorke-post", version = "0.0.1" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
