@@ -572,6 +572,7 @@ Details in den ADRs unter `docs/adr/`, Inventuren unter `docs/inventory/`.
 | Fingerprint auf `wasm32-wasip1` lokal belegt (Node/V8, `xtask/wasi-run.mjs`) | `knorke-contract-tests`, `xtask` | 0011 |
 | **Sagax-Umbau** (Sagax `fab00c0`): Raumtypen `Cell`/`Pos`/`HexLayout`/`sine` → `knorke-grid`; Wegsuche (A*, Dijkstra, D* Lite, Flow Fields, Glättung, Formationen, `Navigator`) → `knorke-navigation`; Sicht, Hören, Awareness, Contagion → `knorke-perception`; Utility-Decider, State Machine, Gedächtnis, Missionen, Crew/Squad → `knorke-ai`; Verbindungscode der Fassade + 13 Szenario-Tests → `knorke-integration`; `Collector` → `knorke-observe`. Traces über `knorke_observe::Sink`, Zufall über `Seed::derive`. Snapshot: `Navigator` (Abschnitt `knorke.navigation`, auch mitten in einer Budget-Suche), `Search`, `FlowField`, `Awareness`, `Contagion`, `StateMachine`, `Knowledge`, `Alertness`; Replay-Test je Modul; Diagnosecodes `knorke.ai.*`; Abhängigkeitsregeln (die drei Fachmodule unabhängig, `knorke-grid` nur `knorke-types`). Alle 595 Tests der übernommenen Sagax-Crates laufen (Baseline Sagax: 785 bestanden, 1 ignoriert, inkl. FFI) | `knorke-grid`, `-navigation`, `-perception`, `-ai`, `-integration`, `knorke-observe`, `xtask` | 0001, 0010, 0012 |
 | **pixelraum migriert** (ADR 0013, Inventur `pixelraum.md`): Software-Renderer (Raster, Kamera, Gitter, Texturen, Sprites, Picking, Palette, Blending, Animation, Partikel, Hintergrund) ohne Licht und Threads; Licht/Schatten auf geliehenen G-Buffer-Spalten über `Parallel`; Verbindung in `knorke-integration::pixel`. 55 Golden Images byte-gleich, alle Bildtests pixelgenau; Vertragstest „0 Allokationen im eingeschwungenen Frame“ (seriell) | `knorke-render`, `knorke-lighting`, `knorke-integration`, `knorke-contract-tests` | 0006, 0008, 0013 |
+| **Lineares Licht** im Software-Renderer (sRGB-Tabellen, Licht/Nebel/Blending linear, sRGB einmal am Ende; 51 Golden Images neu) und **Snapshots aller KI-Zustandstypen** (2026-11-23) | `knorke-render`, `knorke-lighting`, `knorke-navigation`, `knorke-ai` | 0012, 0013 |
 | `knorke-integration` mit Features je Profil: `ai` (Sagax-Verbindungscode, ADR 0012) und `pixel` (Renderer + Licht, ADR 0013), beide Standard; ein Host zieht nur die Module, die er verbindet. Tests und Beispiele hängen am jeweiligen Feature | `knorke-integration` | 0001, 0012, 0013 |
 | Entscheidungen 2026-11-23: `HashMap`/`HashSet` in Simulationscode verboten (Clippy-Typverbot); `Seed::derive` mit zwei Mischrunden, Fingerprint neu `0x8E13_81FE_2691_7217`; Lizenz `MIT OR Apache-2.0` mit Lizenzdateien; kein Browser-Ziel | `clippy.toml`, `knorke-types` | 0003, 0011 |
 
@@ -581,7 +582,7 @@ Entscheidungen aus Gesprächen:
 - **Kein Browser als Plattformziel** (2026-11-23). WASM bleibt Prüfziel für den Determinismus und Kandidat für Mods (17.7), nicht Auslieferungsziel.
 - Kompatibilität zu Sagax-Ergebnissen ist in Phase 0 nicht nötig; nach dem Sagax-Umbau sind Seed-Ableitung und Fingerprint eingefroren.
 - Abhängigkeiten der Basis-Crates sind geschlossene Listen: `knorke-types` keine, `knorke-math` nur `bytemuck`/`mint`/`knorke-types`/`libm`, `knorke-observe` und `knorke-replay` nur `knorke-types`, `knorke-exec` nur `rayon`.
-- Chiaros Rust-Neubau kommt als **GPU-Pfad in `knorke-lighting`** neben den Software-Pfad aus pixelraum (ADR 0013 §9).
+- Chiaros Rust-Neubau kommt als **eigene Crate `knorke-light2d`** (mit `knorke-gpu`, `knorke-post`); GPU ist der Hauptweg, das CPU-Licht wird eingefroren (ADR 0014, ersetzt ADR 0013 §9).
 - Befund Rayon: Aufrufe von außerhalb des Pools allozieren in Rayons Scheduler (ein Block pro 63 Aufträge). Unser Code alloziert nicht. Frames deshalb mit `Rayon::install` im Pool laufen lassen (ADR 0008).
 
 ## 17. Backlog: Ideen, Konzepte und noch fehlende Grundlagen
@@ -624,7 +625,7 @@ Entscheidungen aus Gesprächen:
 | **Zu früh vorhanden** (kein Verbraucher): `Mat4`, `mint`-Feature, Bildheuristiken ohne Capture, `ScopedThreads` (0,8–0,95 ms Fork-Join-Overhead) | offen (Einschätzung) | behalten, solange sie nichts kosten; beim ersten Verbraucher prüfen, ob die Form passt |
 | **Lizenz** | erledigt: `MIT OR Apache-2.0`, `LICENSE-MIT` + `LICENSE-APACHE` | gleiche Lizenz wie Sagax; Chiaro ist zlib (beim Übernehmen von Code Hinweis erhalten) |
 | **C-Schnittstelle von pixelraum** (`capi.rs`, `include/pixelraum.h`) nicht migriert; Wizardry 7 nutzt weiter das Original-Repo | geplant | mit `knorke-abi` (C-ABI über `knorke-integration::pixel`); bis dahin Fehlerbehebungen ggf. in beiden Repos |
-| **Lineares Licht im Software-Renderer** (Texturen → linear, Licht/Nebel linear, sRGB einmal am Ende) – heute wie pixelraum auf 0..255-Werten | offen | eigener Schritt mit neu erzeugten Golden Images (ADR 0013 §6) |
+| **Lineares Licht im Software-Renderer** (Texturen → linear, Licht/Nebel linear, sRGB einmal am Ende) | erledigt (Abschnitt 16, ADR 0013 §6) | 51 Golden Images neu erzeugt; Tabellen liegen in `knorke-render/src/srgb.rs` statt in `knorke-math` (Verschieben offen); Frame ~10–20 % langsamer, auf belastetem Rechner gemessen – auf ruhigem Rechner nachmessen; Textur-Decode beim Shading statt beim Laden, weil der G-Buffer 8-Bit-sRGB speichert |
 | **Golden Images plattformübergreifend** (heute nur Windows/x86-64 belegt; `sin`/`cos`/`tan`/`atan2`/`log2` aus `std` im Renderer) | offen | CI-Lauf auf Linux/ARM; bei Abweichung `det`-Varianten oder Golden Images pro Plattform (ADR 0013 §5) |
 | **Band-Liste in `end_lit` mit `threads > 1`** (eine Allokation pro Frame; seriell 0) | offen | wiederverwendbare Bandstruktur, sobald `Parallel` geliehene Teilslices ohne `Vec` verteilen kann (vgl. „`ColumnMut` parallel beschreiben“) |
 | **pixelraum-Beispiele** (`examples/demo.rs`, C-Beispiel) nicht migriert | offen | mit dem ersten Knorke-Beispielprogramm |
@@ -681,7 +682,8 @@ Zwei Modelle, beide brauchen dieselben Grundlagen:
 | Gemeinsamer Raum-Index für Wahrnehmung | offen | 17.1 |
 | Sagax-Neuschnitt (`navigation`, `perception`, `ai`) | erledigt (Abschnitt 16, ADR 0012) | `knorke-grid`, `-navigation`, `-perception`, `-ai`, `-integration` |
 | **Bindings `sagax-abi`/`-ffi`/`-wasm`** (C-ABI 23,8 kLOC, WASM 4,8 kLOC) | verworfen (vorerst) | Plan 6.2 §6: nur für einen konkreten Verbraucher, dann neu gegen `knorke-*` entworfen (zusammen mit `knorke-abi`, 17.1); externe Verbraucher der Sagax-C-ABI noch nicht ermittelt |
-| **Snapshot der übrigen KI-Zustandstypen**: `DStarLite`, `GoalGuess`, `Mission`, `Crew`, `Squad`, `GoalKeeper`, `Areas`, `Timers`, `Inbox`/`Outbox`, `Route`/`Progress`, `Spots` | offen | Navigator, Search, FlowField, Awareness, Contagion, StateMachine, Knowledge, Alertness sind fertig (ADR 0012); Rest vor dem ersten Replay mit Missionen/Gruppen |
+| **Snapshot der übrigen KI-Zustandstypen**: `DStarLite`, `GoalGuess`, `Mission`, `Crew`, `Squad`, `GoalKeeper`, `Areas`, `Timers`, `Inbox`/`Outbox`, `Route`/`Progress`, `Spots`, dazu `Decider`, `Interval`, `Metric`, `GridRules` | erledigt (Abschnitt 16, ADR 0012) | alle als `SnapshotValue`, Restore ohne Allokation, ungültige Daten → `SnapshotError::Invalid`; Replay-Test erweitert |
+| **Snapshot-Uneinheitlichkeit**: `Mission` muss in eine Mission mit gleicher `MissionConfig` zurück (`Mission::get` nur mit Standard-Config), `Squad`/`Crew` sichern ihre Kapazitäten mit | offen | vereinheitlichen, sobald ein Host Missionen mit eigener Config sichert; außerdem: Playbook-Plan als laufender Plan im Round-Trip-Test nicht abgedeckt |
 | **`Parallel`-Vertrag in den KI-Modulen** | offen | Sagax rechnet pro Figur seriell; parallel heute nur der Host über Figuren. Kandidaten: `look` über viele Beobachter, Flow-Field-Abfragen, Decider über Figuren – mit Messung (Chunk ≥ 10 µs) |
 | **`Column`-Eingaben statt Slices** (`&[Candidate]`, `&[Target]`, Decider-Eingabezeilen) | offen | ADR 0006; mit dem ersten Host, der diese Daten in eigenen Structs hält |
 | **`Seed`/`Tick` in KI-Signaturen** (heute `u64`-Seeds, `u32`-Zeit wie in Sagax) | offen | API-Umbau ohne Ergebnisänderung möglich; zusammen mit `knorke-runtime` |
@@ -817,3 +819,20 @@ Web-Recherche durch einen Subagenten, Quellen 2025–2026. **Nicht von mir einze
 6. **Orakel nach Kosten:** Invarianten → Navigations-/Erreichbarkeitsorakel → Bilddiff gegen Referenz → Bildmodell nur zur Einordnung (22–25).
 
 **Recherchelücken:** Kein Spiele-Werkzeug gefunden, das Replay-Logs mit Delta-Debugging kombiniert, und kein Zustands-Ringpuffer-Recorder als Produkt; Prozentzahlen der Glitch-Benchmarks teils nur aus Sekundärquellen. Außerdem nicht belegt: Stand von wgpu 2026, spielespezifische Praxis visueller Regressionstests und Details zu SMART/CA2/GBQA sind nicht belegt. Bei Bedarf gezielt nachrecherchieren.
+
+### 17.12 Chiaro-Port nach Rust und Integration (vorgesehen 2026-11-23)
+
+Quelle: `D:\Entwicklung\chiaro` @ `9bc5b9b` (gleicher Stand wie die Inventur `docs/inventory/chiaro.md`). Umfang laut Inventur §7.1: ~17–19 kLOC C++ fachlich, 6 kLOC HLSL (151 Programme), ~37 kLOC Tests als Spezifikation. Rahmen: Abschnitt 5 (Weg B bevorzugt, Gate 5.1, Reihenfolge 5.2, Feature-Matrix 5.3).
+
+**Entschieden in ADR 0014:** drei Crates `knorke-gpu`, `knorke-post`, `knorke-light2d`; GPU ist der Hauptweg, das CPU-`knorke-lighting` (ADR 0013) wird auf pixelraum-Stand eingefroren; Shader als getrennte Pakete pro Format (Vulkan Standard, Metal für macOS, D3D12 optional), nicht in der Bibliothek. **Aktueller Stand, Pakete P1–P35 und Übergabe: `docs/chiaro-port/ABLAUF.md`** (Aufteilung: `docs/inventory/chiaro-aufteilung.md`). Die Tabelle unten ist die Grobfassung.
+
+| Schritt | Inhalt | Status | Bemerkung |
+|---|---|---|---|
+| 1 | **`knorke-gpu`**: sicherer Rust-Wrapper um SDL3-GPU (Device geliehen vom Host, Texture, RenderTarget, Shader aus Chiaro-Blobs + Reflection, PipelineCache, UploadBuffer, Debug-Gruppen); `unsafe` nur hier (ADR 0005) | geplant | vorher Reife von `sdl3-sys` prüfen (Inventur §7.3/4); Vertrag ADR 0002: kein Submit/Present/Readback im Modul |
+| 2 | **Gate-Spike (5.1)**: ein Punktlicht + ein Schattenfall + Offscreen-Capture in Rust, gegen dieselbe Szene aus C++-Chiaro; Passzeiten und Bilddiff messen | geplant | Ergebnis als ADR „Chiaro: Rust-Port ja/nein“ |
+| 3 | Golden Scenes aus den Chiaro-Demos (`--screenshot --time`) erzeugen, Paritätsmetrik mit Ausreißer-Budget (Treiber streut schon in C++, Inventur §1.3) | geplant | ohne das keine Paritätsaussage |
+| 4 | CPU-Logik portieren (Licht-, Schatten-, Medien-Mathematik, Atlanten) samt Unit-Tests als Spezifikation; `knorke-math`-Typen, `det::*`, kein `HashMap` | geplant | gut parallel in Teilen machbar |
+| 5 | GPU-Stufen portieren (8-Stufen-Pipeline, Licht-Programmtabelle exakt aus `cmake/ChiaroLightPrograms.cmake`, Schatten-Cache) | geplant | größtes Risiko: falsch belegte Slots ergeben stille Bildfehler (Inventur §7.3/1–2) |
+| 6 | Post-Stufe (Tonemap, Bloom, sRGB-Encode) – Zuordnung `knorke-render` vs. `knorke-lighting` klären | offen | Inventur §7.2 |
+| 7 | **Integration** in `knorke-integration` als eigenes Feature (z. B. `gpu`), Snapshot/Inspect/Diagnostics (`knorke.lighting.*`), Vertragstests (keine Allokation im Steady State, nullgroße Aus-Zustände) | geplant | wie das `pixel`-Profil |
+| 8 | Feature-Matrix vollständig, C++-Chiaro archivieren | geplant | erst bei ausreichender Parität (5.2/8) |

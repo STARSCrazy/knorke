@@ -53,7 +53,7 @@ Baseline des Originals (`cargo test --workspace` in `SmartLib`, eigenes Target-V
 - `knorke-ai`: `StateMachine` (Zustände außerhalb der Maschine abgelehnt), `Knowledge` (mehr Fakten als Kapazität abgelehnt) und `Alertness` sind `SnapshotValue`.
 - Wahrnehmungs- und KI-Zustand gehört **pro Figur** zum Host; deshalb `SnapshotValue` statt eines eigenen Abschnitts pro Figur. Der Host sichert sie in seinem Abschnitt (wie `HandleMap<K, V>`). Ein modul-eigener Abschnitt entsteht, sobald ein Modul eine eigene Sammlung pro Welt besitzt.
 - Replay-Test je Modul mit Zustand (`tests/replay.rs` in navigation, perception, ai): aufnehmen → `verify` → `seek` gegen geraden Lauf, bytegleich; Keyframes fallen absichtlich mitten in laufende Suchen.
-- **Noch ohne Snapshot** (Plan 17.5): `DStarLite`, `GoalGuess`, `Mission`, `Crew`, `Squad`, `GoalKeeper`, `Areas`, `Timers`, `Inbox`/`Outbox`, `Route`/`Progress`, `Spots`.
+- **Nachgezogen 2026-11-23** (Plan 17.5), ebenfalls als `SnapshotValue`: `DStarLite`, `GoalGuess`, `Mission`, `Crew`, `Squad`, `GoalKeeper`, `Areas`, `Timers`, `Inbox`/`Outbox`, `Route`/`Progress`, `Spots`.
 
 ### Nicht übernommen
 

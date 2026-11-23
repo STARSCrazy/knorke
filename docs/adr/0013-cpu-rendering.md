@@ -1,6 +1,6 @@
 # ADR 0013: CPU-Rendering – pixelraum als `knorke-render` + `knorke-lighting`
 
-Status: angenommen · Datum: 2026-11-23 · Bezug: ADR 0001, 0002, 0006, 0008, 0011, Inventur `docs/inventory/pixelraum.md`
+Status: angenommen (lineares Licht umgesetzt 2026-11-23) · Datum: 2026-11-23 · Bezug: ADR 0001, 0002, 0006, 0008, 0011, Inventur `docs/inventory/pixelraum.md`
 
 ## Kontext
 
@@ -13,10 +13,10 @@ Die in Plan §2.3 gesuchte Grafikbibliothek ist **pixelraum** (Rust, reiner Soft
 3. **Keine eigenen Threads.** Parallelität nur über `knorke_types::Parallel` (ADR 0008): Shading in festen Bändern zu 16 Zeilen, Licht in Chunks zu 1024 Samples, Sonnen-Schattenkarte in Bändern, Würfelflächen der Punktlichter als Aufträge. Das Ergebnis ist bitgleich über `Serial` und jeden Executor. `knorke-render` und `knorke-lighting` hängen nicht von `knorke-exec`/`rayon` ab; die Integration wählt aus `Options::threads` `Serial` oder `ScopedThreads`.
 4. **Keine Allokation im eingeschwungenen Frame** (seriell), belegt durch den Vertragstest `tests/contracts/tests/no_alloc_pixel.rs` (Licht, Schatten, Himmel, Konturen, Transparenz, Partikel). Dafür wurde gegenüber pixelraum das Clipping auf ein Stack-Polygon umgestellt und Backdrop-Reihenfolge, Fragmentreihenfolge, Konturmaske und Emitter-Durchlauf auf wiederverwendeten Zustand. Ausnahme: mit mehr als einem Thread alloziert `end_lit` eine Band-Liste pro Frame (Plan §17.1).
 5. **Präsentations-Crates lockern Clippy über ein eigenes `clippy.toml`.** `knorke-render`, `knorke-lighting` und `knorke-integration` verbieten weiter Uhren (`Instant`, `SystemTime`) und `HashMap`/`HashSet`/`RandomState`, aber nicht die plattformabhängigen `f32`-Funktionen aus ADR 0011: ihr Ergebnis ist ein Bild, kein Simulationszustand, und fließt nicht in Prüfsummen oder Replays. Golden Images sind deshalb nur pro Plattform verbindlich.
-6. **Licht linear, sRGB einmal am Ende – Ziel, noch nicht umgesetzt.** Richtig wäre: Texturen beim Laden nach linear, Licht und Nebel linear, Umrechnung nach sRGB einmal beim Schreiben der Ausgabe (Tabellen in `knorke-math`). pixelraum multipliziert Licht direkt auf die 0..255-Werte. Die Migration behält das bewusst bei, damit alle 55 Golden Images pixelgenau gleich bleiben und der Umbau nachprüfbar ist. Die Umstellung ist ein eigener Schritt mit neu erzeugten Golden Images (Plan §17.1).
+6. **Licht linear, sRGB einmal am Ende – umgesetzt 2026-11-23** (Tabellen in `knorke-render/src/srgb.rs`, 51 Golden Images neu erzeugt). Ursprünglicher Stand: Richtig wäre: Texturen beim Laden nach linear, Licht und Nebel linear, Umrechnung nach sRGB einmal beim Schreiben der Ausgabe (Tabellen in `knorke-math`). pixelraum multipliziert Licht direkt auf die 0..255-Werte. Die Migration behält das bewusst bei, damit alle 55 Golden Images pixelgenau gleich bleiben und der Umbau nachprüfbar ist. Die Umstellung ist ein eigener Schritt mit neu erzeugten Golden Images (Plan §17.1).
 7. **C-Schnittstelle bleibt in pixelraum.** `capi.rs` und `include/pixelraum.h` werden nicht migriert; Wizardry 7 nutzt weiter das Original-Repo. Eine Knorke-C-ABI kommt mit `knorke-abi` (Plan §17.1).
 8. **Lizenz.** pixelraum steht unter MIT, Knorke unter `MIT OR Apache-2.0`. Gleicher Autor, daher neu lizenziert; Herkunft in den Crate-Dokumentationen (`pixelraum @ 81927d8`).
-9. **Späterer GPU-Pfad.** Der Rust-Neubau von Chiaro (Plan §5) kommt als GPU-Pfad in `knorke-lighting` dazu, neben dem Software-Pfad; der Schnitt (Samples rein, Licht raus) ist so gewählt, dass ein GPU-G-Buffer dieselbe Rolle übernehmen kann.
+9. **Späterer GPU-Pfad** (ersetzt durch ADR 0014 §2: GPU-Licht kommt als eigene Crate `knorke-light2d`, dieses CPU-Licht wird eingefroren). Ursprünglich: Der Rust-Neubau von Chiaro (Plan §5) kommt als GPU-Pfad in `knorke-lighting` dazu, neben dem Software-Pfad; der Schnitt (Samples rein, Licht raus) ist so gewählt, dass ein GPU-G-Buffer dieselbe Rolle übernehmen kann.
 
 ## Warum der Schnitt nicht ganz sauber ist
 

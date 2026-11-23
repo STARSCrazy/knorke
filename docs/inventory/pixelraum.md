@@ -67,6 +67,6 @@ pixelraum ist die in Plan §2.3 gesuchte „bereits begonnene Grafikbibliothek�
 ## 4. Offene Punkte
 
 - C-Schnittstelle für Wizardry 7 (Plan §17.1).
-- Farben nicht linear (ADR 0013 §3): Umstellung ändert alle Golden Images.
+- Farben nicht linear (ADR 0013 §3): in Knorke am 2026-11-23 auf linear umgestellt (ADR 0013 §6), Golden Images neu.
 - Golden Images bisher nur unter Windows/x86-64 belegt; `knorke-render` nutzt `sin`/`cos`/`tan`/`atan2`/`log2` aus `std` (Kamera, Türen, Partikel, Hintergrund, Texturstufen), die nach ADR 0011 plattformabhängig sein dürfen – plattformübergreifend unbelegt. Die Präsentations-Crates lockern dafür die Clippy-Regeln (ADR 0013 §5).
 - Mit `threads > 1` alloziert `end_lit` eine Band-Liste pro Frame (Plan §17.1).
