@@ -81,6 +81,13 @@ const RULES: &[Rule] = &[
         except: &[],
         why: "lighting works on host-provided targets without the renderer or a world runtime",
     },
+    // The GPU foundation serves 2D light, post and a later 3D renderer (ADR 0014).
+    Rule {
+        from: &["knorke-gpu"],
+        to: &["knorke-*"],
+        except: &["knorke-gpu", "knorke-types"],
+        why: "knorke-gpu is the shared GPU foundation and knows no domain crate (ADR 0014)",
+    },
     Rule {
         from: &["knorke-runtime"],
         to: DEV_PLANE,
@@ -153,6 +160,7 @@ const RULES: &[Rule] = &[
             "knorke-grid",
             "knorke-render",
             "knorke-lighting",
+            "knorke-gpu",
         ],
         to: &["knorke-exec", "rayon*"],
         except: &[],
