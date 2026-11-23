@@ -8,6 +8,7 @@
 
 use knorke_grid::Pos;
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 use crate::percept::{Percept, Sense};
 use crate::world::{Grid, fit, grid_distance};
@@ -514,5 +515,101 @@ impl Contagion {
             out.nearest = fit(d);
         }
         (out, best.map(|(_, i)| i))
+    }
+}
+
+// --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
+
+impl SnapshotValue for Grid {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&(*self as u8));
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        match r.get::<u8>()? {
+            0 => Ok(Grid::Square),
+            1 => Ok(Grid::Hex),
+            _ => Err(SnapshotError::Invalid("knorke.perception: grid")),
+        }
+    }
+}
+
+impl SnapshotValue for DeedRule {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.bits);
+        w.put(&self.window);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(DeedRule {
+            bits: r.get()?,
+            window: r.get()?,
+        })
+    }
+}
+
+impl SnapshotValue for ContagionConfig {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.grid);
+        w.put(&self.deeds);
+        w.put(&self.count);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(ContagionConfig {
+            grid: r.get()?,
+            deeds: r.get()?,
+            count: r.get()?,
+        })
+    }
+}
+
+impl SnapshotValue for Slot {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.used);
+        w.put(&self.ally);
+        w.put(&self.last_seen);
+        w.put(&self.point);
+        w.put(&self.bits);
+        w.put(&self.live);
+        w.put(&self.onset);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Slot {
+            used: r.get()?,
+            ally: r.get()?,
+            last_seen: r.get()?,
+            point: r.get()?,
+            bits: r.get()?,
+            live: r.get()?,
+            onset: r.get()?,
+        })
+    }
+}
+
+/// One character's contagion memory with its configuration. Restoring into a memory of the
+/// same capacity reuses its slots; another capacity allocates once.
+impl SnapshotValue for Contagion {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.config);
+        w.put(&self.owner);
+        w.put_slice(&self.slots);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut c = Contagion::new(ContagionConfig::new(Grid::Square), 0, 0);
+        c.get_into(r)?;
+        Ok(c)
+    }
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        self.config = r.get()?;
+        self.owner = r.get()?;
+        let n = r.get_len()?;
+        if n != self.slots.len() {
+            if n > r.remaining() {
+                return Err(SnapshotError::UnexpectedEnd);
+            }
+            self.slots = vec![Slot::default(); n].into_boxed_slice();
+        }
+        for s in self.slots.iter_mut() {
+            *s = r.get()?;
+        }
+        Ok(())
     }
 }

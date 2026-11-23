@@ -4,6 +4,7 @@
 
 use knorke_grid::Pos;
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 use crate::gain::{band_of, sense, sight_range, within};
 use crate::line::sight_line;
@@ -414,4 +415,40 @@ pub(crate) fn shows_instant(eye: &Eye, target: &Target, aware: &Awareness) -> bo
         .cues
         .iter()
         .any(|r| r.instant > 0 && r.bits & visible != 0)
+}
+
+// --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
+
+/// The game stores one `Awareness` per pair and saves it in its own section. Stages above
+/// recognised are rejected: they would index past the profile's thresholds later.
+impl SnapshotValue for Awareness {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.counter);
+        w.put(&self.doubt);
+        w.put(&self.stage);
+        w.put(&self.pending);
+        w.put(&self.flags);
+        w.put(&self.last);
+        w.put(&self.pending_since);
+        w.put(&self.last_seen);
+        w.put(&self.cues);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let a = Awareness {
+            counter: r.get()?,
+            doubt: r.get()?,
+            stage: r.get()?,
+            pending: r.get()?,
+            flags: r.get()?,
+            _pad: 0,
+            last: r.get()?,
+            pending_since: r.get()?,
+            last_seen: r.get()?,
+            cues: r.get()?,
+        };
+        if a.stage > 2 || a.pending > 2 {
+            return Err(SnapshotError::Invalid("knorke.perception: awareness stage"));
+        }
+        Ok(a)
+    }
 }

@@ -6,6 +6,7 @@ use std::collections::BinaryHeap;
 use std::hash::Hash;
 
 use knorke_observe::{NoopSink, Sink};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
 use crate::table::NodeTable;
 
@@ -750,5 +751,151 @@ where
         path,
         cost,
         expanded: search.expanded(),
+    }
+}
+
+// --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
+
+fn status_code(s: SearchStatus) -> u8 {
+    match s {
+        SearchStatus::Idle => 0,
+        SearchStatus::Running => 1,
+        SearchStatus::Found => 2,
+        SearchStatus::Exhausted => 3,
+    }
+}
+
+impl SnapshotValue for SearchStatus {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&status_code(*self));
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => SearchStatus::Idle,
+            1 => SearchStatus::Running,
+            2 => SearchStatus::Found,
+            3 => SearchStatus::Exhausted,
+            _ => return Err(SnapshotError::Invalid("knorke.navigation: search status")),
+        })
+    }
+}
+
+impl SnapshotValue for Limits {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&(self.max_nodes as u64));
+        w.put(&self.max_cost);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let max_nodes = usize::try_from(r.get::<u64>()?)
+            .map_err(|_| SnapshotError::Invalid("knorke.navigation: node limit"))?;
+        Ok(Limits {
+            max_nodes,
+            max_cost: r.get()?,
+        })
+    }
+}
+
+impl<N: SnapshotValue> SnapshotValue for Record<N> {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.node);
+        w.put(&self.cost);
+        w.put(&self.estimate);
+        w.put(&self.parent);
+        w.put(&self.closed);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Record {
+            node: r.get()?,
+            cost: r.get()?,
+            estimate: r.get()?,
+            parent: r.get()?,
+            closed: r.get()?,
+        })
+    }
+}
+
+impl SnapshotValue for Open {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.key);
+        w.put(&self.index);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Open {
+            key: r.get()?,
+            index: r.get()?,
+        })
+    }
+}
+
+/// The complete state of a search, so a search stopped by its budget continues after a
+/// restore exactly as it would have. The node index is rebuilt from the records; the open
+/// list is written in heap order and read back unchanged, so a restored search pops the
+/// same nodes and saves the same bytes.
+impl<N: Copy + Eq + Hash + SnapshotValue> SnapshotValue for Search<N> {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.records);
+        w.put_len(self.open.len());
+        for o in self.open.iter() {
+            w.put(o);
+        }
+        w.put(&self.limits);
+        w.put(&self.status);
+        w.put(&self.best);
+        w.put(&self.goal);
+        w.put(&(self.expanded as u64));
+        w.put(&self.search_number);
+        w.put(&self.started);
+        w.put(&self.node_limit_hit);
+        w.put(&self.cost_overflow);
+    }
+
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut s = Search::new();
+        s.get_into(r)?;
+        Ok(s)
+    }
+
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        const BAD: SnapshotError = SnapshotError::Invalid("knorke.navigation: search index");
+        r.get_into_vec(&mut self.records)?;
+        let mut open = std::mem::take(&mut self.open).into_vec();
+        r.get_into_vec(&mut open)?;
+        self.limits = r.get()?;
+        self.status = r.get()?;
+        self.best = r.get()?;
+        self.goal = r.get()?;
+        self.expanded = usize::try_from(r.get::<u64>()?).map_err(|_| BAD)?;
+        self.search_number = r.get()?;
+        self.started = r.get()?;
+        self.node_limit_hit = r.get()?;
+        self.cost_overflow = r.get()?;
+        let len = self.records.len();
+        let ok = |i: u32| i == NONE || (i as usize) < len;
+        let valid = len < NONE as usize
+            && ok(self.best)
+            && ok(self.goal)
+            && self.records.iter().all(|rec| ok(rec.parent))
+            && open.iter().all(|o| (o.index as usize) < len);
+        // A valid heap is left as it is by `from`, so the order matches the saved one.
+        self.open = BinaryHeap::from(open);
+        if !valid {
+            self.records.clear();
+            self.open.clear();
+            self.index.clear();
+            return Err(BAD);
+        }
+        self.index.clear();
+        for (i, rec) in self.records.iter().enumerate() {
+            if self.index.get(&rec.node).is_some() {
+                self.records.clear();
+                self.open.clear();
+                self.index.clear();
+                return Err(SnapshotError::Invalid(
+                    "knorke.navigation: repeated search node",
+                ));
+            }
+            self.index.insert_new(rec.node, i as u32);
+        }
+        Ok(())
     }
 }

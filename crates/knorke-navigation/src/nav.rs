@@ -42,6 +42,7 @@
 use std::num::NonZeroUsize;
 
 use knorke_observe::{MapSink, NoopSink, Sink};
+use knorke_types::{Reader, Snapshot, SnapshotError, SnapshotValue, Writer};
 
 use crate::formation::{Formation, FormationTrace};
 use crate::grid::{Cell, CellMap};
@@ -686,6 +687,77 @@ pub fn write_way_traced<M: CellMap, S: Sink<SmoothTrace<Cell>> + ?Sized>(
             out.extend(path.first().filter(|_| skip == 1));
             out.extend_from_slice(scratch);
         }
+    }
+}
+
+// --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
+
+impl SnapshotValue for Last {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&match self {
+            Last::Nothing => 0u8,
+            Last::Path => 1,
+            Last::Area => 2,
+        });
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(match r.get::<u8>()? {
+            0 => Last::Nothing,
+            1 => Last::Path,
+            2 => Last::Area,
+            _ => return Err(SnapshotError::Invalid("knorke.navigation: last result")),
+        })
+    }
+}
+
+/// Section `knorke.navigation`: the running or finished search (a search stopped by its
+/// [`Budget`] continues after a restore), the flee search, the last results and the
+/// settings changed after construction. The [`Topology`] and the capacity are fixed at
+/// [`Navigator::new`] and not saved: restore into a navigator built with the same ones.
+impl Snapshot for Navigator {
+    const ID: &'static str = "knorke.navigation";
+    const VERSION: u16 = 1;
+
+    fn save(&self, w: &mut Writer<'_>) {
+        w.put(&self.search);
+        w.put(&self.start);
+        w.put(&self.goals);
+        w.put(&self.flee);
+        w.put(&self.searches);
+        w.put(&self.last);
+        w.put(&self.keep_first);
+        w.put(&self.smooth_max_extra);
+        w.put(&self.path);
+        w.put(&self.list);
+        w.put(&self.members);
+    }
+
+    fn restore(&mut self, version: u16, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        if version != Self::VERSION {
+            return Err(SnapshotError::UnsupportedVersion {
+                id: Self::ID,
+                version,
+            });
+        }
+        self.search.get_into(r)?;
+        self.start = r.get()?;
+        r.get_into_vec(&mut self.goals)?;
+        let capacity = self.capacity;
+        if r.get::<bool>()? {
+            self.flee
+                .get_or_insert_with(|| Search::with_capacity(capacity))
+                .get_into(r)?;
+        } else {
+            self.flee = None;
+        }
+        self.searches = r.get()?;
+        self.last = r.get()?;
+        self.keep_first = r.get()?;
+        self.smooth_max_extra = r.get()?;
+        r.get_into_vec(&mut self.path)?;
+        r.get_into_vec(&mut self.list)?;
+        r.get_into_vec(&mut self.members)?;
+        Ok(())
     }
 }
 

@@ -13,6 +13,7 @@
 //! drops, leave costs of zones), the next step still uses the real forward
 //! moves, but the field's estimate of the remaining cost may be off.
 
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 use std::hash::Hash;
 
 use knorke_observe::{NoopSink, Sink};
@@ -170,6 +171,21 @@ fn next_step<N: Copy + Eq + Hash, G: Graph<Node = N>>(
         }
     }
     best.map(|(_, n)| n)
+}
+
+/// A filled field is the finished search behind it; the scratch buffer is not saved.
+impl<N: Copy + Eq + Hash + SnapshotValue> SnapshotValue for FlowField<N> {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.search);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        let mut f = FlowField::default();
+        f.get_into(r)?;
+        Ok(f)
+    }
+    fn get_into(&mut self, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
+        self.search.get_into(r)
+    }
 }
 
 #[cfg(test)]

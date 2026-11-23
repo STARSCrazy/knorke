@@ -12,5 +12,8 @@ knorke-grid = { workspace = true }
 knorke-observe = { workspace = true }
 knorke-types = { workspace = true }
 
+[dev-dependencies]
+knorke-replay = { workspace = true }
+
 [lints]
 workspace = true
