@@ -25,7 +25,7 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 | P1 | GPU-Grundlagen: Handles, RenderTarget, Sampler, UploadBuffer | `knorke-gpu` | O | – | läuft (Worktree; Merge durch Koordinator) |
 | P2 | ShaderLibrary, ProgramBinding, PipelineCache, Shader-Pakete pro Format laden (`.kpak`; Vulkan/Metal, D3D12 optional) | `knorke-gpu` | O | P1 | offen |
 | P3 | Golden Scenes aus C++-Demos + Paritätsmetrik | Tests | S | – | läuft (Worktree; Merge durch Koordinator) |
-| P4 | Farbe, Formate, Letterbox | `knorke-post` (CPU) | H | – | läuft (Worktree; Merge durch Koordinator) |
+| P4 | Farbe, Formate, Letterbox | `knorke-post` (CPU) | H | – | fertig (Merge 2026-11-24): ColorMath, Grading, Dither, OutputRect in `knorke-post`; `Formats.*` (SDL-Formattabellen) verschoben nach P2/`knorke-gpu` |
 | P5 | Projektion + Triangulierung | `knorke-light2d` (CPU) | S (mit P6, P7) | – | läuft (Worktree; Merge durch Koordinator) |
 | P6 | Pixel-/Normal-/Material-Codec | `knorke-light2d` (CPU) | S | – | läuft (Worktree; Merge durch Koordinator) |
 | P7 | Licht: Store + Math | `knorke-light2d` (CPU) | S | – | läuft (Worktree; Merge durch Koordinator) |
@@ -39,7 +39,7 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 | P14 | Tile-Gitter + Muster an Hindernissen | `knorke-light2d` | S | P13 | offen |
 | P15 | Muster-Store + Geometrie | `knorke-light2d` | S | P13 | offen (exotisch) |
 | P16 | Schatten-Cache-Plan | `knorke-light2d` | O | P13 | offen |
-| P17 | Post-Mathe: Shockwave, CRT, Bloom-Parameter | `knorke-post` (CPU) | H | – | läuft (Worktree; Merge durch Koordinator) |
+| P17 | Post-Mathe: Shockwave, CRT, Bloom-Parameter | `knorke-post` (CPU) | H | – | fertig (Merge 2026-11-24): CRT, Bloom-Plan, Shockwave in `knorke-post`; Farbtemperatur (Kelvin→RGB) fehlt noch, Aufrufer liefert die Farbe |
 | P18 | FrameWarnings → `Diagnostic` | je Crate | S | Gate | offen |
 | P19 | Settings + Qualitätspresets (Redesign) | je Crate | S | Gate | offen |
 | P20 | Post-Pass: Output + Bloom + Tonemap | `knorke-post` | S | P2, P4, P17, P19 | offen |
@@ -68,6 +68,8 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 ## Protokoll
 
 Neueste oben. Datum · wer · was · Ergebnis (auch Fehlschläge, Messwerte).
+
+- 2026-11-24 · Haiku-Agent + Claude · P4+P17 gemerged: Crate `knorke-post` (31 Tests, nur `knorke-math`, 16 Abhängigkeitsregeln). Nicht portiert: C-API-Struktur-/Flag-Tests, SDL-Fehlertexte, MediumCloud-Tests (eigenes Paket), Kelvin-Farbe.
 
 - 2026-11-23 · Claude · Aufteilung analysiert (`docs/inventory/chiaro-aufteilung.md`), ADR 0014 angenommen, diese Datei angelegt. Noch kein Code.
 - 2026-11-23 · Claude · Welle 0/1 gestartet: P1, P3, P4+P17, P5–P7 (vier Agenten parallel).
