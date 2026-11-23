@@ -158,10 +158,11 @@ impl KeyHash {
     }
 }
 
-/// Colour `0xRRGGBB` times strength as 0..1 per channel (may exceed 1 for strength > 1).
+/// sRGB colour `0xRRGGBB` decoded to linear 0..1 per channel (table, ADR 0013 §6) times
+/// strength (may exceed 1 for strength > 1).
 pub fn color_scaled(c: u32, strength: f32) -> [f32; 3] {
-    let ch = |s: u32| ((c >> s) & 255) as f32 / 255.0 * strength;
-    [ch(16), ch(8), ch(0)]
+    let l = knorke_math::Srgba8::new((c >> 16) as u8, (c >> 8) as u8, c as u8, 255).to_linear();
+    [l.r * strength, l.g * strength, l.b * strength]
 }
 
 /// Shadow bias for a surface: constant part plus a slope part that grows as the light grazes it.

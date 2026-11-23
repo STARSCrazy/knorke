@@ -30,7 +30,7 @@ impl Renderer {
         self.gbuf.cur_owner = NO_OWNER;
     }
 
-    /// Final colour of the pixels and fragments of every particle drawn this frame: lit ones take
+    /// Linear tint of the pixels and fragments of every particle drawn this frame: lit ones take
     /// the light of the light pass (`light`, one value per particle) stepped by `light_levels`;
     /// emissive ones, and all without a light pass (`lit` false), keep their colour.
     pub(super) fn light_particles<P: Column<[f32; 3]>>(&mut self, light: &P, lit: bool) {
@@ -46,26 +46,6 @@ impl Renderer {
             };
             self.particle_tints.push(t);
         }
-        let tints = &self.particle_tints;
-        let tinted = |texel: [u8; 3], t: &[f32; 3]| -> [u8; 3] {
-            std::array::from_fn(|k| (texel[k] as f32 * t[k]).round().clamp(0.0, 255.0) as u8)
-        };
-        let g = &mut self.gbuf;
-        if g.prelit_any {
-            for i in 0..g.color.len() {
-                if g.prelit[i]
-                    && let Some(t) = tints.get(g.owner[i] as usize)
-                {
-                    g.color[i] = tinted(g.color[i], t);
-                }
-            }
-        }
-        for f in g.frags.frags.iter_mut() {
-            if f.prelit
-                && let Some(t) = tints.get(f.owner as usize)
-            {
-                f.color = tinted(f.color, t);
-            }
-        }
+        // The tints are applied in linear space while shading (`Shade::base`).
     }
 }

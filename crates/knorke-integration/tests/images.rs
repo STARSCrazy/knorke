@@ -859,7 +859,8 @@ fn sky_tint_darkens_sky() {
     c.renderer.set_sky_tint(0x202040, 1.0);
     c.renderer.begin(&cam);
     c.renderer.end();
-    assert_eq!(&c.renderer.rgba()[..3], &[0x10, 0x10, 0x40]);
+    // multiplied in linear space: lin(0x80) * lin(0x20) encodes to 10, lin(0xff) * lin(0x40) to 0x40
+    assert_eq!(&c.renderer.rgba()[..3], &[10, 10, 0x40]);
     // tint without lighting changes nothing
     let mut d = courtyard(true);
     d.renderer.set_sky_tint(0x202040, 1.0);
@@ -1629,7 +1630,24 @@ fn glass_wall_shows_room_behind() {
         s.renderer.depth() == old_depth.as_slice(),
         "glass writes no depth"
     );
-    // every pixel is either untouched (something opaque in front of the glass) or half glass, half room
+    // every pixel is either untouched (something opaque in front of the glass) or half glass,
+    // half room, mixed in linear light
+    let dec = |c: f32| {
+        let c = c as f64 / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let enc = |l: f64| {
+        let s = if l <= 0.003_130_8 {
+            l * 12.92
+        } else {
+            1.055 * l.powf(1.0 / 2.4) - 0.055
+        };
+        (s * 255.0) as f32
+    };
     let glass = [150.0f32, 210.0, 230.0];
     let mut mixed = 0;
     for i in 0..W * H {
@@ -1639,7 +1657,7 @@ fn glass_wall_shows_room_behind() {
         }
         mixed += 1;
         for k in 0..3 {
-            let want = a[k] as f32 * 0.5 + glass[k] * 0.5;
+            let want = enc(dec(a[k] as f32) * 0.5 + dec(glass[k]) * 0.5);
             assert!(
                 (b[k] as f32 - want).abs() <= 1.0,
                 "pixel {i}: {b:?} vs mix of {a:?}"
@@ -1800,10 +1818,11 @@ fn two_transparent_sorted() {
     let b = layers(&[red, blue]);
     assert!(a == b, "draw order does not matter, depth does");
     let c = (H / 2 * W + W / 2) * 4;
-    assert_eq!(&a[c..c + 3], &[128, 0, 64], "red over (blue over black)");
+    // linear 0.5 red, 0.25 blue, encoded to sRGB
+    assert_eq!(&a[c..c + 3], &[188, 0, 137], "red over (blue over black)");
     // equal depth: draw order decides, later on top
     let a = layers(&[([255, 0, 0, 255], 2.0, 0.5), ([0, 0, 255, 255], 2.0, 0.5)]);
-    assert_eq!(&a[c..c + 3], &[64, 0, 128]);
+    assert_eq!(&a[c..c + 3], &[137, 0, 188]);
 }
 
 #[test]
@@ -1826,7 +1845,8 @@ fn alpha_steps_of_eighth() {
     assert!(red(0.3, 255) != red(0.45, 255));
     assert!(red(1.0, 128) == red(0.5, 255), "texel alpha counts");
     let c = (H / 2 * W + W / 2) * 4;
-    assert_eq!(&red(0.3, 255)[c..c + 3], &[64, 0, 0]);
+    // linear 0.25 encodes to 137
+    assert_eq!(&red(0.3, 255)[c..c + 3], &[137, 0, 0]);
 }
 
 #[test]
@@ -4104,14 +4124,19 @@ fn backdrop_blend_fog_anim_scroll() {
             ..spot(white, 0, 0.0, 0.0, 0.0)
         })
         .unwrap();
-    assert_eq!(px(&mut r, 0.0, cx, cy), [132, 132, 132], "alpha 1/2");
+    // blended in linear space: (lin(0x40) + lin(200)) / 2 encodes to 152
+    assert_eq!(px(&mut r, 0.0, cx, cy), [152, 152, 152], "alpha 1/2");
     let b = Backdrop {
         alpha: 0.3,
         ..r.backdrop(id).unwrap()
     };
     r.set_backdrop(id, b);
-    // 0.3 steps to 2/8: 64 * 0.75 + 200 * 0.25 = 98
-    assert_eq!(px(&mut r, 0.0, cx, cy), [98, 98, 98], "alpha in 1/8 steps");
+    // 0.3 steps to 2/8: lin(64) * 0.75 + lin(200) * 0.25 encodes to 119
+    assert_eq!(
+        px(&mut r, 0.0, cx, cy),
+        [119, 119, 119],
+        "alpha in 1/8 steps"
+    );
     r.set_backdrop(
         id,
         Backdrop {
@@ -4120,7 +4145,7 @@ fn backdrop_blend_fog_anim_scroll() {
             ..b
         },
     );
-    assert_eq!(px(&mut r, 0.0, cx, cy), [114, 114, 114], "additive");
+    assert_eq!(px(&mut r, 0.0, cx, cy), [122, 122, 122], "additive");
     // fog: the layer gets the fog colour mix at fog_min
     r.set_backdrop(
         id,
@@ -4134,7 +4159,7 @@ fn backdrop_blend_fog_anim_scroll() {
     r.options.fog_end = 5.0;
     r.options.fog_min = 0.25;
     r.options.fog_color = 0x0000ff;
-    assert_eq!(px(&mut r, 0.0, cx, cy), [50, 50, 241], "fog");
+    assert_eq!(px(&mut r, 0.0, cx, cy), [106, 106, 243], "fog");
     r.set_backdrop(
         id,
         Backdrop {

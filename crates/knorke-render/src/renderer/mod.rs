@@ -325,18 +325,9 @@ pub fn world_pos(view: &View, x: usize, y: usize, depth: f32) -> Vec3 {
     view.eye + r * (depth / r.dot(view.forward))
 }
 
-fn rgb_of(c: u32) -> [f32; 3] {
-    [
-        ((c >> 16) & 255) as f32,
-        ((c >> 8) & 255) as f32,
-        (c & 255) as f32,
-    ]
-}
-
-/// Colour 0xRRGGBB times strength as 0..1 per channel.
+/// Colour 0xRRGGBB (sRGB) as linear 0..1 per channel times strength.
 pub(crate) fn color_scaled(c: u32, strength: f32) -> [f32; 3] {
-    let ch = |s: u32| ((c >> s) & 255) as f32 / 255.0 * strength;
-    [ch(16), ch(8), ch(0)]
+    crate::srgb::lin_of(c).map(|v| v / 255.0 * strength)
 }
 
 /// Step the light to `levels` steps by its strongest channel, keeping the hue. 0 levels = unchanged.
@@ -627,7 +618,9 @@ impl Renderer {
         let o = self.options;
         let (w, h) = (self.width, self.height);
         let lit = o.lighting && light.samples.len() == w * h + self.gbuf.frags.frags.len();
-        if !self.particle_lights.is_empty() {
+        if self.particle_lights.is_empty() {
+            self.particle_tints.clear();
+        } else {
             self.light_particles(&light.particles, lit);
         }
         self.stats = Stats {
@@ -649,13 +642,15 @@ impl Renderer {
             backdrop_look: crate::backdrop::Look {
                 tint: o.lighting.then_some(light.sky_tint),
                 fog: (o.fog_end > o.fog_start)
-                    .then(|| (o.fog_min.clamp(0.0, 1.0), rgb_of(o.fog_color))),
+                    .then(|| (o.fog_min.clamp(0.0, 1.0), crate::srgb::lin_of(o.fog_color))),
             },
             palette: self.palette.as_ref(),
             light: &light.samples,
             sky_tint: light.sky_tint,
-            fog_c: rgb_of(o.fog_color),
+            fog_c: crate::srgb::lin_of(o.fog_color),
             legacy_sun: Vec3::new(o.sun_dir[0], o.sun_dir[1], o.sun_dir[2]).normalized(),
+            tints: &self.particle_tints,
+            srgb: crate::srgb::tables(),
         };
         // ray angles of the backdrops, kept while the view directions stay the same
         let sky_on = !layers.is_empty();

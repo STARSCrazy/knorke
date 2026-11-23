@@ -29,6 +29,7 @@ pub mod pick;
 pub mod png;
 mod raster;
 pub mod renderer;
+mod srgb;
 pub mod texture;
 
 pub use backdrop::{

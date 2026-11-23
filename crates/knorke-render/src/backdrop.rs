@@ -304,7 +304,8 @@ pub(crate) fn composite(
         if a <= 0.0 {
             continue;
         }
-        let mut v = [texel[0] as f32, texel[1] as f32, texel[2] as f32];
+        // linear (0..255 scale): tint, fog and blending happen in linear space
+        let mut v = crate::srgb::tables().lin([texel[0], texel[1], texel[2]]);
         if let (Some(t), true) = (look.tint, flags & BACKDROP_TINT != 0) {
             for k in 0..3 {
                 v[k] *= t[k];
