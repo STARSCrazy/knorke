@@ -26,6 +26,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+mod collector;
 pub mod image;
 mod inspect;
 mod invariants;
@@ -37,6 +38,7 @@ pub mod json;
 #[cfg(feature = "std")]
 mod recorder;
 
+pub use collector::{Collector, Overflow, Record};
 pub use inspect::{Inspect, Value, Visitor};
 pub use invariants::{InvariantStats, Invariants, ProgressWatch, Violations};
 pub use probe::{Counter, NoProbe, Probe, Scope, ScopeGuard};
