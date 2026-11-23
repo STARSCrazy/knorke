@@ -45,7 +45,7 @@ Bei der Bestandsaufnahme sichtbarer Stand: C++20 + SDL3 GPU, C-ABI, 2D-/2.5D-Lic
 
 ### 2.3 Bereits begonnene Grafikbibliothek
 
-**Noch nicht verifiziert/identifiziert.** Sprache, Quell-Repository, SDL3-GPU-Nutzung, Ressourceneigentum, Zeichenschnittstellen, Shader, Texturen und vorhandene Tests vor Architekturentscheidungen prüfen. Keine Annahmen über vorhandene Features treffen.
+**Identifiziert: pixelraum** (`D:\Entwicklung\pixelraum` @ `81927d8`, Rust, reiner CPU-Software-Renderer im Pixel-Look, keine GPU-API, C-Schnittstelle für Wizardry 7). Audit nach §7.1: `docs/inventory/pixelraum.md`. Migriert nach `knorke-render` + `knorke-lighting` + `knorke-integration::pixel` (ADR 0013); die C-Schnittstelle bleibt vorerst im Original (§17.1).
 
 ### 2.4 Aussagekraft der Bestandsaufnahme
 
@@ -568,6 +568,7 @@ Details in den ADRs unter `docs/adr/`, Inventuren unter `docs/inventory/`.
 | Review: `det::min`/`det::max` (std-Varianten sind nicht deterministisch, gemessen Debug ≠ Release), `det::powi` für alle Exponenten, Schnitt-Tests unabhängig vom Maßstab der Welt, definierte Antworten für entartete Formen, `Pod`-Impls aus Feldlisten geprüft, Clippy-Regeln erweitert | `knorke-math`, `clippy.toml` | 0006, 0011 |
 | Review: `ReplayLog::read` prüft Tick-Folge und Keyframes, Index-Überlauf als Panic statt Umbruch, `seek` sucht binär; Tests für Fensterränder des Flight Recorders und 1-Minimalität | `knorke-replay` | 0010 |
 | Fingerprint auf `wasm32-wasip1` lokal belegt (Node/V8, `xtask/wasi-run.mjs`) | `knorke-contract-tests`, `xtask` | 0011 |
+| **pixelraum migriert** (ADR 0013, Inventur `pixelraum.md`): Software-Renderer (Raster, Kamera, Gitter, Texturen, Sprites, Picking, Palette, Blending, Animation, Partikel, Hintergrund) ohne Licht und Threads; Licht/Schatten auf geliehenen G-Buffer-Spalten über `Parallel`; Verbindung in `knorke-integration::pixel`. 55 Golden Images byte-gleich, alle Bildtests pixelgenau; Vertragstest „0 Allokationen im eingeschwungenen Frame“ (seriell) | `knorke-render`, `knorke-lighting`, `knorke-integration`, `knorke-contract-tests` | 0006, 0008, 0013 |
 | Entscheidungen 2026-11-23: `HashMap`/`HashSet` in Simulationscode verboten (Clippy-Typverbot); `Seed::derive` mit zwei Mischrunden, Fingerprint neu `0x8E13_81FE_2691_7217`; Lizenz `MIT OR Apache-2.0` mit Lizenzdateien; kein Browser-Ziel | `clippy.toml`, `knorke-types` | 0003, 0011 |
 
 Entscheidungen aus Gesprächen:
@@ -576,6 +577,7 @@ Entscheidungen aus Gesprächen:
 - **Kein Browser als Plattformziel** (2026-11-23). WASM bleibt Prüfziel für den Determinismus und Kandidat für Mods (17.7), nicht Auslieferungsziel.
 - Kompatibilität zu Sagax-Ergebnissen ist in Phase 0 nicht nötig; nach dem Sagax-Umbau sind Seed-Ableitung und Fingerprint eingefroren.
 - Abhängigkeiten der Basis-Crates sind geschlossene Listen: `knorke-types` keine, `knorke-math` nur `bytemuck`/`mint`/`knorke-types`/`libm`, `knorke-observe` und `knorke-replay` nur `knorke-types`, `knorke-exec` nur `rayon`.
+- Chiaros Rust-Neubau kommt als **GPU-Pfad in `knorke-lighting`** neben den Software-Pfad aus pixelraum (ADR 0013 §9).
 - Befund Rayon: Aufrufe von außerhalb des Pools allozieren in Rayons Scheduler (ein Block pro 63 Aufträge). Unser Code alloziert nicht. Frames deshalb mit `Rayon::install` im Pool laufen lassen (ADR 0008).
 
 ## 17. Backlog: Ideen, Konzepte und noch fehlende Grundlagen
@@ -617,6 +619,11 @@ Entscheidungen aus Gesprächen:
 | **Snapshot-Vertrag in eigene Crate** | verworfen (vorerst) | Begründung ADR 0001 §5; neu bewerten, wenn Kompression oder Migration alter Versionen dazukommt |
 | **Zu früh vorhanden** (kein Verbraucher): `Mat4`, `mint`-Feature, Bildheuristiken ohne Capture, `ScopedThreads` (0,8–0,95 ms Fork-Join-Overhead) | offen (Einschätzung) | behalten, solange sie nichts kosten; beim ersten Verbraucher prüfen, ob die Form passt |
 | **Lizenz** | erledigt: `MIT OR Apache-2.0`, `LICENSE-MIT` + `LICENSE-APACHE` | gleiche Lizenz wie Sagax; Chiaro ist zlib (beim Übernehmen von Code Hinweis erhalten) |
+| **C-Schnittstelle von pixelraum** (`capi.rs`, `include/pixelraum.h`) nicht migriert; Wizardry 7 nutzt weiter das Original-Repo | geplant | mit `knorke-abi` (C-ABI über `knorke-integration::pixel`); bis dahin Fehlerbehebungen ggf. in beiden Repos |
+| **Lineares Licht im Software-Renderer** (Texturen → linear, Licht/Nebel linear, sRGB einmal am Ende) – heute wie pixelraum auf 0..255-Werten | offen | eigener Schritt mit neu erzeugten Golden Images (ADR 0013 §6) |
+| **Golden Images plattformübergreifend** (heute nur Windows/x86-64 belegt; `sin`/`cos`/`tan`/`atan2`/`log2` aus `std` im Renderer) | offen | CI-Lauf auf Linux/ARM; bei Abweichung `det`-Varianten oder Golden Images pro Plattform (ADR 0013 §5) |
+| **Band-Liste in `end_lit` mit `threads > 1`** (eine Allokation pro Frame; seriell 0) | offen | wiederverwendbare Bandstruktur, sobald `Parallel` geliehene Teilslices ohne `Vec` verteilen kann (vgl. „`ColumnMut` parallel beschreiben“) |
+| **pixelraum-Beispiele** (`examples/demo.rs`, C-Beispiel) nicht migriert | offen | mit dem ersten Knorke-Beispielprogramm |
 | **MSRV 1.88 nicht mit echter Toolchain geprüft** (lokal nur über Clippy `incompatible_msrv`, 0 Meldungen) | offen | erster CI-Lauf des `msrv`-Jobs |
 
 ### 17.2 Linux und weitere Plattformen
