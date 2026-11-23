@@ -12,16 +12,27 @@ pub struct Rayon {
 
 impl Rayon {
     /// Uses rayon's global pool.
+    ///
+    /// Like [`Rayon::with_threads`], returns only after every worker of the global pool has
+    /// started, so their one-time start-up allocations do not land in steady-state frames.
     pub fn global() -> Self {
+        rayon::broadcast(|_| ());
         Self { pool: None }
     }
 
     /// Creates a dedicated pool with `threads` worker threads named `knorke-worker-N`.
+    ///
+    /// Returns only after every worker has started. Rayon spawns its workers asynchronously,
+    /// and each one allocates once while starting up (its FIFO injector block, its
+    /// crossbeam-epoch registration). Without the wait, a worker delayed by a busy machine
+    /// would do that after the host's warm-up, inside its first steady-state frames.
     pub fn with_threads(threads: usize) -> Result<Self, rayon::ThreadPoolBuildError> {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .thread_name(|i| format!("knorke-worker-{i}"))
             .build()?;
+        // Runs once on every worker, so it completes only when all of them are running.
+        pool.broadcast(|_| ());
         Ok(Self { pool: Some(pool) })
     }
 
