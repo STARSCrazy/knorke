@@ -32,6 +32,8 @@ const RULES: &[Rule] = &[
             "knorke-render",
             "knorke-lighting",
             "knorke-gpu",
+            "knorke-light2d",
+            "knorke-post",
             "knorke-runtime",
             "knorke-scene",
             "knorke-integration",
@@ -43,6 +45,41 @@ const RULES: &[Rule] = &[
         ],
         except: &[],
         why: "AI, navigation and perception run headless without graphics, runtime or agent plane",
+    },
+    // ADR 0014: the Chiaro port is split into knorke-gpu, knorke-post and knorke-light2d.
+    Rule {
+        from: &["knorke-light2d"],
+        to: &[
+            "knorke-post",
+            "knorke-lighting",
+            "knorke-render",
+            "knorke-ai",
+            "knorke-navigation",
+            "knorke-perception",
+            "knorke-grid",
+            "knorke-runtime",
+            "knorke-scene",
+            "knorke-integration",
+            "knorke-agent",
+            "knorke-cli",
+            "knorke-mcp",
+            "sdl3*",
+            "wgpu*",
+        ],
+        except: &[],
+        why: "2D light (ADR 0014) knows neither post-processing, the CPU light or renderer, nor AI crates; GPU access only through knorke-gpu",
+    },
+    Rule {
+        from: &["knorke-post"],
+        to: &["knorke-light2d"],
+        except: &[],
+        why: "post-processing and 2D light are independent; only knorke-integration joins them (ADR 0014)",
+    },
+    Rule {
+        from: &["knorke-lighting", "knorke-render"],
+        to: &["knorke-light2d"],
+        except: &[],
+        why: "the frozen CPU light and the renderer do not know the GPU 2D light (ADR 0014)",
     },
     // The AI modules share only knorke-grid; knorke-integration joins them (ADR 0012).
     Rule {
@@ -115,6 +152,7 @@ const RULES: &[Rule] = &[
             "knorke-gpu",
             "knorke-render",
             "knorke-lighting",
+            "knorke-light2d",
             "knorke-ai",
             "knorke-navigation",
             "knorke-perception",
@@ -174,6 +212,7 @@ const RULES: &[Rule] = &[
             "knorke-render",
             "knorke-lighting",
             "knorke-gpu",
+            "knorke-light2d",
         ],
         to: &["knorke-exec", "rayon*"],
         except: &[],
@@ -451,6 +490,48 @@ mod tests {
         let v = violations(&m);
         assert_eq!(v.len(), 1);
         assert!(v[0].starts_with("knorke-math -> syn"), "{}", v[0]);
+    }
+
+    #[test]
+    fn light2d_knows_no_post_light_or_ai_crates() {
+        for forbidden in [
+            "knorke-post",
+            "knorke-lighting",
+            "knorke-render",
+            "knorke-ai",
+        ] {
+            let m = meta(
+                &["knorke-light2d"],
+                vec![
+                    node("knorke-light2d", &[(forbidden, "normal")]),
+                    node(forbidden, &[]),
+                ],
+                &["knorke-light2d", forbidden],
+            );
+            assert_eq!(violations(&m).len(), 1, "{forbidden}");
+        }
+        let ok = meta(
+            &["knorke-light2d"],
+            vec![
+                node(
+                    "knorke-light2d",
+                    &[("knorke-types", "normal"), ("knorke-math", "normal")],
+                ),
+                node("knorke-types", &[]),
+                node("knorke-math", &[]),
+            ],
+            &["knorke-light2d", "knorke-types", "knorke-math"],
+        );
+        assert!(violations(&ok).is_empty());
+        let back = meta(
+            &["knorke-lighting"],
+            vec![
+                node("knorke-lighting", &[("knorke-light2d", "normal")]),
+                node("knorke-light2d", &[]),
+            ],
+            &["knorke-lighting", "knorke-light2d"],
+        );
+        assert_eq!(violations(&back).len(), 1);
     }
 
     #[test]

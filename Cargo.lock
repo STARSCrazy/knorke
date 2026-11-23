@@ -86,6 +86,7 @@ version = "0.0.1"
 dependencies = [
  "knorke-exec",
  "knorke-integration",
+ "knorke-light2d",
  "knorke-math",
  "knorke-observe",
  "knorke-render",
@@ -129,6 +130,14 @@ dependencies = [
  "knorke-observe",
  "knorke-perception",
  "knorke-render",
+ "knorke-types",
+]
+
+[[package]]
+name = "knorke-light2d"
+version = "0.0.1"
+dependencies = [
+ "knorke-math",
  "knorke-types",
 ]
 
