@@ -2,7 +2,9 @@
 //! palette and dithering.
 //!
 //! Origin: pixelraum `src/renderer/shade.rs` @ 81927d8 without the light computation (now
-//! `knorke-lighting`). The colour arithmetic is unchanged.
+//! `knorke-lighting`). Colours are decoded from sRGB to linear (0..255 scale) by table, light,
+//! fog and blending run in linear space, and each pixel is encoded to sRGB once before the
+//! palette and the output (ADR 0013 §6, `crate::srgb`).
 
 use super::*;
 
@@ -27,6 +29,24 @@ pub(super) struct Shade<'a, L> {
     /// Fog colour and the normalized legacy sun direction (Options::sun_dir).
     pub(super) fog_c: [f32; 3],
     pub(super) legacy_sun: Vec3,
+    /// Linear light tint of each particle (by owner index) for pre-lit pixels and fragments.
+    pub(super) tints: &'a [[f32; 3]],
+    pub(super) srgb: &'static crate::srgb::Tables,
+}
+
+impl<L> Shade<'_, L> {
+    /// Linear colour (0..255 scale) of a stored sRGB colour; pre-lit (particle) colours get
+    /// the light tint of their particle.
+    #[inline(always)]
+    fn base(&self, c: [u8; 3], prelit: bool, owner: u32) -> [f32; 3] {
+        let mut v = self.srgb.lin(c);
+        if prelit && let Some(t) = self.tints.get(owner as usize) {
+            for k in 0..3 {
+                v[k] *= t[k];
+            }
+        }
+        v
+    }
 }
 
 /// Per-frame values of `surface`, hoisted out of the pixel loop.
@@ -62,7 +82,7 @@ pub(super) fn surface_h<L: Column<[f32; 3]>>(
     z: f32,
     normal: Vec3,
     light: f32,
-    base: [u8; 3],
+    base: [f32; 3],
     prelit: bool,
 ) -> [f32; 3] {
     let o = &s.o;
@@ -74,7 +94,7 @@ pub(super) fn surface_h<L: Column<[f32; 3]>>(
     } = *h;
     if prelit {
         let f = fog_factor(o, z);
-        return std::array::from_fn(|k| base[k] as f32 * f + fog_c[k] * (1.0 - f));
+        return std::array::from_fn(|k| base[k] * f + fog_c[k] * (1.0 - f));
     }
     if lighting {
         let base_l = light;
@@ -88,7 +108,7 @@ pub(super) fn surface_h<L: Column<[f32; 3]>>(
         }
         let mut c = [0.0; 3];
         for k in 0..3 {
-            c[k] = base[k] as f32 * l[k] * f + fog_c[k] * (1.0 - f);
+            c[k] = base[k] * l[k] * f + fog_c[k] * (1.0 - f);
         }
         c
     } else {
@@ -113,7 +133,7 @@ pub(super) fn surface_h<L: Column<[f32; 3]>>(
         let fade = if fog_on { 1.0 - f.min(1.0) } else { 0.0 };
         let mut c = [0.0; 3];
         for k in 0..3 {
-            c[k] = base[k] as f32 * lf + fog_c[k] * fade;
+            c[k] = base[k] * lf + fog_c[k] * fade;
         }
         c
     }
@@ -138,7 +158,7 @@ fn surface_frag<L: Column<[f32; 3]>>(
     z: f32,
     normal: Vec3,
     light: f32,
-    base: [u8; 3],
+    base: [f32; 3],
     prelit: bool,
 ) -> [f32; 3] {
     surface_h(s, &Hoisted::new(s), sample, z, normal, light, base, prelit)
@@ -162,8 +182,8 @@ fn blend_pixel<L: Column<[f32; 3]>>(
         let a = f.alpha;
         if f.mode == BLEND_ADD {
             let fade = a * fog_factor(&s.o, f.depth);
-            for (ch, &v) in c.iter_mut().zip(&f.color) {
-                *ch += v as f32 * fade;
+            for (ch, v) in c.iter_mut().zip(s.base(f.color, f.prelit, f.owner)) {
+                *ch += v * fade;
             }
         } else {
             let fc = surface_frag(
@@ -172,7 +192,7 @@ fn blend_pixel<L: Column<[f32; 3]>>(
                 f.depth,
                 f.normal,
                 f.light,
-                f.color,
+                s.base(f.color, f.prelit, f.owner),
                 f.prelit,
             );
             for (ch, v) in c.iter_mut().zip(fc) {
@@ -210,7 +230,8 @@ fn shade_rows_impl<const BLEND: bool, const PRELIT: bool, L: Column<[f32; 3]>>(
     order: &mut Vec<u32>,
 ) {
     let (o, g, w) = (&s.o, s.g, s.width);
-    let bg = rgb_of(o.background);
+    let bg = crate::srgb::lin_of(o.background);
+    let srgb = s.srgb;
     let h = Hoisted::new(s);
     // `order`: fragment order of one pixel; the caller keeps its buffer between frames.
     for (ly, row) in rgba.chunks_mut(w * 4).enumerate() {
@@ -221,7 +242,8 @@ fn shade_rows_impl<const BLEND: bool, const PRELIT: bool, L: Column<[f32; 3]>>(
             let mut c: [f32; 3];
             if z.is_finite() {
                 let prelit = PRELIT && g.prelit[i];
-                c = surface_h(s, &h, i, z, g.normal[i], g.light[i], g.color[i], prelit);
+                let base = s.base(g.color[i], prelit, g.owner[i]);
+                c = surface_h(s, &h, i, z, g.normal[i], g.light[i], base, prelit);
             } else {
                 c = bg;
                 if o.lighting {
@@ -247,6 +269,8 @@ fn shade_rows_impl<const BLEND: bool, const PRELIT: bool, L: Column<[f32; 3]>>(
             if BLEND {
                 blend_pixel(s, i, &mut c, order);
             }
+            // The one conversion back to sRGB (0..255 scale, not yet rounded).
+            let c = c.map(|v| srgb.encode(v));
             let out = &mut row[x * 4..x * 4 + 4];
             if let Some(pal) = s.palette {
                 // With lighting, pure black stays pure black (no dither noise in dark dungeons).
