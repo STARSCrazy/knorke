@@ -1,6 +1,7 @@
 //! Repository automation. Run `cargo xtask help`.
 
 mod deps;
+mod shaders;
 
 use std::process::ExitCode;
 
@@ -9,12 +10,14 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         Some("deps") => deps::run(),
         Some("standalone") => standalone(),
+        Some("shaders") => shaders::run(&args[1..]),
         _ => {
             eprintln!(
                 "usage: cargo xtask <task>\n\n\
                  tasks:\n  \
                  deps        check forbidden dependency edges (ADR 0001)\n  \
-                 standalone  build every library crate on its own with default features off"
+                 standalone  build every library crate on its own with default features off
+                   shaders     build shader packs (.kpak) from compiled blobs + reflection JSON"
             );
             ExitCode::from(2)
         }
