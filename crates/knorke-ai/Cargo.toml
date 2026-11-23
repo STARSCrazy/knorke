@@ -1,0 +1,16 @@
+[package]
+name = "knorke-ai"
+description = "Deterministic decisions for Knorke game AI: utility scoring, state machines, memory, missions and group tactics (crew, squad) in integer fixed point."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knorke-grid = { workspace = true }
+knorke-observe = { workspace = true }
+knorke-types = { workspace = true }
+
+[lints]
+workspace = true

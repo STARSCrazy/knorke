@@ -46,6 +46,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
+name = "knorke-ai"
+version = "0.0.1"
+dependencies = [
+ "knorke-grid",
+ "knorke-observe",
+ "knorke-types",
+]
+
+[[package]]
 name = "knorke-contract-tests"
 version = "0.0.1"
 dependencies = [
@@ -65,6 +74,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "knorke-grid"
+version = "0.0.1"
+dependencies = [
+ "knorke-types",
+]
+
+[[package]]
+name = "knorke-integration"
+version = "0.0.1"
+dependencies = [
+ "knorke-ai",
+ "knorke-grid",
+ "knorke-navigation",
+ "knorke-observe",
+ "knorke-perception",
+ "knorke-types",
+]
+
+[[package]]
 name = "knorke-math"
 version = "0.0.1"
 dependencies = [
@@ -75,9 +103,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "knorke-navigation"
+version = "0.0.1"
+dependencies = [
+ "knorke-grid",
+ "knorke-observe",
+ "knorke-types",
+]
+
+[[package]]
 name = "knorke-observe"
 version = "0.0.1"
 dependencies = [
+ "knorke-types",
+]
+
+[[package]]
+name = "knorke-perception"
+version = "0.0.1"
+dependencies = [
+ "knorke-grid",
+ "knorke-observe",
  "knorke-types",
 ]
 

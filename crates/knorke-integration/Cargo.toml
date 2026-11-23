@@ -1,0 +1,19 @@
+[package]
+name = "knorke-integration"
+description = "Adapters joining Knorke modules: perception feeds memory, flow fields feed goal guesses and walking distances, navigation costs feed squad rules."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knorke-ai = { workspace = true }
+knorke-grid = { workspace = true }
+knorke-navigation = { workspace = true }
+knorke-observe = { workspace = true }
+knorke-perception = { workspace = true }
+knorke-types = { workspace = true }
+
+[lints]
+workspace = true

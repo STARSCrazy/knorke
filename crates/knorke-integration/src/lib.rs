@@ -1,0 +1,64 @@
+// Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax/src/lib.rs.
+//! Adapters that join the Knorke AI modules (ADR 0012).
+//!
+//! `knorke-navigation`, `knorke-perception` and `knorke-ai` do not know each other. This
+//! crate holds the glue that needs two of them: percepts feed memory
+//! ([`perception`]), flow fields feed goal guesses ([`goal_guess`]) and walking distances
+//! ([`walk`]), navigation costs feed squad rules ([`rules`]). Domain modules never depend
+//! on this crate (`cargo xtask deps`).
+//!
+//! Origin: the `sagax` facade crate of Sagax (revision fab00c0).
+//!
+//! `use knorke_integration::prelude::*;` brings the types most games need. The parts are
+//! also reachable as [`nav`] and [`decide`]; [`perception`] holds sight
+//! and hearing with their nav and memory helpers; [`goal_guess`] feeds a
+//! goal guess from flow fields; [`walk`] gives the squad walking distances
+//! from flow fields; [`debug`] holds
+//! everything trace related.
+
+pub use knorke_ai as decide;
+pub use knorke_grid::{Cell, HexLayout, Pos};
+pub use knorke_navigation as nav;
+
+pub mod goal_guess;
+pub mod perception;
+pub mod prelude;
+pub mod rules;
+pub mod walk;
+
+pub mod debug {
+    //! Everything for tracing, in one place: `use knorke_integration::debug::*;`.
+    //!
+    //! A trace is a [`Sink`] parameter: every operation that decides something
+    //! has an `op_traced(.., sink)` form next to the plain `op(..)`, which is
+    //! the traced one with [`NoopSink`] and costs nothing. A [`Collector`] keeps
+    //! the last (or first) records of a call; a facade hands the records of the
+    //! module it drives on, wrapped, through a [`MapSink`].
+    //!
+    //! ```
+    //! use knorke_integration::debug::*;
+    //! use knorke_integration::prelude::*;
+    //!
+    //! let mut map = DenseGrid::new(10, 10);
+    //! let mut nav = Navigator::new(Topology::Square(GridRules::preset(Preset::Octile)), 100);
+    //! let mut log = Collector::new(256, Overflow::DropOldest);
+    //! let goal = [Cell::new(5, 5, 0)];
+    //! nav.find_path_traced(&mut map, Cell::new(0, 0, 0), &goal, Budget::UNLIMITED, &mut log);
+    //! assert!(matches!(
+    //!     log.records().last().unwrap().event,
+    //!     NavTrace::Search(SearchTrace::Finished { .. })
+    //! ));
+    //! ```
+
+    pub use knorke_ai::group::{CrewTrace, KeeperTrace, SpotTrace, SquadTrace};
+    pub use knorke_ai::memory::{
+        AreasTrace, GoalGuessTrace, KnowledgeTrace, MessageTrace, TimersTrace,
+    };
+    pub use knorke_ai::{DecideTrace, mission::MissionTrace, state::StateTrace};
+    pub use knorke_navigation::{
+        formation::FormationTrace, nav::NavTrace, search::SearchTrace, smooth::SmoothTrace,
+    };
+    pub use knorke_observe::{CallbackSink, MapSink, NoopSink, Sink};
+    pub use knorke_observe::{Collector, Overflow, Record};
+    pub use knorke_perception::{ContagionTrace, PerceptionTrace};
+}

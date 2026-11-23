@@ -1,0 +1,14 @@
+[package]
+name = "knorke-grid"
+description = "Grid and hex space types shared by Knorke navigation, perception and AI: cells, positions, hex layouts, integer heading tables."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knorke-types = { workspace = true }
+
+[lints]
+workspace = true

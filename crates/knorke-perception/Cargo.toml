@@ -1,0 +1,16 @@
+[package]
+name = "knorke-perception"
+description = "Deterministic perception for Knorke game AI: view cones, exact integer sight lines with fog and light, hearing, attention, awareness and alarm contagion."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knorke-grid = { workspace = true }
+knorke-observe = { workspace = true }
+knorke-types = { workspace = true }
+
+[lints]
+workspace = true
