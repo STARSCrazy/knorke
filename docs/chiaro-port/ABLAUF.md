@@ -12,9 +12,15 @@
 
 ## Nächster Schritt
 
-- **Läuft seit 2026-11-23:** P1 (Opus, inkl. Entscheidung zur SDL3-GPU-Anbindung), P3 (Sonnet), P4 + P17 (Haiku, legen `knorke-post` an), P5–P7 (Sonnet, legen `knorke-light2d` an). Jeder Agent arbeitet in einem eigenen Worktree unter `.claude/worktrees/` und committet dort; der Koordinator prüft, merged nach `main`, trägt hier ein und pusht.
-- Falls diese Arbeiten abgebrochen sind: `git branch` und `git worktree list` prüfen; fertige Branches mergen, sonst das Paket neu starten (Auftrag: Zeile in der Tabelle + Aufteilung §3).
-- Danach: P2 (Opus, nach P1), dann **Gate-Spike** (Opus): ein Punktlicht, ein Schattenfall, Offscreen-Capture in Rust gegen dieselbe Szene aus C++-Chiaro (Golden Scenes aus P3); Passzeiten + Bilddiff messen; Ergebnis als ADR. Bei „nein“ stoppen und ADR 0014 ändern.
+- **Läuft:** P2 (Opus) und P5–P7 (Sonnet). Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten.
+- Danach **Gate-Spike** (Opus): ein Punktlicht + ein Schattenfall + Offscreen-Capture in Rust gegen die Golden Scenes `minimal_normal_map` und `wet_street` oder `iso_night_hard` (Schwelle STRICT aus `manifest.toml`). Bringt einen PNG-Decoder für den Pixelvergleich mit (nur dev-dependency). Passzeiten + Bilddiff messen; Ergebnis als ADR. Bei „nein“ stoppen und ADR 0014 ändern.
+
+## Umgebung (wichtig für die Prüfungen)
+
+- `cargo test --all-features` baut SDL3 statisch (`sdl-build-static`) und braucht **CMake im PATH**: `D:\Dev-Tools\cmake\bin` (4.4.5) voranstellen. Ohne CMake schlägt das Build-Skript von `sdl3-sys` fehl.
+- GPU dieses Rechners: AMD Radeon RX 6700 XT (die Intel UHD aus der Inventur ist nicht mehr verbaut). Chiaro-Szenen sind hier pro Backend lauf-zu-lauf bitgleich; Vulkan vs. D3D12 weichen an wenigen Kantenpixeln ab.
+- C++-Chiaro bauen (für Vergleiche): `D:\Dev-Tools\cmake\bin\cmake.exe --preset msvc -B <build>` in `D:\Entwicklung\chiaro` (MSVC 14.29 aus VS-2019-BuildTools), dann `--build <build> --config Release`. Build-Verzeichnis außerhalb des Repos; der Build aus P3 lag im Scratchpad und ist ggf. weg.
+- GPU-Tests überspringen sauber ohne GPU (`SDL_GPU_DRIVER=nonexistent` zum Ausprobieren).
 
 ## Status der Pakete
 
@@ -22,9 +28,9 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 
 | Paket | Inhalt | Ziel | Modell | Abhängig von | Status |
 |---|---|---|---|---|---|
-| P1 | GPU-Grundlagen: Handles, RenderTarget, Sampler, UploadBuffer | `knorke-gpu` | O | – | läuft (Worktree; Merge durch Koordinator) |
-| P2 | ShaderLibrary, ProgramBinding, PipelineCache, Shader-Pakete pro Format laden (`.kpak`; Vulkan/Metal, D3D12 optional) | `knorke-gpu` | O | P1 | offen |
-| P3 | Golden Scenes aus C++-Demos + Paritätsmetrik | Tests | S | – | läuft (Worktree; Merge durch Koordinator) |
+| P1 | GPU-Grundlagen: Handles, RenderTarget, Sampler, UploadBuffer | `knorke-gpu` | O | – | fertig (Merge 2026-11-24): `knorke-gpu` auf `sdl3-sys` 0.7.3 (SDL 3.4.20, zlib, alle 95 GPU-Funktionen); Features `sdl` (installiertes SDL3) / `sdl-build-static` (gebündelt, braucht CMake im PATH) |
+| P2 | ShaderLibrary, ProgramBinding, PipelineCache, Shader-Pakete pro Format laden (`.kpak`; Vulkan/Metal, D3D12 optional) | `knorke-gpu` | O | P1 | läuft (Worktree; Merge durch Koordinator) – inkl. `Formats.*` aus P4 |
+| P3 | Golden Scenes aus C++-Demos + Paritätsmetrik | Tests | S | – | fertig (Merge 2026-11-24): 12 Szenen `tests/golden/chiaro/` (1,9 MB) + `manifest.toml`, Paritätsmetrik `tests/contracts/src/parity.rs` |
 | P4 | Farbe, Formate, Letterbox | `knorke-post` (CPU) | H | – | fertig (Merge 2026-11-24): ColorMath, Grading, Dither, OutputRect in `knorke-post`; `Formats.*` (SDL-Formattabellen) verschoben nach P2/`knorke-gpu` |
 | P5 | Projektion + Triangulierung | `knorke-light2d` (CPU) | S (mit P6, P7) | – | läuft (Worktree; Merge durch Koordinator) |
 | P6 | Pixel-/Normal-/Material-Codec | `knorke-light2d` (CPU) | S | – | läuft (Worktree; Merge durch Koordinator) |
@@ -69,6 +75,8 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 
 Neueste oben. Datum · wer · was · Ergebnis (auch Fehlschläge, Messwerte).
 
+- 2026-11-24 · Opus-Agent + Claude · P1 gemerged: `knorke-gpu` (Device geliehen, `GpuHandle` mit Lebendzähler, RenderTarget, Samplers, UploadBuffer, Staging), Diagnosecodes `knorke.gpu.*`, 9 Tests (4 echte GPU-Tests, überspringen ohne GPU), compile_fail-Test für Lebensdauer. `Device` bewusst weder `Send` noch `Sync`. P2 gestartet.
+- 2026-11-24 · Sonnet-Agent + Claude · P3 gemerged: 12 Golden Scenes (8 deterministisch), Rauschen gemessen (Vulkan↔D3D12 ≤ 0,098 % Pixel), Schwellen STRICT (Toleranz 2, ≤ 100 ppm, Grenze 128) / LOOSE; 4 Szenen hängen an Uhr/Maus.
 - 2026-11-24 · Haiku-Agent + Claude · P4+P17 gemerged: Crate `knorke-post` (31 Tests, nur `knorke-math`, 16 Abhängigkeitsregeln). Nicht portiert: C-API-Struktur-/Flag-Tests, SDL-Fehlertexte, MediumCloud-Tests (eigenes Paket), Kelvin-Farbe.
 
 - 2026-11-23 · Claude · Aufteilung analysiert (`docs/inventory/chiaro-aufteilung.md`), ADR 0014 angenommen, diese Datei angelegt. Noch kein Code.
