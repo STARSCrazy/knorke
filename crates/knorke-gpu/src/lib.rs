@@ -42,7 +42,9 @@
 pub mod kpak;
 mod live;
 pub mod staging;
-#[cfg(feature = "sdl")]
+// Test helpers, not library API: only present when a test build asks for them (see the
+// feature `test-support` in Cargo.toml), never in a normal build with `sdl`.
+#[cfg(all(feature = "sdl", feature = "test-support"))]
 pub mod test_support;
 
 pub use live::{LiveCounter, global_live_gpu_objects};

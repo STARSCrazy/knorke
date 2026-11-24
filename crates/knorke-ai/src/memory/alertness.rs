@@ -1,7 +1,6 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax-decide/src/memory/alertness.rs.
-/// Most thresholds an [`AlertConfig`] can hold.
-use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
 
+/// Most thresholds an [`AlertConfig`] can hold.
 const MAX_LEVELS: usize = 8;
 
 /// How alertness behaves: a ceiling, linear decay after a hold time, and
@@ -99,20 +98,11 @@ impl Alertness {
 
 // --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
 
-/// Per-character value; the configuration stays with the game.
-impl SnapshotValue for Alertness {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.value);
-        w.put(&self.last);
-        w.put(&self.last_stimulus);
-        w.put(&self.level);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Alertness {
-            value: r.get()?,
-            last: r.get()?,
-            last_stimulus: r.get()?,
-            level: r.get()?,
-        })
-    }
+// Per-character value; the configuration stays with the game. Field order is pinned by
+// `value_bytes::value_bytes_are_pinned`.
+knorke_types::by_fields! {
+    Alertness { value, last, last_stimulus, level };
 }
+
+#[cfg(test)]
+mod value_bytes;

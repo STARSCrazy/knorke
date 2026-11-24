@@ -24,6 +24,7 @@
 //! not followed and are reported ([`Search::cost_overflow`]).
 
 mod hash;
+mod open_list;
 pub mod search;
 mod table;
 

@@ -15,12 +15,22 @@ sdl = ["dep:sdl3-sys", "dep:bytemuck"]
 # Builds SDL3 from the bundled source (sdl3-src) and links it statically. Needs CMake and a
 # C compiler, but no installed SDL3. `--all-features` uses it, so tests are self-contained.
 sdl-build-static = ["sdl", "sdl3-sys/build-from-source-static"]
+# Shared GPU test helpers (`knorke_gpu::test_support`), compiled when this feature and `sdl`
+# are both on. Only `[dev-dependencies]` switch it on (cargo does not unify dev-dependency
+# features into normal builds), so a library build with `sdl` never contains the helpers.
+# It does not pull in `sdl` itself: a dev-dependency cannot be conditional, and pulling in
+# `sdl` would link SDL3 into every test build, also without the `gpu` features.
+test-support = []
 
 [dependencies]
 knorke-types = { workspace = true }
 sdl3-sys = { workspace = true, optional = true }
 # Typed uniform pushes (`RenderPass::push_*_uniform`).
 bytemuck = { workspace = true, optional = true }
+
+[dev-dependencies]
+# Own tests: the crate as a dev-dependency of itself switches `test-support` on for them.
+knorke-gpu = { path = ".", features = ["test-support"] }
 
 # Own lint table instead of `workspace = true`: identical, except that `unsafe_code` is
 # `deny` so that the FFI boundary to SDL3 can opt in locally per module (ADR 0005).

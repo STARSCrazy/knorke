@@ -602,10 +602,26 @@ impl<C: SnapshotValue> SnapshotValue for CommandBuffer<C> {
 /// assert_eq!(bytes, [1, 0, 0, 0, 0xfe, 0xff]);
 /// assert_eq!(Reader::new(&bytes).get::<Hit>(), Ok(Hit { at: 1, damage: -2 }));
 /// ```
+///
+/// A generic struct lists its parameters, with bounds, in brackets in front (one struct per
+/// call):
+///
+/// ```
+/// # use knorke_types::{Reader, SnapshotValue, Writer, by_fields};
+/// #[derive(Debug, PartialEq)]
+/// struct Tagged<T> { id: u8, value: T }
+/// by_fields! { [T: SnapshotValue] Tagged<T> { id, value } }
+///
+/// let mut bytes = Vec::new();
+/// Writer::new(&mut bytes).put(&Tagged { id: 7, value: 2u16 });
+/// assert_eq!(bytes, [7, 2, 0]);
+/// assert_eq!(Reader::new(&bytes).get::<Tagged<u16>>(), Ok(Tagged { id: 7, value: 2 }));
+/// ```
 #[macro_export]
 macro_rules! by_fields {
-    ($($t:ty { $($f:ident),+ $(,)? });+ $(;)?) => {$(
-        impl $crate::SnapshotValue for $t {
+    // The one place that writes the impl; the public forms below forward to it.
+    (@impl [$($gen:tt)*] $t:ty { $($f:ident),+ }) => {
+        impl<$($gen)*> $crate::SnapshotValue for $t {
             #[inline]
             fn put(&self, w: &mut $crate::Writer<'_>) { $( w.put(&self.$f); )+ }
             #[inline]
@@ -615,6 +631,14 @@ macro_rules! by_fields {
                 ::core::result::Result::Ok(Self { $( $f: r.get()? ),+ })
             }
         }
+    };
+    // Generic struct: the parameters in brackets, bounds included (`SnapshotValue` for the
+    // fields has to be among them).
+    ([$($gen:tt)+] $t:ty { $($f:ident),+ $(,)? }) => {
+        $crate::by_fields!(@impl [$($gen)+] $t { $($f),+ });
+    };
+    ($($t:ty { $($f:ident),+ $(,)? });+ $(;)?) => {$(
+        $crate::by_fields!(@impl [] $t { $($f),+ });
     )+};
 }
 
@@ -672,6 +696,48 @@ macro_rules! by_tag {
             }
         }
     )+};
+}
+
+/// Snapshot bytes of `value` as lowercase hex. Support for [`assert_bytes!`]; not public API.
+#[doc(hidden)]
+pub fn __bytes_hex<T: SnapshotValue>(value: &T) -> alloc::string::String {
+    use core::fmt::Write as _;
+    let mut bytes = Vec::new();
+    Writer::new(&mut bytes).put(value);
+    bytes.iter().fold(alloc::string::String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+/// For tests: `assert_bytes!(value => "hex", ...)` checks that every value writes exactly
+/// these snapshot bytes (ADR 0010).
+///
+/// A round trip cannot see a swapped tag number or field order, because writer and reader
+/// change together; this compares against bytes written down once. On a mismatch the
+/// message lists every changed case with its new bytes in the same `value => "hex"` form,
+/// ready to paste after a deliberate format change (which also invalidates saved
+/// snapshots). It lives here, next to [`by_fields!`] and [`by_tag!`], so every crate
+/// pins its values with the same helper; it is test support, not simulation API.
+///
+/// ```
+/// # use knorke_types::assert_bytes;
+/// assert_bytes!(1u16 => "0100", (2u8, -1i8) => "02ff");
+/// ```
+#[macro_export]
+macro_rules! assert_bytes {
+    ($($v:expr => $hex:literal),+ $(,)?) => {{
+        let mut changed = $crate::__private::String::new();
+        $(
+            let got = $crate::__bytes_hex(&$v);
+            if got != $hex {
+                changed += &$crate::__private::format!(
+                    "{} => \"{}\",\n", ::core::stringify!($v), got
+                );
+            }
+        )+
+        assert!(changed.is_empty(), "snapshot bytes changed:\n{changed}");
+    }};
 }
 
 #[cfg(test)]

@@ -520,68 +520,12 @@ impl Contagion {
 
 // --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
 
-impl SnapshotValue for Grid {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&(*self as u8));
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        match r.get::<u8>()? {
-            0 => Ok(Grid::Square),
-            1 => Ok(Grid::Hex),
-            _ => Err(SnapshotError::Invalid("knorke.perception: grid")),
-        }
-    }
-}
-
-impl SnapshotValue for DeedRule {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.bits);
-        w.put(&self.window);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(DeedRule {
-            bits: r.get()?,
-            window: r.get()?,
-        })
-    }
-}
-
-impl SnapshotValue for ContagionConfig {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.grid);
-        w.put(&self.deeds);
-        w.put(&self.count);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(ContagionConfig {
-            grid: r.get()?,
-            deeds: r.get()?,
-            count: r.get()?,
-        })
-    }
-}
-
-impl SnapshotValue for Slot {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.used);
-        w.put(&self.ally);
-        w.put(&self.last_seen);
-        w.put(&self.point);
-        w.put(&self.bits);
-        w.put(&self.live);
-        w.put(&self.onset);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Slot {
-            used: r.get()?,
-            ally: r.get()?,
-            last_seen: r.get()?,
-            point: r.get()?,
-            bits: r.get()?,
-            live: r.get()?,
-            onset: r.get()?,
-        })
-    }
+// Plain values: field order is pinned by `value_bytes::value_bytes_are_pinned`. (`Grid`'s
+// tags are written next to the type, in `world.rs`.)
+knorke_types::by_fields! {
+    DeedRule { bits, window };
+    ContagionConfig { grid, deeds, count };
+    Slot { used, ally, last_seen, point, bits, live, onset };
 }
 
 /// One character's contagion memory with its configuration. Restoring into a memory of the
@@ -613,3 +557,6 @@ impl SnapshotValue for Contagion {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod value_bytes;

@@ -4,6 +4,7 @@
 #[doc(hidden)]
 pub mod __private {
     pub use alloc::format;
+    pub use alloc::string::String;
 }
 
 /// Defines `SettingsError` (public) plus the private helpers `check` and `range` in the

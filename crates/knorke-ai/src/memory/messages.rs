@@ -397,19 +397,9 @@ knorke_types::by_fields! {
     Message { kind, subject, pos, seen_at, strength, data, sender, keep_if_sender_gone };
 }
 
-impl SnapshotValue for Posted {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.msg);
-        w.put(&self.at);
-        w.put(&self.delay);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Posted {
-            msg: r.get()?,
-            at: r.get()?,
-            delay: r.get()?,
-        })
-    }
+// Field order pinned by `value_bytes::value_bytes_are_pinned`.
+knorke_types::by_fields! {
+    Posted { msg, at, delay };
 }
 
 /// One sender's pending messages, capacity and cooldown. Restore reuses the buffer and
@@ -471,3 +461,6 @@ impl SnapshotValue for Inbox {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod value_bytes;

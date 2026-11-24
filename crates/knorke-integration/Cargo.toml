@@ -66,6 +66,8 @@ required-features = ["ai"]
 [dev-dependencies]
 # GPU scene test (feature `gpu`): golden PNGs and the parity metric of the Chiaro port (P3).
 png = "0.17"
+# The shared GPU test helpers; only the tests get them (see the feature in knorke-gpu).
+knorke-gpu = { workspace = true, features = ["test-support"] }
 knorke-contract-tests = { path = "../../tests/contracts" }
 
 [lints]

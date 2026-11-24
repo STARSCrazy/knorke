@@ -20,5 +20,9 @@ knorke-math = { workspace = true }
 knorke-gpu = { workspace = true, optional = true }
 knorke-observe = { workspace = true, optional = true }
 
+[dev-dependencies]
+# The shared GPU test helpers; only the tests get them (see the feature in knorke-gpu).
+knorke-gpu = { workspace = true, features = ["test-support"] }
+
 [lints]
 workspace = true

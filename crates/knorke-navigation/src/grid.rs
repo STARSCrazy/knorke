@@ -133,34 +133,17 @@ impl Preset {
     }
 }
 
-/// Saved with a [`DStarLite`](crate::dstar::DStarLite) that uses it as its heuristic.
-impl knorke_types::SnapshotValue for GridRules {
-    fn put(&self, w: &mut knorke_types::Writer<'_>) {
-        w.put(&match self.moves {
-            Moves::Four => 0u8,
-            Moves::Eight => 1,
-        });
-        w.put(&self.cut_corners);
-        w.put(&self.straight);
-        w.put(&self.diagonal);
-    }
-    fn get(r: &mut knorke_types::Reader<'_>) -> Result<Self, knorke_types::SnapshotError> {
-        let moves = match r.get::<u8>()? {
-            0 => Moves::Four,
-            1 => Moves::Eight,
-            _ => {
-                return Err(knorke_types::SnapshotError::Invalid(
-                    "knorke.navigation: grid moves",
-                ));
-            }
-        };
-        Ok(GridRules {
-            moves,
-            cut_corners: r.get()?,
-            straight: r.get()?,
-            diagonal: r.get()?,
-        })
-    }
+// Saved with a [`DStarLite`](crate::dstar::DStarLite) that uses it as its heuristic.
+// Tags and field order are pinned by `tests::rules_bytes_are_pinned`.
+knorke_types::by_tag! {
+    Moves, knorke_types::SnapshotError::Invalid("knorke.navigation: grid moves") => {
+        0 => Four,
+        1 => Eight,
+    };
+}
+
+knorke_types::by_fields! {
+    GridRules { moves, cut_corners, straight, diagonal };
 }
 
 impl GridRules {
@@ -667,6 +650,17 @@ impl<M: CellMap + ?Sized> CellMap for &mut M {
 mod tests {
     use super::*;
     use crate::search::{Limits, PathResult, find_path};
+
+    /// Exact bytes of the grid rules (see `knorke_types::assert_bytes!`): a swapped tag or
+    /// field order fails here even though it round-trips.
+    #[test]
+    fn rules_bytes_are_pinned() {
+        let eight = GridRules::preset(Preset::Octile);
+        knorke_types::assert_bytes!(
+            eight => "01000a0000000e000000",
+            GridRules { moves: Moves::Four, cut_corners: true, straight: 1, diagonal: 2 } => "00010100000002000000",
+        );
+    }
 
     #[test]
     fn distance_is_octile() {

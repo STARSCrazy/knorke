@@ -49,6 +49,8 @@ pub use parallel::{Parallel, Serial, chunk_count};
 #[doc(hidden)]
 pub use settings_error::__private;
 pub use slots::{HandleMap, Slots};
+#[doc(hidden)]
+pub use snapshot::__bytes_hex;
 pub use snapshot::{
     Checksum, Reader, SectionInfo, Snapshot, SnapshotBuf, SnapshotError, SnapshotValue, Writer,
     restore,
