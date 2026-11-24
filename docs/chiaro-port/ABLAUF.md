@@ -12,7 +12,8 @@
 
 ## Nächster Schritt
 
-- Jetzt: P25 läuft (Opus, Branch `port/p25-lichtstufe`). Danach P26, P27, P31. Spike `gpu_spike.rs` wird dabei ersetzt.
+- Jetzt: P26 und P27 laufen parallel (Sonnet, Branches `port/p26-atlanten-ambient`, `port/p27-composite`). Danach P31. Spike `gpu_spike.rs` wird dabei weiter ersetzt (Lichtteil ist seit P25 weg).
+- Hinweise für P26: Zonen-Pass lädt den Lichtpuffer (`Load` statt Clear); Atlanten docken über `LightingFrame::{profile_atlas, mask_atlas}` an. Dumper für Lichtpuffer: `tests/golden/chiaro/light/light_ref.cpp` (Bau wie `mask_ref.cpp`).
 - P12, P15 (exotisch) erst bei Verbraucher.
 - Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten. Parallele Agenten in `knorke-light2d` erzeugen kleine Konflikte in `lib.rs` und `tests/contracts/tests/no_alloc_light2d.rs` – beide Seiten behalten.
 
@@ -57,9 +58,9 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 | P22 | Hindernis-Raster | `knorke-light2d` | S | P2, P13, P14, P1b | fertig (Merge 2026-11-24): `occluder_raster/`, Teil-Upload in knorke-gpu; Maske/Höhe texelgleich zu Chiaro; Muster → P15 |
 | P23 | Okklusionsmaske, Distanzfeld, Cache | `knorke-light2d` | O | P22, P16 | fertig (Merge 2026-11-24): `occlusion/` (`OcclusionMask`: Maske, JFA-Distanzfeld, Cache, Schwenk), `CopyPass::copy_texture_region`; texelgleich zu Chiaro; Sprite-Maske, Caster-Klassen → P25 |
 | P24 | Licht-Programmtabelle (92 Programme) | `knorke-light2d` | O | P2, P1b | fertig (Merge 2026-11-24): `light_program` (92 Varianten), `LightPipelines` lazy; Uniform-Layouts → P25 |
-| P25 | Lichtstufe | `knorke-light2d` | O | P24, P7, P8, P23 | läuft (Branch `port/p25-lichtstufe`, Neustart 2026-11-24) |
-| P26 | Atlanten + Ambient-Pass | `knorke-light2d` | S | P25, P9, P10, P11 | offen |
-| P27 | Composite + Layout | `knorke-light2d` | S | P25 | offen |
+| P25 | Lichtstufe | `knorke-light2d` | O | P24, P7, P8, P23 | fertig (Merge 2026-11-24): `lighting/` (`LightingStage`, `LightDraws`, Uniform-Blöcke, `program_for`); Licht-/Specular-/Direction-Puffer in 5 Szenen bytegleich zu Chiaro; Spike-Lichtpass läuft über die Stufe; Uniform-Layouts gegen SPIR-V geprüft; E53-Caster-Masken und Sprite-Maske offen (Plan 17.12) |
+| P26 | Atlanten + Ambient-Pass | `knorke-light2d` | S | P25, P9, P10, P11 | läuft (Branch `port/p26-atlanten-ambient`) |
+| P27 | Composite + Layout | `knorke-light2d` | S | P25 | läuft (Branch `port/p27-composite`) |
 | P28 | Muster-GPU | `knorke-light2d` | S/O | P23, P15 | offen (exotisch) |
 | P29 | Medium-GPU 1 | `knorke-light2d` | S | P25, P12 | offen (exotisch) |
 | P30 | Medium-GPU 2 | `knorke-light2d` | S | P29 | offen (exotisch) |
@@ -79,6 +80,7 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 
 Neueste oben. Datum · wer · was · Ergebnis (auch Fehlschläge, Messwerte).
 
+- 2026-11-24 · Opus-Agent + Claude · Gemerged: P25 (Lichtstufe, 5 Szenen bytegleich zu Chiaro, Uniform-Layouts ohne Abweichung). Bei der Abnahme stürzte der Release-Lauf einmal ab (Speicherzugriffsfehler in `knorke-post` `gpu_parity`, aus P20): `SDL_Init` gleichzeitig aus mehreren Test-Threads. Nachgestellt (3 von 60 Läufen unter Last), behoben (Sperre in `init_video`, Tests nacheinander), danach 160 Läufe ohne Absturz. Prüfungen: 1466 Tests grün (all-features, auch `--release`), 1390 (no-default), Clippy 0, 20 Regeln, standalone ok. Gestartet: P26, P27 (Sonnet).
 - 2026-11-24 · Claude · P25 neu gestartet (Opus, eigener Worktree). Auftrag: Lichtstufe, Uniform-Layouts gegen Chiaro prüfen, Lichtteil des Spikes ersetzen, Golden-Dumper; E53 und Sprite-Maske, wenn es passt.
 - 2026-11-24 · Agent + Claude · Gemerged: P23 (Maske + Distanzfeld texelgleich zu Chiaro, inkrementell = voll). Prüfungen: 1442 Tests grün (all-features, auch `--release`), 1380 (no-default), 20 Regeln, standalone ok. Gestartet: P25 (Opus).
 - 2026-11-24 · Agenten + Claude · Gemerged: P20, P22, P24 (Post-Pass und Hindernis-Raster bitgleich zu Chiaro). Prüfungen: 1426 Tests grün (all-features, auch `--release`), 1374 (no-default), 20 Regeln, standalone ok. Gestartet: P23 (Opus).
