@@ -42,6 +42,8 @@
 pub mod kpak;
 mod live;
 pub mod staging;
+#[cfg(feature = "sdl")]
+pub mod test_support;
 
 pub use live::{LiveCounter, global_live_gpu_objects};
 

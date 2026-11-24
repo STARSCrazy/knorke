@@ -9,9 +9,10 @@
 #![cfg(feature = "gpu")]
 
 use core::mem::{offset_of, size_of};
-use std::path::Path;
 
 use knorke_gpu::kpak::ShaderPack;
+use knorke_gpu::test_support::chiaro_pack;
+use knorke_gpu::test_support::spirv::decode;
 use knorke_light2d::gpu_light::{GpuDirectional, GpuLight, GpuMask};
 use knorke_light2d::light_program::LIGHT_PROGRAMS;
 use knorke_light2d::lighting::{
@@ -138,67 +139,9 @@ const STRUCTS: [(&str, Layout, usize); 7] = [
     ),
 ];
 
-/// Member offsets of every named struct of a SPIR-V module: `(struct, [(member, offset)])`.
-fn struct_offsets(code: &[u8]) -> Vec<(String, Vec<(String, u32)>)> {
-    let words: Vec<u32> = code
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|c| u32::from_le_bytes(*c))
-        .collect();
-    assert_eq!(words[0], 0x0723_0203, "not SPIR-V");
-    let string = |ws: &[u32]| {
-        let bytes: Vec<u8> = ws.iter().flat_map(|w| w.to_le_bytes()).collect();
-        let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-        String::from_utf8(bytes[..end].to_vec()).unwrap()
-    };
-    let mut names = Vec::new();
-    let mut members = Vec::new();
-    let mut offsets = Vec::new();
-    let mut i = 5;
-    while i < words.len() {
-        let (n, op) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
-        assert!(n > 0, "malformed SPIR-V");
-        let a = &words[i + 1..i + n];
-        match op {
-            5 => names.push((a[0], string(&a[1..]))),
-            6 => members.push((a[0], a[1], string(&a[2..]))),
-            72 if a[2] == 35 => offsets.push((a[0], a[1], a[3])),
-            _ => {}
-        }
-        i += n;
-    }
-    names
-        .into_iter()
-        .map(|(id, name)| {
-            let mut m: Vec<(u32, String, u32)> = offsets
-                .iter()
-                .filter(|o| o.0 == id)
-                .map(|&(_, member, off)| {
-                    let mname = members
-                        .iter()
-                        .find(|x| x.0 == id && x.1 == member)
-                        .map_or_else(String::new, |x| x.2.clone());
-                    (member, mname, off)
-                })
-                .collect();
-            m.sort_by_key(|x| x.0);
-            (name, m.into_iter().map(|(_, n, o)| (n, o)).collect())
-        })
-        .collect()
-}
-
 #[test]
 fn rust_layouts_match_every_light_shader() {
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/shaders/knorke-chiaro.spirv.kpak");
-    let Ok(bytes) = std::fs::read(&path) else {
-        eprintln!(
-            "skipped: no shader pack at {} (cargo xtask shaders)",
-            path.display()
-        );
-        return;
-    };
+    let Some(bytes) = chiaro_pack() else { return };
     let pack = ShaderPack::parse(&bytes).unwrap();
     let mut shaders: Vec<&str> = LIGHT_PROGRAMS
         .iter()
@@ -210,7 +153,7 @@ fn rust_layouts_match_every_light_shader() {
     let mut members_seen: Vec<(&str, &str)> = Vec::new();
     for shader in &shaders {
         let program = pack.get(shader).unwrap();
-        for (name, members) in struct_offsets(program.code) {
+        for (name, members) in decode(program.code).structs {
             let Some(k) = STRUCTS.iter().position(|s| s.0 == name) else {
                 continue;
             };

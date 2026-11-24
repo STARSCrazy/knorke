@@ -141,6 +141,7 @@ dependencies = [
  "knorke-render",
  "knorke-replay",
  "knorke-types",
+ "png",
 ]
 
 [[package]]

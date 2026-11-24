@@ -11,6 +11,8 @@ publish = false
 knorke-types = { workspace = true }
 knorke-math = { workspace = true }
 knorke-replay = { workspace = true }
+# Golden PNGs of the parity tests (`parity::load_png_rgba8`).
+png = "0.17"
 # Only for the GPU contract of the pass plan (feature `gpu`).
 knorke-gpu = { workspace = true, optional = true }
 

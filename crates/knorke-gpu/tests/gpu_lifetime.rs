@@ -7,44 +7,22 @@
 #![allow(unsafe_code)]
 
 use std::ptr::NonNull;
-use std::sync::{Mutex, MutexGuard, Once};
 
 use knorke_gpu::sys::gpu::{
     SDL_AcquireGPUCommandBuffer, SDL_BeginGPUCopyPass, SDL_EndGPUCopyPass,
-    SDL_GPU_BUFFERUSAGE_VERTEX, SDL_GPU_SHADERFORMAT_DXIL, SDL_GPU_SHADERFORMAT_MSL,
-    SDL_GPU_SHADERFORMAT_SPIRV, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+    SDL_GPU_BUFFERUSAGE_VERTEX, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
     SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, SDL_GPUBufferUsageFlags, SDL_SubmitGPUCommandBuffer,
     SDL_WaitForGPUIdle,
 };
-use knorke_gpu::sys::init::{SDL_INIT_VIDEO, SDL_Init};
+use knorke_gpu::test_support::any_device;
 use knorke_gpu::{
     Device, Filter, Gpu, LiveCounter, RENDER_TARGET_ZERO_SIZE, RenderTarget, Samplers,
     UPLOAD_LIMIT, UPLOAD_NOT_RESERVED, UploadBuffer, global_live_gpu_objects,
 };
 
-/// One device at a time: drivers dislike many devices created in parallel.
-static SERIAL: Mutex<()> = Mutex::new(());
-static INIT: Once = Once::new();
-
-fn device() -> Option<(MutexGuard<'static, ()>, Device)> {
-    let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    INIT.call_once(|| {
-        // SAFETY: plain FFI call; failure is reported by device creation below.
-        unsafe { SDL_Init(SDL_INIT_VIDEO) };
-    });
-    let formats = SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_MSL;
-    match Device::create(formats, false) {
-        Ok(d) => Some((guard, d)),
-        Err(e) => {
-            eprintln!("skipped: no GPU device available ({})", e.message);
-            None
-        }
-    }
-}
-
 #[test]
 fn render_target_is_persistent_and_counts_recreation() {
-    let Some((_g, device)) = device() else { return };
+    let Some(device) = any_device() else { return };
     let counter = LiveCounter::new();
     {
         let mut rt = RenderTarget::new(Gpu::new(&device, &counter));
@@ -101,7 +79,7 @@ fn render_target_is_persistent_and_counts_recreation() {
 
 #[test]
 fn samplers_own_two_objects() {
-    let Some((_g, device)) = device() else { return };
+    let Some(device) = any_device() else { return };
     let counter = LiveCounter::new();
     {
         let samplers = Samplers::new(Gpu::new(&device, &counter)).unwrap();
@@ -114,7 +92,7 @@ fn samplers_own_two_objects() {
 
 #[test]
 fn upload_buffer_grows_maps_and_uploads() {
-    let Some((_g, device)) = device() else { return };
+    let Some(device) = any_device() else { return };
     let counter = LiveCounter::new();
     {
         let gpu = Gpu::new(&device, &counter);
@@ -166,7 +144,7 @@ fn upload_buffer_grows_maps_and_uploads() {
 
 #[test]
 fn transfer_only_upload_buffer_owns_one_object() {
-    let Some((_g, device)) = device() else { return };
+    let Some(device) = any_device() else { return };
     let counter = LiveCounter::new();
     {
         let mut up = UploadBuffer::new(
