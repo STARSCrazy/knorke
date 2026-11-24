@@ -143,6 +143,88 @@ fn partial_texture_upload_writes_only_its_region() {
 }
 
 #[test]
+fn texture_to_texture_copy_moves_a_region_between_textures() {
+    let Some((_g, device)) = device() else { return };
+    let counter = LiveCounter::new();
+    {
+        let gpu = Gpu::new(&device, &counter);
+        let desc = TextureDesc::new(4, 4, RGBA8, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        let src = Texture::new(gpu, desc).unwrap();
+        let dst = Texture::new(gpu, desc).unwrap();
+        let pixels: Vec<u8> = (0..64).collect();
+        upload(gpu, &src, &pixels);
+        upload(gpu, &dst, &[9; 64]);
+        let other = Texture::new(
+            gpu,
+            TextureDesc::new(4, 4, SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, desc.usage),
+        )
+        .unwrap();
+
+        let mut cmd = CommandBuffer::acquire(&device).unwrap();
+        {
+            let mut copy = cmd.copy_pass().unwrap();
+            // Leaving either texture, or another format: refused, nothing recorded.
+            let e = copy
+                .copy_texture_region(
+                    src.texture_ref(),
+                    [2, 0],
+                    dst.texture_ref(),
+                    [0, 0],
+                    [3, 1],
+                    false,
+                )
+                .unwrap_err();
+            assert_eq!(e.code, RECORD_OUT_OF_RANGE);
+            let e = copy
+                .copy_texture_region(
+                    src.texture_ref(),
+                    [0, 0],
+                    dst.texture_ref(),
+                    [0, 3],
+                    [1, 2],
+                    false,
+                )
+                .unwrap_err();
+            assert_eq!(e.code, RECORD_OUT_OF_RANGE);
+            let e = copy
+                .copy_texture_region(
+                    src.texture_ref(),
+                    [0, 0],
+                    other.texture_ref(),
+                    [0, 0],
+                    [1, 1],
+                    false,
+                )
+                .unwrap_err();
+            assert_eq!(e.code, RECORD_USAGE);
+            // Texels (0..3, 1..3) of src to (1, 0) of dst.
+            copy.copy_texture_region(
+                src.texture_ref(),
+                [0, 1],
+                dst.texture_ref(),
+                [1, 0],
+                [3, 2],
+                false,
+            )
+            .unwrap();
+        }
+        cmd.submit_and_wait().unwrap();
+
+        let got = download(gpu, &dst);
+        let mut want = vec![9u8; 64];
+        for row in 0..2usize {
+            for col in 0..3usize {
+                let s = ((row + 1) * 4 + col) * 4;
+                let d = (row * 4 + col + 1) * 4;
+                want[d..d + 4].copy_from_slice(&pixels[s..s + 4]);
+            }
+        }
+        assert_eq!(got, want);
+    }
+    assert_eq!(counter.live(), 0);
+}
+
+#[test]
 fn render_pass_checks_pipeline_bindings_and_usage() {
     let Some((_g, device)) = device() else { return };
     let counter = LiveCounter::new();
