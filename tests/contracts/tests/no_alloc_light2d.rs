@@ -3,7 +3,8 @@
 //! into a warm buffer, moving and re-describing obstacles with their dirty tracking, snapshot save
 //! of the obstacle store, the pixel and normal-map codecs, collecting the lights of a frame (with
 //! animations, masks, flicker and caster filters) into a reused list, and snapshot round trips
-//! of the animation and mask stores, and the shadow cache plan deciding incremental mask updates
+//! of the animation and mask stores, the shadow cache plan deciding incremental mask updates, and
+//! the obstacle raster collecting triangles, laying out the buffer and staging tile cells
 //! (ADR 0006, ADR 0010).
 //!
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
@@ -20,6 +21,9 @@ use knorke_light2d::light::{Height, LightDesc, LightType, ShadowFilter};
 use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
 use knorke_light2d::mask::{MaskPreset, MaskShape};
 use knorke_light2d::obstacle::{ShapeDesc, TileGridDesc};
+use knorke_light2d::occluder_raster::{
+    NoPatterns, TileSet, TriangleSet, write_cell_texels, write_triangle_buffer,
+};
 use knorke_light2d::settings::LightSettings;
 use knorke_light2d::shadow::{MaskPlanInput, MaskUpdateLimits, MaskUpdatePlan};
 use knorke_light2d::{
@@ -133,6 +137,13 @@ fn steady_state_light2d_paths_allocate_nothing() {
         .unwrap();
     let mut obstacle_snap = SnapshotBuf::new();
     let mut world_triangles = Vec::new();
+    // Obstacle raster (P22): triangle sets with intervals, the buffer layout, tile grid slots and
+    // the cell texels of a pending upload.
+    let mut static_set = TriangleSet::new();
+    let mut dynamic_set = TriangleSet::new();
+    let mut raster_bytes = vec![0u8; 1 << 14];
+    let mut tile_set: TileSet<()> = TileSet::new();
+    let mut texels = vec![0u8; 16];
     // Shadow cache plan: a static wall, dynamic obstacles that move and a panning camera.
     let mut shadow_obstacles = ObstacleStore::new();
     shadow_obstacles
@@ -230,6 +241,20 @@ fn steady_state_light2d_paths_allocate_nothing() {
         mask_snap.clear();
         mask_snap.save(&masks);
         restore(&mut Reader::new(mask_snap.bytes()), &mut masks).unwrap();
+        // Obstacle raster: collect, lay out, sync the grids, write the changed cells.
+        static_set.collect(&obstacles, &NoPatterns, false, 0.5, true);
+        dynamic_set.collect(&obstacles, &NoPatterns, true, 0.5, true);
+        write_triangle_buffer(
+            dynamic_set.vertices(),
+            dynamic_set.opacities(),
+            &mut raster_bytes,
+        );
+        tile_set.sync(&obstacles, |_, _| Ok::<(), ()>(())).unwrap();
+        for slot in tile_set.slots_mut() {
+            if let Some(r) = slot.pending.take() {
+                write_cell_texels(&obstacles, slot.handle, &r, &NoPatterns, &mut texels);
+            }
+        }
         // Geometry and codecs.
         tri.triangulate(&poly[..], &mut triangles).unwrap();
         convert_normal_map(
