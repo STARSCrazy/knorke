@@ -22,6 +22,8 @@ knorke-gpu = { workspace = true, optional = true }
 [dev-dependencies]
 # GPU parity test: the parity metric and golden PNGs of the Chiaro port (P3).
 knorke-contract-tests = { path = "../../tests/contracts" }
+# The shared GPU test helpers; only the tests get them (see the feature in knorke-gpu).
+knorke-gpu = { workspace = true, features = ["test-support"] }
 
 [lints]
 workspace = true

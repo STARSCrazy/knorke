@@ -1,4 +1,5 @@
-//! Helpers that every GPU test of the workspace shares (feature `sdl`). Not engine API: the
+//! Helpers that every GPU test of the workspace shares (features `sdl` and `test-support`,
+//! the latter switched on by the dev-dependencies of the tests only). Not engine API: the
 //! host owns device and frame in a real program (ADR 0002); tests play the host, and this
 //! module is the one place where they do it the same way.
 //!
