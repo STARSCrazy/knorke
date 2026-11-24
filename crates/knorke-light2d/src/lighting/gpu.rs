@@ -52,6 +52,7 @@ use crate::light_program::{
 use crate::projection::Projection;
 use crate::settings::LightSettings;
 use crate::shadow::OcclusionDomain;
+use crate::zone_pass::{AmbientZonePass, ZoneInput};
 
 /// Format of the light buffer (Chiaro `kLightFormat`).
 pub const LIGHT_FORMAT: SDL_GPUTextureFormat =
@@ -172,8 +173,21 @@ impl LightingFrame<'_> {
     }
 }
 
-/// What [`LightingStage::prepare`] decided for the frame (Chiaro `LightingResult` without
-/// the zone fields).
+/// Where the pure ambient of a frame with ambient zones is (Chiaro `LightingResult::pureAmbient`):
+/// the ambient per pixel without the lights, read by the composite in direction mode.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PureAmbient {
+    /// Not needed (the composite multiplies by the light buffer) or no zones.
+    #[default]
+    None,
+    /// The light buffer is the pure ambient: zones without a light pass.
+    LightBuffer,
+    /// A separate target, written by the zone pass next to the light buffer
+    /// ([`LightingStage::pure_ambient`]).
+    Separate,
+}
+
+/// What [`LightingStage::prepare`] decided for the frame (Chiaro `LightingResult`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct LightingResult {
     /// Ambient plus the directional lights not drawn per pixel.
@@ -184,6 +198,11 @@ pub struct LightingResult {
     pub detail_mode: DetailMode,
     /// A light buffer was drawn; `false`: the composite multiplies by `ambient`.
     pub light_buffer: bool,
+    /// Ambient zones were drawn: the light buffer starts at the ambient of each pixel, not at
+    /// `ambient` (Chiaro `ambientZones`).
+    pub ambient_zones: bool,
+    /// Where the pure ambient of the zones is.
+    pub pure_ambient: PureAmbient,
     /// The composite adds the specular buffer (exact mode, specular scale > 0).
     pub use_specular: bool,
     /// Targets (re)allocated by this prepare.
@@ -195,9 +214,11 @@ pub struct LightingResult {
 pub struct LightingRecord {
     /// Instanced lights drawn.
     pub lights_drawn: u32,
+    /// Ambient zones drawn (instances of the zone pass).
+    pub zones_drawn: u32,
     /// Of them shadowed.
     pub shadow_lights: u32,
-    /// Draw calls.
+    /// Draw calls, the zone pass's included.
     pub draws: u32,
 }
 
@@ -254,6 +275,7 @@ pub struct LightingStage<'d> {
     direction: RenderTarget<'d>,
     lights: UploadBuffer<'d>,
     masks: UploadBuffer<'d>,
+    zones: AmbientZonePass<'d>,
     draws: LightDraws,
     programs: [Option<LightProgram>; PROGRAMS],
     detail: DetailMode,
@@ -281,6 +303,7 @@ impl<'d> LightingStage<'d> {
                 INITIAL_CAPACITY * GpuMask::SIZE as u32,
                 "mask",
             ),
+            zones: AmbientZonePass::new(gpu),
             draws: LightDraws::default(),
             programs: [None; PROGRAMS],
             detail: DetailMode::None,
@@ -304,6 +327,24 @@ impl<'d> LightingStage<'d> {
         pipelines: &mut LightPipelines<'d>,
         frame: &LightingFrame<'_>,
     ) -> Result<LightingResult, Diagnostic> {
+        self.prepare_with_zones(shaders, pipelines, frame, None)
+    }
+
+    /// [`prepare`](Self::prepare) for a frame with ambient zones (P26, Chiaro E121): with
+    /// visible zones the frame has a light buffer even without lights, the zone pass
+    /// ([`AmbientZonePass`]) writes the ambient of each pixel into it before the lights, and
+    /// the light pass loads it instead of clearing it. `None`, or a list without zones, is
+    /// the frame of [`prepare`](Self::prepare) and releases what the zones held.
+    ///
+    /// # Errors
+    /// As [`prepare`](Self::prepare), plus the zone pass's buffers, textures and pipeline.
+    pub fn prepare_with_zones(
+        &mut self,
+        shaders: &mut ShaderLibrary<'d>,
+        pipelines: &mut LightPipelines<'d>,
+        frame: &LightingFrame<'_>,
+        zones: Option<ZoneInput<'_>>,
+    ) -> Result<LightingResult, Diagnostic> {
         self.prepared = false;
         let list = frame.lights;
         let mut result = LightingResult {
@@ -315,7 +356,14 @@ impl<'d> LightingStage<'d> {
         let normal_mode = frame.normal_mode();
         let shadows = frame.shadows;
         let draws = LightDraws::new(list, shadows.is_some(), shadows.is_some() || normal_mode);
-        if !draws.light_pass() {
+        let light_pass = draws.light_pass();
+        let zones = zones.filter(ZoneInput::is_active);
+        if zones.is_none() {
+            // Nothing drawn: the zone buffers, the vertex texture and the pure ambient target
+            // go, so a frame without a visible zone holds what a scene without zones holds.
+            self.zones.release();
+        }
+        if !light_pass && zones.is_none() {
             // No light pass, so no material target either.
             self.specular.release();
             self.direction.release();
@@ -333,6 +381,38 @@ impl<'d> LightingStage<'d> {
             LIGHT_FORMAT,
         )? {
             result.allocations += 1;
+        }
+        if let Some(input) = zones {
+            // The pure ambient is read by the composite in direction mode. While a light pass
+            // adds the lights into the light buffer, the zone pass writes it into a second
+            // target as well; without one the light buffer is the pure ambient.
+            let direction_mode =
+                detail_mode_for(frame.material.is_some(), w, h, scale) == DetailMode::Direction;
+            let dual = light_pass && direction_mode;
+            result.allocations += self.zones.prepare(
+                shaders,
+                &input,
+                self.light.width(),
+                self.light.height(),
+                dual,
+            )?;
+            result.ambient_zones = true;
+            result.pure_ambient = match (dual, light_pass) {
+                (true, _) => PureAmbient::Separate,
+                (false, false) => PureAmbient::LightBuffer,
+                (false, true) => PureAmbient::None,
+            };
+        }
+        if !light_pass {
+            // Zones without lights: the light buffer holds the ambient; no material target.
+            self.specular.release();
+            self.direction.release();
+            self.draws = draws;
+            self.programs = [None; PROGRAMS];
+            self.detail = DetailMode::None;
+            result.light_buffer = true;
+            self.prepared = true;
+            return Ok(result);
         }
         let count = draws.count();
         if count > 0 {
@@ -433,6 +513,17 @@ impl<'d> LightingStage<'d> {
         self.light.texture_ref()
     }
 
+    /// The pure ambient target of the last frame whose zone pass wrote one
+    /// ([`PureAmbient::Separate`]).
+    pub fn pure_ambient(&self) -> Option<TextureRef<'_>> {
+        self.zones.ambient_target()
+    }
+
+    /// The ambient zone pass, for its textures.
+    pub fn zone_pass(&self) -> &AmbientZonePass<'d> {
+        &self.zones
+    }
+
     /// The specular buffer of the last frame in exact material mode.
     pub fn specular_buffer(&self) -> Option<TextureRef<'_>> {
         self.specular.texture_ref()
@@ -478,29 +569,50 @@ impl<'d> LightingStage<'d> {
             ));
         }
         let d = &self.draws;
-        if !d.light_pass() {
+        let zones = self.zones.is_active();
+        if !d.light_pass() && !zones {
             return Ok(LightingRecord::default());
         }
         let count = d.count();
         let masked = d.masked();
-        if count > 0 {
+        if count > 0 || zones {
             let mut copy = cmd.copy_pass()?;
-            copy.upload_to_buffer(&self.lights, count * GpuLight::SIZE as u32)?;
-            if masked > 0 {
-                copy.upload_to_buffer(&self.masks, masked * GpuMask::SIZE as u32)?;
+            if count > 0 {
+                copy.upload_to_buffer(&self.lights, count * GpuLight::SIZE as u32)?;
+                if masked > 0 {
+                    copy.upload_to_buffer(&self.masks, masked * GpuMask::SIZE as u32)?;
+                }
             }
+            self.zones.record_uploads(&mut copy)?;
         }
         let light = self
             .light
             .texture_ref()
             .ok_or_else(|| input_missing("the light buffer"))?;
+        let mut record = LightingRecord::default();
+        // The zone pass clears the light buffer to the ambient and folds the zones in; the
+        // light pass then loads it (a discarded pixel keeps the cleared bits, so pixels
+        // outside every zone stay bit-identical).
+        if zones {
+            self.zones
+                .record_pass(cmd, samplers, frame, self.ambient, light)?;
+            record.zones_drawn = self.zones.zone_count();
+            record.draws += 1;
+        }
+        if !d.light_pass() {
+            return Ok(record);
+        }
         let second = match self.detail {
             DetailMode::Exact => self.specular.texture_ref(),
             DetailMode::Direction => self.direction.texture_ref(),
             DetailMode::None => None,
         };
-        let clear = ColorTarget::new(light, Load::Clear(ambient_clear(self.ambient))).cycled(true);
-        let mut targets = [clear, clear];
+        let first = if zones {
+            ColorTarget::new(light, Load::Load)
+        } else {
+            ColorTarget::new(light, Load::Clear(ambient_clear(self.ambient))).cycled(true)
+        };
+        let mut targets = [first, first];
         let mut target_count = 1;
         if let Some(s) = second {
             targets[1] = ColorTarget::new(s, Load::Clear([0.0; 4])).cycled(true);
@@ -562,7 +674,6 @@ impl<'d> LightingStage<'d> {
             None
         };
 
-        let mut record = LightingRecord::default();
         for draw in d.draws() {
             if draw.count == 0 {
                 continue;

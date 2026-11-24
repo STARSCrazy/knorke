@@ -6,14 +6,22 @@
 //! of the animation and mask stores, the shadow cache plan deciding incremental mask updates, and
 //! the obstacle raster collecting triangles, laying out the buffer and staging tile cells
 //! and the light pass splitting the list into its draws, writing the light and mask buffer
-//! bytes and its uniform blocks (ADR 0006, ADR 0010).
+//! bytes and its uniform blocks, filling the profile and mask atlas bytes, and culling the
+//! ambient zones, writing their records, vertex texels and uniform blocks (ADR 0006, ADR 0010).
 //!
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
 
 #![allow(unsafe_code)] // counting allocator
 
+use knorke_light2d::ambient_zone::{AmbientZoneParams, ZoneShape, make_stored_zone};
+use knorke_light2d::ambient_zone_culling::{AmbientZoneList, CullScene, collect_ambient_zones};
+use knorke_light2d::ambient_zone_store::AmbientZoneStore;
 use knorke_light2d::animation::{AnimationDesc, AnimationType};
+use knorke_light2d::atlas::{
+    fill_mask_atlas, fill_profile_atlas, mask_atlas_bytes, mask_atlas_rows, profile_atlas_bytes,
+    profile_atlas_rows,
+};
 use knorke_light2d::codec::{
     Material, MaterialPreset, NormalMapOptions, convert_normal_map, encode_normal, material_pixel,
     surface_pixel,
@@ -33,8 +41,14 @@ use knorke_light2d::obstacle::{ShapeDesc, TileGridDesc};
 use knorke_light2d::occluder_raster::{
     NoPatterns, TileSet, TriangleSet, write_cell_texels, write_triangle_buffer,
 };
+use knorke_light2d::profile::{ProfilePreset, ProfileShape, build_shape_profile};
+use knorke_light2d::profile_store::ProfileStore;
 use knorke_light2d::settings::LightSettings;
 use knorke_light2d::shadow::{MaskPlanInput, MaskUpdateLimits, MaskUpdatePlan};
+use knorke_light2d::zone_pass::{
+    ZoneFragParams, ZonePassParams, fill_zone_vertices, write_zones, zone_vertex_bytes,
+    zone_vertex_rows,
+};
 use knorke_light2d::{
     AnimationStore, LightStore, MaskStore, NoResources, ObstacleStore, Projection, StoreResources,
     Triangulator,
@@ -172,6 +186,48 @@ fn steady_state_light2d_paths_allocate_nothing() {
         full_rebuild_ratio: 1.0,
     });
 
+    // Atlases and ambient zones (P26): profile and mask atlas bytes, the zone list, the record
+    // bytes, the vertex texels and the uniform blocks of the zone pass.
+    let mut profiles = ProfileStore::new();
+    for preset in [ProfilePreset::HatLamp, ProfilePreset::Downlight] {
+        let table = build_shape_profile(&ProfileShape::preset(preset)).unwrap();
+        profiles.create(table).unwrap();
+    }
+    let profile_rows = profile_atlas_rows(profiles.block_count());
+    let mut profile_atlas = vec![0u8; profile_atlas_bytes(profile_rows) as usize];
+    let mask_rows = mask_atlas_rows(masks.block_count());
+    let mut mask_atlas = vec![0u8; mask_atlas_bytes(mask_rows) as usize];
+    let mut zones = AmbientZoneStore::new();
+    for k in 0..4 {
+        let shape = if k % 2 == 0 {
+            ZoneShape::Box
+        } else {
+            ZoneShape::Polygon
+        };
+        let params = AmbientZoneParams {
+            shape,
+            x: 10.0 + 12.0 * k as f32,
+            y: 20.0,
+            width: 8.0,
+            depth: 8.0,
+            vertices: poly.to_vec(),
+            ambient: [0.2, 0.3, 0.4],
+            ..Default::default()
+        };
+        zones.create(make_stored_zone(&params).unwrap()).unwrap();
+    }
+    let mut zone_list = AmbientZoneList::default();
+    let zone_rows = zone_vertex_rows(zones.len() as u32 * 8);
+    let mut zone_vertices = vec![0u8; zone_vertex_bytes(zone_rows) as usize];
+    let mut zone_records = vec![0u8; 1 << 12];
+    let zone_scene = CullScene {
+        projection: Projection::IDENTITY,
+        max_height: 0.0,
+        has_surface: false,
+        width: 128,
+        height: 64,
+    };
+
     let mut step = |i: u32| {
         // Shadow cache plan: move some dynamic obstacles, pan, decide and commit.
         for (k, &id) in shadow_movers.iter().enumerate().skip(i as usize % 2) {
@@ -249,6 +305,25 @@ fn steady_state_light2d_paths_allocate_nothing() {
         let draws = LightDraws::new(&list, i.is_multiple_of(3), true);
         draws.write_lights(&list, &mut light_bytes);
         draws.write_masks(&list, &mut mask_bytes);
+        // Atlases and the zone pass.
+        fill_profile_atlas(&profiles, profile_rows, &mut profile_atlas);
+        fill_mask_atlas(&masks, mask_rows, &mut mask_atlas);
+        collect_ambient_zones(
+            &zones,
+            [0.3, 0.3, 0.3],
+            &zone_scene,
+            [0.0; 3],
+            &mut zone_list,
+        );
+        let written = write_zones(&zone_list, &mut zone_records);
+        fill_zone_vertices(&zones, zone_rows, &mut zone_vertices);
+        let frag = ZoneFragParams::new(&zone_scene.projection, 128, 64, 0.1, false, zone_rows);
+        let pass = ZonePassParams {
+            scene_size: [128.0, 64.0],
+            instance_offset: i,
+            pad: 0,
+        };
+        let _ = (written, frag.to_bytes(), pass.to_bytes());
         let program_modes = ProgramModes {
             detail: DetailMode::Exact,
             normal_mode: true,

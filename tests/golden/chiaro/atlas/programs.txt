@@ -1,0 +1,5 @@
+profile 0:0 1:0
+mask 0:32 1:32
+zones 0:0 1:0
+zones_only
+zones_direction 0:10
