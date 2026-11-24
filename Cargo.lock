@@ -132,6 +132,7 @@ name = "knorke-contract-tests"
 version = "0.0.1"
 dependencies = [
  "knorke-exec",
+ "knorke-gpu",
  "knorke-integration",
  "knorke-light2d",
  "knorke-math",
