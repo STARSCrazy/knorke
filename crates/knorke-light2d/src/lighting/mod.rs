@@ -43,5 +43,5 @@ pub use plan::{DrawProgram, LIGHT_DRAW_COUNT, LightDraw, LightDraws};
 pub use gpu::{
     CasterMaps, LIGHT_FORMAT, LIGHTING_ATLAS_MISSING, LIGHTING_CASTERS_MISSING,
     LIGHTING_INPUT_MISSING, LIGHTING_NOT_PREPARED, LightingFrame, LightingRecord, LightingResult,
-    LightingStage, ShadowMaps,
+    LightingStage, PureAmbient, ShadowMaps,
 };

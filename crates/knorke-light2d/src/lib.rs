@@ -45,6 +45,7 @@ pub mod ambient_zone_culling;
 pub mod ambient_zone_store;
 pub mod animation;
 pub mod area_light;
+pub mod atlas;
 pub mod codec;
 pub mod frame_warnings;
 pub mod gpu_light;
@@ -73,6 +74,7 @@ pub mod resources;
 pub mod settings;
 pub mod shadow;
 pub mod triangulate;
+pub mod zone_pass;
 
 pub use animation::{AnimationDesc, AnimationError, AnimationId, AnimationStore};
 pub use light::{LightError, LightResources, NoResources};
