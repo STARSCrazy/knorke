@@ -11,6 +11,8 @@
 //! | [`light_math`] | attenuation, spot cone, flicker, light-quad culling | P7 |
 //! | [`light`], [`light_store`] | light description, validation, handle-based store, snapshots | P7 |
 //! | [`obstacle`] | obstacle descriptions, handle-based store, dirty tracking for the shadow cache, snapshots | P13 |
+//! | [`animation`], [`area_light`], [`light_culling`], [`gpu_light`] | animation curves and store, area-light model, per-frame light lists | P8 |
+//! | [`mask`], [`mask_store`], [`light_mask`], [`resources`] | masks (gobo, window): shapes, store, placement; stores as light resources | P10 |
 //!
 //! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
 //! dependency; today that is only the gate spike `gpu_spike` (to be replaced by P20–P27).
@@ -29,19 +31,31 @@
 // `!(x > 0.0)` rejects NaN on purpose, as in the C++ original.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
+pub mod animation;
+pub mod area_light;
 pub mod codec;
+pub mod gpu_light;
 #[cfg(feature = "gpu")]
 pub mod gpu_spike;
 pub mod light;
+pub mod light_culling;
+pub mod light_mask;
 pub mod light_math;
 pub mod light_store;
+pub mod mask;
+pub mod mask_store;
 pub mod material;
 pub mod obstacle;
 pub mod projection;
+pub mod resources;
 pub mod triangulate;
 
+pub use animation::{AnimationDesc, AnimationError, AnimationId, AnimationStore};
 pub use light::{LightError, LightResources, NoResources};
 pub use light_store::LightStore;
+pub use mask::MaskError;
+pub use mask_store::{MaskId, MaskStore};
 pub use obstacle::{ObstacleError, ObstacleId, ObstacleStore};
 pub use projection::{Projection, ProjectionError};
+pub use resources::StoreResources;
 pub use triangulate::{TriangulateError, Triangulator, circle_triangles};

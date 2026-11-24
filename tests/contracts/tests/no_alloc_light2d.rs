@@ -1,20 +1,28 @@
 //! Contract: the steady-state paths of `knorke-light2d` allocate nothing once their buffers have
 //! grown: transient frame lights, snapshot save and restore of the light store, triangulation
 //! into a warm buffer, moving and re-describing obstacles with their dirty tracking, snapshot save
-//! of the obstacle store, and the pixel and normal-map codecs (ADR 0006, ADR 0010).
+//! of the obstacle store, the pixel and normal-map codecs, collecting the lights of a frame (with
+//! animations, masks, flicker and caster filters) into a reused list, and snapshot round trips
+//! of the animation and mask stores (ADR 0006, ADR 0010).
 //!
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
 
 #![allow(unsafe_code)] // counting allocator
 
+use knorke_light2d::animation::{AnimationDesc, AnimationType};
 use knorke_light2d::codec::{
     Material, MaterialPreset, NormalMapOptions, convert_normal_map, encode_normal, material_pixel,
     surface_pixel,
 };
-use knorke_light2d::light::{Height, LightDesc, LightType};
+use knorke_light2d::light::{Height, LightDesc, LightType, ShadowFilter};
+use knorke_light2d::light_culling::{CullSettings, LightList, LightModes, collect_lights};
+use knorke_light2d::mask::{MaskPreset, MaskShape};
 use knorke_light2d::obstacle::{ShapeDesc, TileGridDesc};
-use knorke_light2d::{LightStore, NoResources, ObstacleStore, Triangulator};
+use knorke_light2d::{
+    AnimationStore, LightStore, MaskStore, NoResources, ObstacleStore, Projection, StoreResources,
+    Triangulator,
+};
 use knorke_math::{At, Vec2, Vec3, World2};
 use knorke_types::{Reader, SnapshotBuf, restore};
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -54,6 +62,45 @@ fn steady_state_light2d_paths_allocate_nothing() {
     }
     let frame: Vec<LightDesc> = (0..64).map(|_| LightDesc::new(LightType::Point)).collect();
     let mut snap = SnapshotBuf::new();
+    // Animations, masks and lights that use them, collected every step.
+    let mut animations = AnimationStore::new();
+    let mut masks = MaskStore::new();
+    let mut texels = Vec::new();
+    MaskShape::preset(MaskPreset::WindowCross).build(&mut texels);
+    let mask = masks.create(texels).unwrap();
+    let anims: Vec<_> = AnimationType::ALL
+        .iter()
+        .map(|&k| animations.create(&AnimationDesc::new(k)).unwrap())
+        .collect();
+    let mut scene = LightStore::new();
+    {
+        let res = StoreResources::new(&animations, &masks);
+        for i in 0..24usize {
+            let mut d = LightDesc::new(match i % 4 {
+                0 => LightType::Point,
+                1 => LightType::Spot,
+                2 => LightType::Line,
+                _ => LightType::Directional,
+            });
+            d.position = At::new(Vec2::new(4.0 * i as f32, 20.0));
+            d.radius = 30.0;
+            d.flicker = 0.3;
+            d.animation = Some(anims[i % anims.len()]);
+            if i % 4 == 1 {
+                d.mask = Some(mask);
+                d.direction = Vec3::new(0.0, 0.0, -1.0);
+                d.height = Height::At(5.0);
+            }
+            if i % 8 == 0 {
+                d.shadow_filter = ShadowFilter::DynamicOnly;
+            }
+            scene.create(&d, &res).unwrap();
+        }
+        scene.set_frame_lights(&frame[..], &res).unwrap();
+    }
+    let mut list = LightList::default();
+    let mut anim_snap = SnapshotBuf::new();
+    let mut mask_snap = SnapshotBuf::new();
     let poly = [
         Vec2::new(0.0, 0.0),
         Vec2::new(4.0, 0.0),
@@ -129,6 +176,32 @@ fn steady_state_light2d_paths_allocate_nothing() {
         snap.clear();
         snap.save(&store);
         restore(&mut Reader::new(snap.bytes()), &mut store).unwrap();
+        // Collecting the lights of a frame with animations, masks and flicker.
+        let modes = LightModes {
+            animations: Some(&animations),
+            masks: Some(&masks),
+            normal_mode: i.is_multiple_of(2),
+            height_mode: true,
+            max_height: 4.0,
+            ..LightModes::default()
+        };
+        collect_lights(
+            &scene,
+            &CullSettings::default(),
+            &Projection::IDENTITY,
+            f64::from(i) / 60.0,
+            128,
+            64,
+            &modes,
+            &mut list,
+        );
+        // Snapshot round trips of the animation and mask stores.
+        anim_snap.clear();
+        anim_snap.save(&animations);
+        restore(&mut Reader::new(anim_snap.bytes()), &mut animations).unwrap();
+        mask_snap.clear();
+        mask_snap.save(&masks);
+        restore(&mut Reader::new(mask_snap.bytes()), &mut masks).unwrap();
         // Geometry and codecs.
         tri.triangulate(&poly[..], &mut triangles).unwrap();
         convert_normal_map(
