@@ -5,47 +5,21 @@
 //! system that reads host positions and keeps its own per-entity state, and a render-like
 //! system that uploads the same positions as bytes.
 
-#![allow(unsafe_code)] // only for the counting allocator below
-
+use knorke_contract_tests::counting_alloc::{Counting, thread_allocations};
 use knorke_math::{At, Vec2, World2, bytemuck};
 use knorke_observe::{NoProbe, Probe, Recorder, Sink, counter, scope};
 use knorke_types::{
     Column, ColumnMut, Diagnostic, DiagnosticCode, EventCursor, EventQueue, Events, Handle,
     HandleMap, Revision, Slots, Tick, project,
 };
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::cell::Cell;
 
-// ---- allocation counter (per thread, so parallel tests do not interfere) -------------
-
-struct Counting;
-thread_local! {
-    static ALLOCATIONS: Cell<u64> = const { Cell::new(0) };
-}
-// SAFETY: forwards to the system allocator unchanged; only counts calls.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let _ = ALLOCATIONS.try_with(|c| c.set(c.get() + 1));
-        // SAFETY: same contract as the caller's.
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: same contract as the caller's.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let _ = ALLOCATIONS.try_with(|c| c.set(c.get() + 1));
-        // SAFETY: same contract as the caller's.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
 fn allocations_during(f: impl FnOnce()) -> u64 {
-    let before = ALLOCATIONS.with(Cell::get);
+    let before = thread_allocations();
     f();
-    ALLOCATIONS.with(Cell::get) - before
+    thread_allocations() - before
 }
 
 // ---- host side ------------------------------------------------------------------------
