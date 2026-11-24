@@ -472,19 +472,9 @@ impl GoalGuess {
     }
 }
 
-impl SnapshotValue for GoalGuessConfig {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.beta);
-        w.put(&self.unit);
-        w.put(&self.forget);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(GoalGuessConfig {
-            beta: r.get()?,
-            unit: r.get()?,
-            forget: r.get()?,
-        })
-    }
+// Field order pinned by `snapshot_tests::value_bytes_are_pinned`.
+knorke_types::by_fields! {
+    GoalGuessConfig { beta, unit, forget };
 }
 
 /// One observer's guess with its config. Restore rejects more than [`MAX_GOALS`] goals,

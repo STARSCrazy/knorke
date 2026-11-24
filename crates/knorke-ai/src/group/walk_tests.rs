@@ -2,13 +2,11 @@
 //! Walking distance ([`SquadRules::walk`]): where the squad and the crew
 //! use it, unreachable as infinitely far, and no change without it.
 
+use super::test_support::*;
 use super::*;
-use crate::memory::{Distance, Fact, Metric, Pos, distance};
+use crate::memory::{Distance, Metric, Pos, distance};
 use knorke_grid::HexLayout;
 use knorke_observe::NoopSink;
-
-const ENEMY: u32 = 1;
-const SEED: u64 = 7;
 
 /// A walking distance from a closure, counting its questions.
 struct Walk<F> {
@@ -61,27 +59,6 @@ fn member(id: u32, x: i32, y: i32, roles: u32) -> Member {
         roles,
         skill: 255,
         state: MemberState::Active,
-    }
-}
-
-fn enemy(id: u32, x: i32, y: i32, now: u32) -> Fact {
-    Fact {
-        subject: id,
-        kind: ENEMY,
-        pos: [x, y, 0],
-        seen_at: now,
-        ..Fact::default()
-    }
-}
-
-fn config(metric: Metric) -> SquadConfig {
-    SquadConfig {
-        members: 8,
-        memory: 8,
-        areas: 4,
-        inbox: 8,
-        metric,
-        ..SquadConfig::default()
     }
 }
 

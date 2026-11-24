@@ -10,52 +10,11 @@
 #![allow(clippy::disallowed_methods)] // timing tests read the clock on purpose (host side)
 mod common;
 
+use common::{H, W, check};
 use knorke_integration::pixel::prelude::*;
-use std::path::PathBuf;
 
-const W: usize = 160;
-const H: usize = 100;
-
-fn check(name: &str, rgba: &[u8]) {
-    let out = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("target")
-        .join("golden-out");
-    std::fs::create_dir_all(&out).unwrap();
-    std::fs::write(
-        out.join(format!("{name}.png")),
-        png::encode_rgba(W, H, rgba, 4),
-    )
-    .unwrap();
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden")
-        .join(format!("{name}.ppm"));
-    let mut actual = format!("P6\n{W} {H}\n255\n").into_bytes();
-    for p in rgba.as_chunks::<4>().0 {
-        actual.extend_from_slice(&p[..3]);
-    }
-    if std::env::var("PIXELRAUM_BLESS").is_ok() {
-        std::fs::write(&path, &actual).unwrap();
-        return;
-    }
-    let expected = std::fs::read(&path)
-        .unwrap_or_else(|_| panic!("missing reference {path:?}; run with PIXELRAUM_BLESS=1"));
-    if expected != actual {
-        let diff = expected.iter().zip(&actual).filter(|(a, b)| a != b).count();
-        panic!(
-            "{name}: image differs from reference ({diff} bytes); see target/golden-out/{name}.png"
-        );
-    }
-}
-
-fn sun(d: [f32; 3]) -> Sun {
-    Sun {
-        dir: Vec3::new(d[0], d[1], d[2]),
-        color: 0xffffff,
-        strength: 1.0,
-        shadows: true,
-    }
-}
+/// Colour of the sun in these scenes (white, so only shadows change the image).
+const SUN: u32 = 0xffffff;
 
 fn lit() -> Options {
     Options {
@@ -107,7 +66,7 @@ fn room(map: usize, lo: usize, hi: usize, walls: bool) -> common::Scene {
 
 fn frame(s: &mut common::Scene, o: Options, sun_dir: Option<[f32; 3]>, cam: &Camera) -> Vec<u8> {
     s.renderer.options = o;
-    s.renderer.set_sun(sun_dir.map(sun));
+    s.renderer.set_sun(sun_dir.map(|d| common::sun(d, SUN)));
     s.renderer.set_ambient(0x8090b0, 0.3);
     s.renderer.begin(cam);
     s.renderer.draw_grid(&s.grid);
@@ -350,7 +309,8 @@ fn scroll_rebuilds(holes: bool) -> Vec<u32> {
     }
     assert!(s.renderer.set_texture_scroll(tex, 0.25, 0.0));
     s.renderer.options = lit();
-    s.renderer.set_sun(Some(sun([0.5, -0.45, 1.0])));
+    s.renderer
+        .set_sun(Some(common::sun([0.5, -0.45, 1.0], SUN)));
     s.renderer.create_light(torch(4.5, 1.0, 3.5));
     (0..4)
         .map(|f| {
@@ -401,7 +361,8 @@ fn stipple_yard(
         shadow_stipple: stipple,
         ..lit()
     };
-    s.renderer.set_sun(Some(sun([0.5, -0.45, 1.0])));
+    s.renderer
+        .set_sun(Some(common::sun([0.5, -0.45, 1.0], SUN)));
     s.renderer.set_ambient(0x8090b0, 0.3);
     let cam = yard_cam();
     s.renderer.begin(&cam);

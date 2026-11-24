@@ -12,8 +12,7 @@
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
 
-#![allow(unsafe_code)] // counting allocator
-
+use knorke_contract_tests::counting_alloc::{Counting, allocations};
 use knorke_light2d::ambient_zone::{AmbientZoneParams, ZoneShape, make_stored_zone};
 use knorke_light2d::ambient_zone_culling::{AmbientZoneList, CullScene, collect_ambient_zones};
 use knorke_light2d::ambient_zone_store::AmbientZoneStore;
@@ -55,28 +54,7 @@ use knorke_light2d::{
 };
 use knorke_math::{At, Vec2, Vec3, World2};
 use knorke_types::{Reader, SnapshotBuf, restore};
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-struct Counting;
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-// SAFETY: forwards to the system allocator unchanged; only counts calls.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: same contract as the caller's.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
@@ -404,10 +382,10 @@ fn steady_state_light2d_paths_allocate_nothing() {
     for i in 0..4 {
         step(i);
     }
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = allocations();
     for i in 4..40 {
         step(i);
     }
-    let allocated = ALLOCATIONS.load(Ordering::Relaxed) - before;
+    let allocated = allocations() - before;
     assert_eq!(allocated, 0, "allocations in 36 steady-state steps");
 }

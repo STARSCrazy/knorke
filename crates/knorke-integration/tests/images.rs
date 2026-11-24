@@ -9,11 +9,12 @@
 #![allow(clippy::disallowed_methods)] // timing tests read the clock on purpose (host side)
 mod common;
 
+use common::{H, W, check};
 use knorke_integration::pixel::prelude::*;
 use std::path::PathBuf;
 
-const W: usize = 160;
-const H: usize = 100;
+/// Colour of the sun in these scenes (warm daylight).
+const SUN: u32 = 0xfff0d0;
 
 /// Orthonormal `(right, up)` for a light direction, as the sun shadow map builds it
 /// (copy of `knorke-lighting`'s private `shadow::basis`).
@@ -35,45 +36,6 @@ fn basis(fwd: Vec3) -> (Vec3, Vec3) {
     let right = n(reference.cross(f));
     let up = f.cross(right);
     (right, up)
-}
-
-fn golden_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden")
-}
-
-fn to_ppm(rgba: &[u8]) -> Vec<u8> {
-    let mut v = format!("P6\n{W} {H}\n255\n").into_bytes();
-    for p in rgba.as_chunks::<4>().0 {
-        v.extend_from_slice(&p[..3]);
-    }
-    v
-}
-
-fn check(name: &str, rgba: &[u8]) {
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("golden-out");
-    std::fs::create_dir_all(&out).unwrap();
-    std::fs::write(
-        out.join(format!("{name}.png")),
-        png::encode_rgba(W, H, rgba, 4),
-    )
-    .unwrap();
-    let path = golden_dir().join(format!("{name}.ppm"));
-    let actual = to_ppm(rgba);
-    if std::env::var("PIXELRAUM_BLESS").is_ok() {
-        std::fs::create_dir_all(golden_dir()).unwrap();
-        std::fs::write(&path, &actual).unwrap();
-        return;
-    }
-    let expected = std::fs::read(&path)
-        .unwrap_or_else(|_| panic!("missing reference {path:?}; run with PIXELRAUM_BLESS=1"));
-    if expected != actual {
-        let diff = expected.iter().zip(&actual).filter(|(a, b)| a != b).count();
-        panic!(
-            "{name}: image differs from reference ({diff} bytes); see target/golden-out/{name}.png"
-        );
-    }
 }
 
 fn render(name: &str, opts: Options, palette: bool, cam: Camera, time: f64) -> Vec<u8> {
@@ -306,15 +268,6 @@ fn light_ids_stable() {
 
 // ---- Lighting (sun + ambient) ----
 
-fn sun(dir: [f32; 3]) -> light::Sun {
-    light::Sun {
-        dir: Vec3::new(dir[0], dir[1], dir[2]),
-        color: 0xfff0d0,
-        strength: 1.0,
-        shadows: true,
-    }
-}
-
 fn lit_options() -> Options {
     Options {
         lighting: true,
@@ -379,7 +332,7 @@ fn render_lit(
     sprite: bool,
 ) -> Vec<u8> {
     s.renderer.options = opts;
-    s.renderer.set_sun(sun_dir.map(sun));
+    s.renderer.set_sun(sun_dir.map(|d| common::sun(d, SUN)));
     s.renderer.set_ambient(0x8090b0, ambient);
     let r = &mut s.renderer;
     r.begin(cam);
@@ -551,7 +504,7 @@ fn render_torch(
 ) -> (Vec<u8>, Vec<Option<Vec3>>) {
     let opts = lit_options();
     s.renderer.options = opts;
-    s.renderer.set_sun(sun_dir.map(sun));
+    s.renderer.set_sun(sun_dir.map(|d| common::sun(d, SUN)));
     s.renderer.set_ambient(0x8090b0, ambient);
     s.renderer.set_time(time);
     let r = &mut s.renderer;
@@ -894,7 +847,7 @@ fn sun_shadow_stable_while_gliding() {
             s.renderer.options = opts;
             s.renderer.set_sun(Some(light::Sun {
                 shadows,
-                ..sun(sun_dir)
+                ..common::sun(sun_dir, SUN)
             }));
             s.renderer.set_ambient(0x8090b0, 0.3);
             let r = &mut s.renderer;
@@ -985,7 +938,8 @@ fn torch_yard_run(
         point_shadow_soft: soft,
         ..lit_options()
     };
-    s.renderer.set_sun(Some(sun([0.5, -0.45, 1.0])));
+    s.renderer
+        .set_sun(Some(common::sun([0.5, -0.45, 1.0], SUN)));
     s.renderer.set_ambient(0x8090b0, 0.3);
     let cam = yard_camera();
     let torch_at = |k: usize, f: usize| {
@@ -1132,7 +1086,8 @@ fn timing_soft_sun_wiz() {
                 shadow_soft: soft,
                 ..lit_options()
             };
-            s.renderer.set_sun(Some(sun([0.5, -0.45, 1.0])));
+            s.renderer
+                .set_sun(Some(common::sun([0.5, -0.45, 1.0], SUN)));
             s.renderer.set_ambient(0x8090b0, 0.3);
             let mut times = Vec::new();
             for f in 0..61 {
@@ -1365,7 +1320,8 @@ fn shadow_cache_follows_changes() {
     let setup = |transparent_wall: bool| {
         let mut s = courtyard(true);
         s.renderer.options = lit_options();
-        s.renderer.set_sun(Some(sun([0.5, -0.45, 1.0])));
+        s.renderer
+            .set_sun(Some(common::sun([0.5, -0.45, 1.0], SUN)));
         s.renderer.set_ambient(0x8090b0, 0.3);
         if transparent_wall {
             s.renderer.replace_texture(2, glass.clone());
@@ -1425,7 +1381,8 @@ fn shadow_cache_follows_changes() {
     let no_wall = frame(&mut s);
     let mut open = courtyard(false);
     open.renderer.options = lit_options();
-    open.renderer.set_sun(Some(sun([0.5, -0.45, 1.0])));
+    open.renderer
+        .set_sun(Some(common::sun([0.5, -0.45, 1.0], SUN)));
     open.renderer.set_ambient(0x8090b0, 0.3);
     open.renderer.create_light(torch([4.5, 1.0, 3.0], true));
     assert_eq!(
@@ -1502,7 +1459,8 @@ fn scroll_moves_texture() {
 /// Lit courtyard with an animated billboard standing behind the camera: only its shadow is visible.
 fn render_anim_shadow(s: &mut common::Scene, anim: i32, time: f64) -> Vec<u8> {
     s.renderer.options = lit_options();
-    s.renderer.set_sun(Some(sun([0.0, -0.6, -1.0])));
+    s.renderer
+        .set_sun(Some(common::sun([0.0, -0.6, -1.0], SUN)));
     s.renderer.set_ambient(0x8090b0, 0.3);
     s.renderer.set_time(time);
     let r = &mut s.renderer;
@@ -1925,7 +1883,7 @@ fn render_particles(
         threads,
         ..lit_options()
     };
-    s.renderer.set_sun(Some(sun([0.5, -0.8, 0.4])));
+    s.renderer.set_sun(Some(common::sun([0.5, -0.8, 0.4], SUN)));
     s.renderer.set_ambient(0x8090b0, 0.35);
     s.renderer.set_time(time);
     let r = &mut s.renderer;
@@ -2618,7 +2576,8 @@ fn soft_off_or_invalid_is_hard() {
     for soft in [0.0, -0.2, -f32::INFINITY, f32::NAN] {
         let mut s = courtyard(true);
         s.renderer.options = soft_options(soft);
-        s.renderer.set_sun(Some(sun([0.5, -0.45, 1.0])));
+        s.renderer
+            .set_sun(Some(common::sun([0.5, -0.45, 1.0], SUN)));
         s.renderer.set_ambient(0x8090b0, 0.3);
         s.renderer.begin(&yard_camera());
         s.renderer.draw_grid(&s.grid);
@@ -2635,7 +2594,8 @@ fn soft_huge_is_clamped() {
     let render = |soft: f32| {
         let mut s = courtyard(true);
         s.renderer.options = soft_options(soft);
-        s.renderer.set_sun(Some(sun([0.5, -0.45, 1.0])));
+        s.renderer
+            .set_sun(Some(common::sun([0.5, -0.45, 1.0], SUN)));
         s.renderer.set_ambient(0x8090b0, 0.3);
         s.renderer.create_light(torch([4.5, 1.0, 5.0], true));
         s.renderer.begin(&yard_camera());
@@ -2677,7 +2637,7 @@ fn soft_sun_shadow_stable_while_gliding() {
             s.renderer.set_sun(Some(light::Sun {
                 shadows,
                 strength: if sun_on { 1.0 } else { 0.0 },
-                ..sun(sun_dir)
+                ..common::sun(sun_dir, SUN)
             }));
             s.renderer.set_ambient(0x8090b0, 0.3);
             let r = &mut s.renderer;
@@ -2794,7 +2754,7 @@ fn wiz_wall_render(
     } else {
         s.renderer.set_sun(Some(light::Sun {
             shadows,
-            ..sun([1.0, -0.8, -0.6])
+            ..common::sun([1.0, -0.8, -0.6], SUN)
         }));
     }
     s.renderer.set_ambient(0x8090b0, 0.3);
@@ -2897,7 +2857,8 @@ fn shift_render(w: usize, h: usize, cam: &Camera) -> Vec<u8> {
         pick: true,
         ..Options::default()
     };
-    s.renderer.set_sun(Some(sun([0.5, -0.6, -0.4])));
+    s.renderer
+        .set_sun(Some(common::sun([0.5, -0.6, -0.4], SUN)));
     s.renderer.set_ambient(0x8090b0, 0.3);
     s.renderer.create_light(torch([2.5, 0.7, 2.5], true));
     s.renderer.create_emitter(emitter(

@@ -5,32 +5,10 @@
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
 
-#![allow(unsafe_code)] // counting allocator
-
+use knorke_contract_tests::counting_alloc::{Counting, allocations};
 use knorke_light2d::occlusion::{JfaParams, RectParams, ShiftCopy, jfa_steps};
 use knorke_light2d::shadow::{DirtyRect, DirtyRectList};
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-struct Counting;
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-// SAFETY: forwards to the system allocator unchanged; only counts calls.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: same contract as the caller's.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
@@ -41,7 +19,7 @@ fn occlusion_frame_values_allocate_nothing() {
         rects.add(DirtyRect::new(i * 3, 0, i * 3 + 2, 2));
     }
     let mut block = RectParams::new();
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = allocations();
     let mut sum = 0u64;
     for frame in 0..100u32 {
         sum += u64::from(block.write(&rects, 192, 128));
@@ -56,7 +34,7 @@ fn occlusion_frame_values_allocate_nothing() {
         }
         sum += u64::from(block.bytes()[1024]);
     }
-    let after = ALLOCATIONS.load(Ordering::Relaxed);
+    let after = allocations();
     assert!(sum > 0);
     assert_eq!(after - before, 0, "the occlusion frame values allocated");
 }

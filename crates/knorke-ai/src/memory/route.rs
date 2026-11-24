@@ -158,18 +158,13 @@ impl knorke_types::SnapshotValue for Route {
     }
 }
 
-/// A plain value: the metric of a routing or walking rule.
-impl knorke_types::SnapshotValue for Metric {
-    fn put(&self, w: &mut knorke_types::Writer<'_>) {
-        w.put(&(*self as u8));
-    }
-    fn get(r: &mut knorke_types::Reader<'_>) -> Result<Self, knorke_types::SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Metric::Euclid,
-            1 => Metric::Manhattan,
-            2 => Metric::Chebyshev,
-            3 => Metric::Hex,
-            _ => return Err(knorke_types::SnapshotError::Invalid("knorke.ai: metric")),
-        })
-    }
+// A plain value: the metric of a routing or walking rule.
+// Tags pinned by `snapshot_tests::value_bytes_are_pinned`.
+knorke_types::by_tag! {
+    Metric, knorke_types::SnapshotError::Invalid("knorke.ai: metric") => {
+        0 => Euclid,
+        1 => Manhattan,
+        2 => Chebyshev,
+        3 => Hex,
+    };
 }

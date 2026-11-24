@@ -1,112 +1,11 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax-decide/src/group/crew_tests.rs.
+use super::test_support::*;
 use super::*;
 use crate::memory::{Area, Fact, Message, Metric, Pos};
 use knorke_grid::HexLayout;
 
-/// Fact kind of an enemy.
-const ENEMY: u32 = 1;
 /// Ticks per cell of the scripted walk.
 const STEP: u32 = 2;
-const RADIO: Channel = Channel::Radio {
-    base: 2,
-    per_unit: 1,
-};
-const SEED: u64 = 7;
-/// The members of the flank scene (the former `examples/squad.rs` of
-/// sagax-decide, now knorke-ai): id, x, y.
-const MEMBERS: [(u32, i32, i32); 4] = [(1, 0, 0), (2, 0, 2), (3, 0, -2), (4, -3, 0)];
-const SKILL: u8 = 192;
-
-fn flank_spots() -> [Spot; 4] {
-    [
-        Spot {
-            pos: [16, 0, 0],
-            tags: TAG_COVER,
-        },
-        Spot {
-            pos: [16, 2, 0],
-            tags: 0,
-        },
-        Spot {
-            pos: [20, 4, 0],
-            tags: TAG_HIGH,
-        },
-        Spot {
-            pos: [20, -4, 0],
-            tags: 0,
-        },
-    ]
-}
-
-fn scene_config(inbox: usize) -> SquadConfig {
-    SquadConfig {
-        members: 4,
-        memory: 8,
-        areas: 4,
-        inbox,
-        metric: Metric::Chebyshev,
-        ..SquadConfig::default()
-    }
-}
-
-fn scene_member(id: u32, x: i32, y: i32) -> Member {
-    Member {
-        id,
-        pos: [x, y, 0],
-        roles: 0,
-        skill: SKILL,
-        state: MemberState::Active,
-    }
-}
-
-/// Everything of the flank scene after the members are in: channels,
-/// leader, skill, tactics, the leader's sighting and member 2's report.
-fn setup_scene(sq: &mut Squad, t0: u32) {
-    for (id, ..) in MEMBERS {
-        if id != 1 {
-            assert!(sq.set_channel(id, RADIO));
-        }
-    }
-    assert!(sq.set_leader(1));
-    sq.set_skill(SKILL);
-    sq.set_target_kind(ENEMY);
-    sq.add_tactic(tactics::rush());
-    sq.add_tactic(tactics::formation(Shape::Line, 2));
-    sq.add_tactic(tactics::flank(3, 4));
-    let told = Fact {
-        subject: 11,
-        kind: ENEMY,
-        pos: [24, 10, 0],
-        seen_at: t0,
-        ..Fact::default()
-    };
-    assert!(sq.report(Message::enemy(2, told), t0));
-}
-
-fn leader_sees(t0: u32) -> Fact {
-    Fact {
-        subject: 10,
-        kind: ENEMY,
-        pos: [20, 0, 0],
-        seen_at: t0,
-        ..Fact::default()
-    }
-}
-
-fn flank_crew(inbox: usize, t0: u32) -> Crew {
-    let mut crew = Crew::new(CrewConfig {
-        squad: scene_config(inbox),
-        ..CrewConfig::default()
-    })
-    .unwrap();
-    for (id, x, y) in MEMBERS {
-        assert!(crew.add_member(scene_member(id, x, y)).is_some());
-    }
-    setup_scene(crew.squad_mut(), t0);
-    crew.observe(t0, leader_sees(t0));
-    crew
-}
-
 /// One cell from `from` toward `to` (each axis by at most 1).
 fn step_toward(from: Pos, to: Pos) -> Pos {
     let s = |a: i32, b: i32| a + (b - a).signum();
@@ -187,11 +86,11 @@ struct HandMember {
 
 /// The flank scene with the blocks by hand, in the crew's tick order.
 fn run_by_hand(len: u32) -> Vec<(u32, CrewEvent)> {
-    let mut sq = Squad::new(scene_config(8)).unwrap();
+    let mut sq = Squad::new(flank_config(8)).unwrap();
     for (id, x, y) in MEMBERS {
-        sq.group_mut().add(scene_member(id, x, y));
+        sq.group_mut().add(flank_member(id, x, y));
     }
-    setup_scene(&mut sq, 0);
+    setup_flank(&mut sq, 0);
     sq.observe(0, leader_sees(0));
     let spots = flank_spots();
     let mut walks = [Walk::default(); 4];
@@ -483,15 +382,15 @@ fn crew_arrival_waits_for_room_in_the_inbox() {
 /// order (tick 10), nobody walking.
 fn crew_with_orders(arrive_radius: u32) -> Crew {
     let mut crew = Crew::new(CrewConfig {
-        squad: scene_config(8),
+        squad: flank_config(8),
         arrive_radius,
         ..CrewConfig::default()
     })
     .unwrap();
     for (id, x, y) in MEMBERS {
-        assert!(crew.add_member(scene_member(id, x, y)).is_some());
+        assert!(crew.add_member(flank_member(id, x, y)).is_some());
     }
-    setup_scene(crew.squad_mut(), 0);
+    setup_flank(crew.squad_mut(), 0);
     crew.observe(0, leader_sees(0));
     let mut events = Vec::new();
     for t in 0..=10 {
@@ -744,7 +643,7 @@ fn crew_keeper_slots_follow_the_group() {
     assert!(
         crew.squad_mut()
             .group_mut()
-            .add(scene_member(7, 0, 0))
+            .add(flank_member(7, 0, 0))
             .is_some()
     );
     let mut events = Vec::new();
@@ -858,7 +757,7 @@ fn crew_hex_spots_come_back_in_offset_coords() {
         let mut crew = Crew::new(CrewConfig {
             squad: SquadConfig {
                 metric: Metric::Hex,
-                ..scene_config(8)
+                ..flank_config(8)
             },
             hex_layout: Some(layout),
             ..CrewConfig::default()
@@ -869,7 +768,7 @@ fn crew_hex_spots_come_back_in_offset_coords() {
         let q = matches!(layout, HexLayout::OddQ | HexLayout::EvenQ);
         let flip = |x: i32, y: i32| -> Pos { if q { [y, x, 0] } else { [x, y, 0] } };
         for (id, x, y) in [(1, 0, 1), (2, 1, 3), (3, 1, -1), (4, -2, 1)] {
-            assert!(crew.add_member(scene_member(id, 0, 0)).is_some());
+            assert!(crew.add_member(flank_member(id, 0, 0)).is_some());
             assert!(crew.set_pos(id, flip(x, y)));
         }
         let sq = crew.squad_mut();
@@ -941,13 +840,13 @@ fn crew_hex_observe_and_danger_go_in_axial() {
     let mut crew = Crew::new(CrewConfig {
         squad: SquadConfig {
             metric: Metric::Hex,
-            ..scene_config(8)
+            ..flank_config(8)
         },
         hex_layout: Some(layout),
         ..CrewConfig::default()
     })
     .unwrap();
-    assert!(crew.add_member(scene_member(1, 3, 3)).is_some());
+    assert!(crew.add_member(flank_member(1, 3, 3)).is_some());
     assert_eq!(
         crew.squad().group().get(0).unwrap().pos,
         layout.to_axial_pos([3, 3, 0])
@@ -1019,11 +918,11 @@ fn crew_clears_goals_when_the_plan_ends() {
 #[test]
 fn crew_no_plan_without_a_plan_leaves_keepers_alone() {
     let mut crew = Crew::new(CrewConfig {
-        squad: scene_config(8),
+        squad: flank_config(8),
         ..CrewConfig::default()
     })
     .unwrap();
-    assert!(crew.add_member(scene_member(1, 0, 0)).is_some());
+    assert!(crew.add_member(flank_member(1, 0, 0)).is_some());
     crew.squad_mut().add_tactic(tactics::rush());
     let goal = Goal {
         kind: GoalKind::Move,
@@ -1316,7 +1215,7 @@ fn run_hex_offset(place_at: Pos, with_spots: bool) -> (OffsetOnly, Vec<Option<Po
     let mut crew = Crew::new(CrewConfig {
         squad: SquadConfig {
             metric: Metric::Hex,
-            ..scene_config(8)
+            ..flank_config(8)
         },
         hex_layout: Some(layout),
         ..CrewConfig::default()
@@ -1326,7 +1225,7 @@ fn run_hex_offset(place_at: Pos, with_spots: bool) -> (OffsetOnly, Vec<Option<Po
     // of the three (so the centre is a given position too).
     let members: [(u32, Pos); 3] = [(1, [3, 1, 0]), (2, [5, 3, 0]), (3, [1, -1, 0])];
     for (id, p) in members {
-        assert!(crew.add_member(scene_member(id, p[0], p[1])).is_some());
+        assert!(crew.add_member(flank_member(id, p[0], p[1])).is_some());
     }
     let target: Pos = [9, 5, 0];
     let friend: Pos = [11, 7, 0];
@@ -1652,13 +1551,13 @@ fn crew_hex_trace_is_in_offset_coords() {
     let mut crew = Crew::new(CrewConfig {
         squad: SquadConfig {
             metric: Metric::Hex,
-            ..scene_config(8)
+            ..flank_config(8)
         },
         hex_layout: Some(layout),
         ..CrewConfig::default()
     })
     .unwrap();
-    assert!(crew.add_member(scene_member(1, 0, 1)).is_some());
+    assert!(crew.add_member(flank_member(1, 0, 1)).is_some());
     let fact = Fact {
         subject: 10,
         kind: ENEMY,

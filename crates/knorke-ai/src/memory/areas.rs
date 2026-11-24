@@ -233,33 +233,9 @@ impl Areas {
     }
 }
 
-impl SnapshotValue for Area {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.kind);
-        w.put(&self.pos);
-        w.put(&self.radius);
-        w.put(&self.strength);
-        w.put(&self.since);
-        w.put(&self.lifetime);
-        w.put(&self.data);
-        w.put(&self.source);
-        w.put(&self.blocking);
-        w.put(&self.has_source);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Area {
-            kind: r.get()?,
-            pos: r.get()?,
-            radius: r.get()?,
-            strength: r.get()?,
-            since: r.get()?,
-            lifetime: r.get()?,
-            data: r.get()?,
-            source: r.get()?,
-            blocking: r.get()?,
-            has_source: r.get()?,
-        })
-    }
+// Field order pinned by `snapshot_tests::value_bytes_are_pinned`.
+knorke_types::by_fields! {
+    Area { kind, pos, radius, strength, since, lifetime, data, source, blocking, has_source };
 }
 
 /// One character's areas with their capacity. Restore reuses the buffer and rejects a zero

@@ -6,33 +6,11 @@
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
 
-#![allow(unsafe_code)] // counting allocator
-
+use knorke_contract_tests::counting_alloc::{Counting, allocations};
 use knorke_light2d::ObstacleStore;
 use knorke_light2d::obstacle::{CellRect, TileGridDesc};
 use knorke_types::{Reader, SnapshotBuf, restore};
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-struct Counting;
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-// SAFETY: forwards to the system allocator unchanged; only counts calls.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: same contract as the caller's.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
@@ -82,7 +60,7 @@ fn steady_state_cell_and_pattern_edits_allocate_nothing() {
     let mut target = ObstacleStore::new();
     restore(&mut Reader::new(snap.bytes()), &mut target).unwrap();
 
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = allocations();
     let mut sum = 0.0f32;
     for t in 0..200u32 {
         let x = t % 30;
@@ -130,7 +108,7 @@ fn steady_state_cell_and_pattern_edits_allocate_nothing() {
         // Restoring a store with grids, patterns and a cell log allocates nothing either.
         restore(&mut Reader::new(snap.bytes()), &mut target).unwrap();
     }
-    let allocated = ALLOCATIONS.load(Ordering::Relaxed) - before;
+    let allocated = allocations() - before;
     assert!(sum > 0.0);
     assert_eq!(
         allocated, 0,

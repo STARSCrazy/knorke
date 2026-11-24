@@ -583,6 +583,97 @@ impl<C: SnapshotValue> SnapshotValue for CommandBuffer<C> {
     }
 }
 
+/// Implements [`SnapshotValue`] for plain structs: the listed fields in the listed order,
+/// nothing else (no length, no tag). Every field must be listed, or the `get` side does not
+/// compile.
+///
+/// `get_into` keeps the default (`*self = get()`), so use it only for types without
+/// buffers to reuse; a struct holding a `Vec` needs a hand-written `get_into` to restore
+/// without allocating.
+///
+/// ```
+/// # use knorke_types::{Reader, SnapshotValue, Writer, by_fields};
+/// #[derive(Debug, PartialEq)]
+/// struct Hit { at: u32, damage: i16 }
+/// by_fields! { Hit { at, damage } }
+///
+/// let mut bytes = Vec::new();
+/// Writer::new(&mut bytes).put(&Hit { at: 1, damage: -2 });
+/// assert_eq!(bytes, [1, 0, 0, 0, 0xfe, 0xff]);
+/// assert_eq!(Reader::new(&bytes).get::<Hit>(), Ok(Hit { at: 1, damage: -2 }));
+/// ```
+#[macro_export]
+macro_rules! by_fields {
+    ($($t:ty { $($f:ident),+ $(,)? });+ $(;)?) => {$(
+        impl $crate::SnapshotValue for $t {
+            #[inline]
+            fn put(&self, w: &mut $crate::Writer<'_>) { $( w.put(&self.$f); )+ }
+            #[inline]
+            fn get(
+                r: &mut $crate::Reader<'_>,
+            ) -> ::core::result::Result<Self, $crate::SnapshotError> {
+                ::core::result::Result::Ok(Self { $( $f: r.get()? ),+ })
+            }
+        }
+    )+};
+}
+
+/// Implements [`SnapshotValue`] for enums: a `u8` tag, then the variant's fields in the
+/// listed order. Tag numbers are written out, so reordering or adding variants in the
+/// enum cannot change existing snapshots. An unknown tag on read returns the given error
+/// (an expression of type [`SnapshotError`]), before anything else is read.
+///
+/// Variants are written `tag => Name`, `tag => Name(a, b)` (tuple fields, any binding
+/// names) or `tag => Name { x, y }` (named fields). `get_into` keeps the default.
+///
+/// ```
+/// # use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer, by_tag};
+/// #[derive(Debug, PartialEq)]
+/// enum Order { Halt, Go(i8), Aim { x: u8, y: u8 } }
+/// by_tag! { Order, SnapshotError::Invalid("order tag") => {
+///     0 => Halt,
+///     1 => Go(dir),
+///     2 => Aim { x, y },
+/// } }
+///
+/// let mut bytes = Vec::new();
+/// Writer::new(&mut bytes).put(&Order::Aim { x: 3, y: 4 });
+/// assert_eq!(bytes, [2, 3, 4]);
+/// assert_eq!(Reader::new(&[1, 0xff]).get::<Order>(), Ok(Order::Go(-1)));
+/// assert_eq!(Reader::new(&[9]).get::<Order>(), Err(SnapshotError::Invalid("order tag")));
+/// ```
+#[macro_export]
+macro_rules! by_tag {
+    ($($t:ty, $err:expr => {
+        $( $tag:literal => $v:ident $( ( $($a:ident),+ $(,)? ) )? $( { $($f:ident),+ $(,)? } )? ),+ $(,)?
+    } );+ $(;)?) => {$(
+        impl $crate::SnapshotValue for $t {
+            fn put(&self, w: &mut $crate::Writer<'_>) {
+                match self {
+                    $( Self::$v $( ( $($a),+ ) )? $( { $($f),+ } )? => {
+                        let tag: u8 = $tag;
+                        w.put(&tag);
+                        $( $( w.put($a); )+ )?
+                        $( $( w.put($f); )+ )?
+                    } )+
+                }
+            }
+            fn get(
+                r: &mut $crate::Reader<'_>,
+            ) -> ::core::result::Result<Self, $crate::SnapshotError> {
+                ::core::result::Result::Ok(match r.get::<u8>()? {
+                    $( $tag => Self::$v
+                        // Tuple arguments and struct fields are evaluated left to right,
+                        // so the fields are read in the listed order.
+                        $( ( $( { let $a = r.get()?; $a } ),+ ) )?
+                        $( { $( $f: r.get()? ),+ } )?, )+
+                    _ => return ::core::result::Result::Err($err),
+                })
+            }
+        }
+    )+};
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
