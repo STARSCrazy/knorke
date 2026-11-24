@@ -3,7 +3,8 @@
 //! into a warm buffer, moving and re-describing obstacles with their dirty tracking, snapshot save
 //! of the obstacle store, the pixel and normal-map codecs, collecting the lights of a frame (with
 //! animations, masks, flicker and caster filters) into a reused list, and snapshot round trips
-//! of the animation and mask stores (ADR 0006, ADR 0010).
+//! of the animation and mask stores, and the shadow cache plan deciding incremental mask updates
+//! (ADR 0006, ADR 0010).
 //!
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
@@ -19,6 +20,7 @@ use knorke_light2d::light::{Height, LightDesc, LightType, ShadowFilter};
 use knorke_light2d::light_culling::{CullSettings, LightList, LightModes, collect_lights};
 use knorke_light2d::mask::{MaskPreset, MaskShape};
 use knorke_light2d::obstacle::{ShapeDesc, TileGridDesc};
+use knorke_light2d::shadow::{MaskPlanInput, MaskUpdateLimits, MaskUpdatePlan};
 use knorke_light2d::{
     AnimationStore, LightStore, MaskStore, NoResources, ObstacleStore, Projection, StoreResources,
     Triangulator,
@@ -130,8 +132,36 @@ fn steady_state_light2d_paths_allocate_nothing() {
         .unwrap();
     let mut obstacle_snap = SnapshotBuf::new();
     let mut world_triangles = Vec::new();
+    // Shadow cache plan: a static wall, dynamic obstacles that move and a panning camera.
+    let mut shadow_obstacles = ObstacleStore::new();
+    shadow_obstacles
+        .create_shape(&ShapeDesc::rect(8.0, 1.0))
+        .unwrap();
+    let mut shadow_movers = Vec::new();
+    for _ in 0..6 {
+        let mut d = ShapeDesc::polygon(&poly[..]);
+        d.common.dynamic = true;
+        shadow_movers.push(shadow_obstacles.create_shape(&d).unwrap());
+    }
+    let mut plan = MaskUpdatePlan::new(MaskUpdateLimits {
+        field_grow: 4,
+        seed_grow: 2,
+        full_rebuild_ratio: 1.0,
+    });
 
     let mut step = |i: u32| {
+        // Shadow cache plan: move some dynamic obstacles, pan, decide and commit.
+        for (k, &id) in shadow_movers.iter().enumerate().skip(i as usize % 2) {
+            let p = At::<World2, Vec2>::new(Vec2::new(4.0 * k as f32 + i as f32, 3.0));
+            shadow_obstacles.set_transform(id, p, 0.0).unwrap();
+        }
+        let mut projection = Projection::IDENTITY;
+        projection.origin = At::new(Vec2::new(i as f32, 0.5 * i as f32));
+        let input = MaskPlanInput::new(&shadow_obstacles, &projection, 128, 64, 1.0);
+        let _ = plan.decide(&input);
+        let _ = (plan.mask_rects().area(), plan.seed_rects().area());
+        plan.commit();
+
         // Obstacles: move, re-describe in place (same sizes), consume the dirty sets, save.
         for (k, &id) in moving.iter().enumerate() {
             let p = At::<World2, Vec2>::new(Vec2::new(k as f32, i as f32));
