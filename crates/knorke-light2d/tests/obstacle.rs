@@ -179,7 +179,7 @@ fn store_copies_the_callers_arrays() {
 
     let t = store.get(grid).unwrap();
     assert_eq!(t.kind, ObstacleKind::TileGrid);
-    assert_eq!(t.grid.solid, [1, 0, 0, 1]);
+    assert_eq!(store.tile(grid).unwrap().solid, [1, 0, 0, 1]);
     assert_eq!(store.len(), 2);
 }
 
@@ -442,7 +442,7 @@ fn tile_bottoms_per_cell_are_validated_and_copied() {
         t.base_levels = Some(&base);
         store.create_tile_grid(&t).unwrap()
     };
-    assert_eq!(store.get(id).unwrap().grid.base_levels, [7, 0, 2, 1]);
+    assert_eq!(store.tile(id).unwrap().base_levels, [7, 0, 2, 1]);
 }
 
 #[test]
@@ -508,12 +508,12 @@ fn cell_opacities_are_copied() {
         t.opacity = Some(&opacity);
         store.create_tile_grid(&t).unwrap()
     };
-    assert_eq!(store.get(id).unwrap().grid.opacity, [255, 77, 0, 9]);
+    assert_eq!(store.tile(id).unwrap().opacity, [255, 77, 0, 9]);
     // Solid cells below 255: 77 and 0 (the 9 is in an empty cell).
     assert_eq!(store.get(id).unwrap().grid.partial_cells, 2);
 
     let plain = store.create_tile_grid(&tiles(&[1, 0, 0, 1])).unwrap();
-    assert!(store.get(plain).unwrap().grid.opacity.is_empty());
+    assert!(store.tile(plain).unwrap().opacity.is_empty());
 }
 
 #[test]
@@ -570,8 +570,8 @@ fn cell_edge_strips_default_to_none_and_are_validated_and_copied() {
     let mut store = ObstacleStore::new();
     let cells = [1u8, 1, 1, 0];
     let id = store.create_tile_grid(&tiles(&cells)).unwrap();
-    let g = &store.get(id).unwrap().grid;
-    assert_eq!(g.edge_width, 0.0);
+    let g = store.tile(id).unwrap();
+    assert_eq!(g.grid.edge_width, 0.0);
     assert!(g.edges.is_empty());
 
     let mut t = tiles(&cells);
@@ -598,7 +598,7 @@ fn cell_edge_strips_default_to_none_and_are_validated_and_copied() {
         t.edges = Some(&edges);
         store.create_tile_grid(&t).unwrap()
     };
-    assert_eq!(store.get(h).unwrap().grid.edges, [0, 3, 15, 9]);
+    assert_eq!(store.tile(h).unwrap().edges, [0, 3, 15, 9]);
     // Edge cells count only solid cells with bits: cells 1 and 2 (cell 3 is empty).
     assert_eq!(store.get(h).unwrap().grid.edge_cells, 2);
 
@@ -632,7 +632,7 @@ fn an_obstacle_can_change_its_kind() {
     store.set_shape(id, &ShapeDesc::circle(1.0)).unwrap();
     let s = store.get(id).unwrap();
     assert_eq!(s.kind, ObstacleKind::Circle);
-    assert!(s.grid.solid.is_empty() && s.grid.columns == 0);
+    assert!(store.tile(id).is_none() && s.grid.columns == 0);
 }
 
 // ---- batches ----
@@ -1060,11 +1060,13 @@ fn restore_rejects_foreign_triangles_and_stray_spans() {
     store.create_shape(&ShapeDesc::circle(2.0)).unwrap();
     let mut buf = SnapshotBuf::new();
     buf.save(&store);
-    // The last vertex of the triangle arena is the tail of the stream before the empty outline
-    // arena (an 8 byte length prefix with 0): nudge its last float.
+    // The last vertex of the triangle arena is followed by the empty outline, byte and word
+    // arenas (an 8 byte length prefix each) and the cell log (version + 64 entries of a handle
+    // and four u32): nudge its last float.
     let mut bytes = buf.bytes().to_vec();
     let n = bytes.len();
-    let at = n - 8 /* outline arena length */ - 4;
+    let cell_log = 8 + 64 * (8 + 4 * 4);
+    let at = n - cell_log - 3 * 8 /* three empty arenas */ - 4;
     bytes[at] ^= 0x01;
     let r = restore(&mut Reader::new(&bytes), &mut ObstacleStore::new());
     assert!(matches!(r, Err(SnapshotError::Invalid(_))), "{r:?}");

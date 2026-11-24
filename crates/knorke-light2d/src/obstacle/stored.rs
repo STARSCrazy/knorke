@@ -13,8 +13,10 @@
 //! into each (P13b, so a restore allocates nothing, ADR 0010). Read them through
 //! [`ObstacleStore::triangles`](super::ObstacleStore::triangles) and
 //! [`ObstacleStore::outline`](super::ObstacleStore::outline). The pattern fields of
-//! `StoredObstacle` and the cell editing of `TileGrid.*` come with P14/P15 and are not here;
-//! the cell channels of a tile grid are still owned per obstacle (P14 decides their storage).
+//! `StoredObstacle` live in [`PatternAssignment`] (P14). The cell channels of a tile grid and the
+//! pattern table and cell indices are in byte and word arenas of the store as well (P14), so a
+//! restore allocates nothing for them either; read them through
+//! [`ObstacleStore::tile`](super::ObstacleStore::tile).
 //!
 //! The snapshot header of an obstacle holds the description and the spans. The store saves the
 //! arenas exactly and checks on restore that the stored triangles are those of the description,
@@ -22,6 +24,7 @@
 
 use super::desc::{ObstacleCommon, Shape, ShapeDesc, TileGridDesc};
 use super::error::ObstacleError;
+use super::patterns::PatternAssignment;
 use crate::triangulate::{Triangulator, circle_triangles};
 use knorke_math::{Vec2, det};
 use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
@@ -69,8 +72,9 @@ pub enum ObstacleKind {
     TileGrid,
 }
 
-/// The cells of a tile grid; every channel holds `columns * rows` bytes or is empty when unused.
-#[derive(Clone, Debug, PartialEq)]
+/// The cells of a tile grid. Every channel is a [`Span`] of the byte arena of the store holding
+/// `columns * rows` bytes, or [`Span::EMPTY`] when the channel is unused.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TileCells {
     /// Columns.
     pub columns: u32,
@@ -83,13 +87,13 @@ pub struct TileCells {
     /// Width of the edge strips.
     pub edge_width: f32,
     /// Top level per cell, `0` empty.
-    pub solid: Vec<u8>,
+    pub solid: Span,
     /// Bottom level per cell, or empty.
-    pub base_levels: Vec<u8>,
+    pub base_levels: Span,
     /// Opacity per cell (255 opaque), or empty.
-    pub opacity: Vec<u8>,
+    pub opacity: Span,
     /// Edge bits per cell, or empty.
-    pub edges: Vec<u8>,
+    pub edges: Span,
     /// Highest solid value, for the finite top with `level_height`.
     pub max_level: u8,
     /// Solid cells with an opacity below 255.
@@ -106,10 +110,10 @@ impl Default for TileCells {
             cell_size: Vec2::new(1.0, 1.0),
             level_height: 0.0,
             edge_width: 0.0,
-            solid: Vec::new(),
-            base_levels: Vec::new(),
-            opacity: Vec::new(),
-            edges: Vec::new(),
+            solid: Span::EMPTY,
+            base_levels: Span::EMPTY,
+            opacity: Span::EMPTY,
+            edges: Span::EMPTY,
             max_level: 0,
             partial_cells: 0,
             edge_cells: 0,
@@ -117,58 +121,42 @@ impl Default for TileCells {
     }
 }
 
-fn copy_channel(input: Option<&[u8]>, out: &mut Vec<u8>) {
-    out.clear();
-    if let Some(c) = input {
-        out.extend_from_slice(c);
-    }
-}
-
 impl TileCells {
-    /// Back to "no grid", keeping the buffers' capacity.
-    fn reset(&mut self) {
-        self.columns = 0;
-        self.rows = 0;
-        self.cell_size = Vec2::new(1.0, 1.0);
-        self.level_height = 0.0;
-        self.edge_width = 0.0;
-        self.solid.clear();
-        self.base_levels.clear();
-        self.opacity.clear();
-        self.edges.clear();
-        self.max_level = 0;
-        self.partial_cells = 0;
-        self.edge_cells = 0;
+    /// Back to "no grid".
+    pub(super) fn reset(&mut self) {
+        *self = Self::default();
     }
 
-    /// Copies a validated description, reusing the buffers.
-    fn fill(&mut self, desc: &TileGridDesc<'_>) {
+    /// Takes over a validated description whose channels the store put into its byte arena
+    /// (`channels` = solid, base levels, opacity, edges) and counts the derived values.
+    pub(super) fn assign(&mut self, desc: &TileGridDesc<'_>, channels: [Span; 4]) {
         self.columns = desc.columns;
         self.rows = desc.rows;
         self.cell_size = desc.cell_size;
         self.level_height = desc.level_height;
         self.edge_width = desc.edge_width;
-        copy_channel(Some(desc.solid), &mut self.solid);
-        copy_channel(desc.base_levels, &mut self.base_levels);
-        copy_channel(desc.opacity, &mut self.opacity);
-        copy_channel(desc.edges, &mut self.edges);
-        self.count();
+        [self.solid, self.base_levels, self.opacity, self.edges] = channels;
+        self.count(
+            desc.solid,
+            desc.opacity.unwrap_or(&[]),
+            desc.edges.unwrap_or(&[]),
+        );
     }
 
-    /// Counts the derived values of the cells from scratch.
-    fn count(&mut self) {
+    /// Counts the derived values of the cells from scratch (absent channels are empty slices).
+    pub(super) fn count(&mut self, solid: &[u8], opacity: &[u8], edges: &[u8]) {
         self.max_level = 0;
         self.partial_cells = 0;
         self.edge_cells = 0;
-        for (i, &s) in self.solid.iter().enumerate() {
+        for (i, &s) in solid.iter().enumerate() {
             if s == 0 {
                 continue;
             }
             if s > self.max_level {
                 self.max_level = s;
             }
-            self.partial_cells += u32::from(self.opacity.get(i).is_some_and(|&o| o < 255));
-            self.edge_cells += u32::from(self.edges.get(i).is_some_and(|&e| e != 0));
+            self.partial_cells += u32::from(opacity.get(i).is_some_and(|&o| o < 255));
+            self.edge_cells += u32::from(edges.get(i).is_some_and(|&e| e != 0));
         }
     }
 }
@@ -193,6 +181,8 @@ pub struct StoredObstacle {
     pub outline: Span,
     /// Polygons: the description was a box; the outline holds its four corners.
     pub box_shape: bool,
+    /// Patterns assigned to the obstacle or its cells (P14).
+    pub patterns: PatternAssignment,
 }
 
 impl StoredObstacle {
@@ -206,6 +196,7 @@ impl StoredObstacle {
             radius: 0.0,
             outline: Span::EMPTY,
             box_shape: false,
+            patterns: PatternAssignment::default(),
         }
     }
 
@@ -226,9 +217,9 @@ impl StoredObstacle {
         (self.is_tile_grid() && self.grid.level_height > 0.0) || self.common.height > 0.0
     }
 
-    /// Opacity below 1 or a solid cell with an opacity below 255. (P14/P15 add live patterns.)
+    /// Opacity below 1, a solid cell with an opacity below 255 or a live pattern.
     pub fn is_partial(&self) -> bool {
-        self.common.opacity < 1.0 || self.grid.partial_cells > 0
+        self.common.opacity < 1.0 || self.grid.partial_cells > 0 || self.patterns.refs > 0
     }
 
     /// Finite top of the obstacle, `0` if infinitely tall.
@@ -242,6 +233,10 @@ impl StoredObstacle {
     /// Takes over a validated shape whose triangles and outline the store put into its arenas.
     /// Keeps `revision`.
     pub(super) fn assign_shape(&mut self, desc: &ShapeDesc<'_>, triangles: Span, outline: Span) {
+        if self.is_tile_grid() {
+            // A grid becomes a shape: the assignment goes (the store released its spans).
+            self.patterns = PatternAssignment::default();
+        }
         self.common = desc.common;
         self.triangles = triangles;
         self.outline = outline;
@@ -260,15 +255,32 @@ impl StoredObstacle {
         }
     }
 
-    /// Copies a validated tile grid. Keeps `revision`; reuses the buffers.
-    pub(super) fn assign_tile_grid(&mut self, desc: &TileGridDesc<'_>) {
+    /// Takes over a validated tile grid whose channels the store put into its byte arena. Keeps
+    /// `revision`. The pattern assignment stays with a grid as far as it fits: the cell indices
+    /// only for the same size (the store released their span before).
+    pub(super) fn assign_tile_grid(&mut self, desc: &TileGridDesc<'_>, channels: [Span; 4]) {
+        if !self.is_tile_grid() {
+            self.patterns = PatternAssignment::default();
+        } else if self.grid.columns != desc.columns || self.grid.rows != desc.rows {
+            self.patterns.cells = Span::EMPTY;
+        }
         self.kind = ObstacleKind::TileGrid;
         self.common = desc.common;
         self.triangles = Span::EMPTY;
         self.outline = Span::EMPTY;
         self.radius = 0.0;
         self.box_shape = false;
-        self.grid.fill(desc);
+        self.grid.assign(desc, channels);
+    }
+
+    /// Becomes `next` (a freshly built shape) but keeps its own revision and, shape to shape,
+    /// the pattern assignment. (The store released the data of a grid that stops being one.)
+    pub(super) fn replace_with(&mut self, mut next: StoredObstacle) {
+        next.revision = self.revision;
+        if !self.is_tile_grid() && !next.is_tile_grid() {
+            next.patterns = self.patterns;
+        }
+        *self = next;
     }
 }
 
@@ -367,10 +379,14 @@ impl SnapshotValue for StoredObstacle {
                 w.put(&g.edges);
             }
         }
+        let p = &self.patterns;
+        w.put(&p.pattern);
+        w.put(&p.table);
+        w.put(&p.cells);
+        w.put(&p.refs);
     }
 
     fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        const BAD: SnapshotError = SnapshotError::Invalid("obstacle violates the obstacle rules");
         let tag: u8 = r.get()?;
         let common: ObstacleCommon = r.get()?;
         let revision: u32 = r.get()?;
@@ -390,33 +406,25 @@ impl SnapshotValue for StoredObstacle {
                 s.triangles = r.get()?;
             }
             2 => {
-                let (columns, rows): (u32, u32) = (r.get()?, r.get()?);
-                let cell_size: Vec2 = r.get()?;
-                let (level_height, edge_width): (f32, f32) = (r.get()?, r.get()?);
-                let solid: Vec<u8> = r.get()?;
-                let base: Vec<u8> = r.get()?;
-                let opacity: Vec<u8> = r.get()?;
-                let edges: Vec<u8> = r.get()?;
-                fn some(v: &[u8]) -> Option<&[u8]> {
-                    (!v.is_empty()).then_some(v)
-                }
-                let desc = TileGridDesc {
-                    common,
-                    columns,
-                    rows,
-                    cell_size,
-                    level_height,
-                    edge_width,
-                    solid: &solid,
-                    base_levels: some(&base),
-                    opacity: some(&opacity),
-                    edges: some(&edges),
-                };
-                desc.validate().map_err(|_| BAD)?;
-                s.assign_tile_grid(&desc);
+                // The store checks the spans, the values and the counts against its arenas.
+                s.kind = ObstacleKind::TileGrid;
+                let g = &mut s.grid;
+                (g.columns, g.rows) = (r.get()?, r.get()?);
+                g.cell_size = r.get()?;
+                (g.level_height, g.edge_width) = (r.get()?, r.get()?);
+                g.solid = r.get()?;
+                g.base_levels = r.get()?;
+                g.opacity = r.get()?;
+                g.edges = r.get()?;
             }
             _ => return Err(SnapshotError::Invalid("obstacle kind")),
         }
+        s.patterns = PatternAssignment {
+            pattern: r.get()?,
+            table: r.get()?,
+            cells: r.get()?,
+            refs: r.get()?,
+        };
         Ok(s)
     }
 }
