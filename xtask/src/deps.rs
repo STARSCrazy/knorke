@@ -9,11 +9,14 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::process::ExitCode;
 
 /// One rule: no crate matching `from` may depend (transitively) on a crate matching `to`
-/// unless it also matches `except`. Patterns are exact names or a prefix ending in `*`.
+/// unless it also matches `except` or is reached only through a crate matching `through`. Patterns are exact names or a prefix ending in `*`.
 struct Rule {
     from: &'static [&'static str],
     to: &'static [&'static str],
     except: &'static [&'static str],
+    /// Packages the search does not descend into: a dependency reached only through one of
+    /// them is that package's business (e.g. SDL behind knorke-gpu).
+    through: &'static [&'static str],
     why: &'static str,
 }
 
@@ -44,6 +47,7 @@ const RULES: &[Rule] = &[
             "wgpu*",
         ],
         except: &[],
+        through: &[],
         why: "AI, navigation and perception run headless without graphics, runtime or agent plane",
     },
     // ADR 0014: the Chiaro port is split into knorke-gpu, knorke-post and knorke-light2d.
@@ -67,18 +71,21 @@ const RULES: &[Rule] = &[
             "wgpu*",
         ],
         except: &[],
+        through: &["knorke-gpu"],
         why: "2D light (ADR 0014) knows neither post-processing, the CPU light or renderer, nor AI crates; GPU access only through knorke-gpu",
     },
     Rule {
         from: &["knorke-post"],
         to: &["knorke-light2d"],
         except: &[],
+        through: &[],
         why: "post-processing and 2D light are independent; only knorke-integration joins them (ADR 0014)",
     },
     Rule {
         from: &["knorke-lighting", "knorke-render"],
         to: &["knorke-light2d"],
         except: &[],
+        through: &[],
         why: "the frozen CPU light and the renderer do not know the GPU 2D light (ADR 0014)",
     },
     // The AI modules share only knorke-grid; knorke-integration joins them (ADR 0012).
@@ -86,36 +93,42 @@ const RULES: &[Rule] = &[
         from: &["knorke-navigation"],
         to: &["knorke-perception", "knorke-ai"],
         except: &[],
+        through: &[],
         why: "navigation, perception and AI are independent; only knorke-integration joins them",
     },
     Rule {
         from: &["knorke-perception"],
         to: &["knorke-navigation", "knorke-ai"],
         except: &[],
+        through: &[],
         why: "navigation, perception and AI are independent; only knorke-integration joins them",
     },
     Rule {
         from: &["knorke-ai"],
         to: &["knorke-navigation", "knorke-perception"],
         except: &[],
+        through: &[],
         why: "navigation, perception and AI are independent; only knorke-integration joins them",
     },
     Rule {
         from: &["knorke-grid"],
         to: &["*"],
         except: &["knorke-types"],
+        through: &[],
         why: "knorke-grid holds the shared space types; closed dependency list (ADR 0012)",
     },
     Rule {
         from: &["knorke-render"],
         to: &["knorke-lighting"],
         except: &[],
+        through: &[],
         why: "renderer and lighting are independent; only knorke-integration joins them",
     },
     Rule {
         from: &["knorke-lighting"],
         to: &["knorke-render", "knorke-runtime", "knorke-scene"],
         except: &[],
+        through: &[],
         why: "lighting works on host-provided targets without the renderer or a world runtime",
     },
     // The GPU foundation serves 2D light, post and a later 3D renderer (ADR 0014).
@@ -123,6 +136,7 @@ const RULES: &[Rule] = &[
         from: &["knorke-gpu"],
         to: &["knorke-*"],
         except: &["knorke-gpu", "knorke-types"],
+        through: &[],
         why: "knorke-gpu is the shared GPU foundation and knows no domain crate (ADR 0014)",
     },
     Rule {
@@ -136,12 +150,14 @@ const RULES: &[Rule] = &[
             "knorke-perception",
         ],
         except: &[],
+        through: &[],
         why: "post-processing math is shared by 2D and 3D output and stays free of lighting, rendering and AI",
     },
     Rule {
         from: &["knorke-runtime"],
         to: DEV_PLANE,
         except: &[],
+        through: &[],
         why: "a shipped game needs no agent plane",
     },
     Rule {
@@ -160,6 +176,7 @@ const RULES: &[Rule] = &[
         ],
         to: &["knorke-integration"],
         except: &[],
+        through: &[],
         why: "domain modules never import their adapters back",
     },
     // Foundation crates: every module depends on them, so their dependency trees are
@@ -168,24 +185,28 @@ const RULES: &[Rule] = &[
         from: &["knorke-types"],
         to: &["*"],
         except: &[],
+        through: &[],
         why: "knorke-types stays dependency-free so it cannot grow into a core",
     },
     Rule {
         from: &["knorke-math"],
         to: &["*"],
         except: &["bytemuck", "mint", "knorke-types", "libm"],
+        through: &[],
         why: "knorke-math may only use bytemuck (zero-copy casts), optional mint (interop), knorke-types (snapshots) and libm (deterministic math)",
     },
     Rule {
         from: &["knorke-observe"],
         to: &["*"],
         except: &["knorke-types"],
+        through: &[],
         why: "knorke-observe contracts must stay cheap to depend on for every module",
     },
     Rule {
         from: &["knorke-replay"],
         to: &["*"],
         except: &["knorke-types"],
+        through: &[],
         why: "replays may ship in release builds (flight recorder): knorke-types only",
     },
     Rule {
@@ -198,6 +219,7 @@ const RULES: &[Rule] = &[
             "crossbeam-*",
             "either",
         ],
+        through: &[],
         why: "knorke-exec is the host's executor: knorke-types plus the rayon pool, nothing else",
     },
     Rule {
@@ -216,6 +238,7 @@ const RULES: &[Rule] = &[
         ],
         to: &["knorke-exec", "rayon*"],
         except: &[],
+        through: &[],
         why: "modules parallelise through the Parallel trait; the host picks the executor (ADR 0008)",
     },
 ];
@@ -314,7 +337,13 @@ fn graph(meta: &Value) -> Graph {
 }
 
 /// Returns the dependency chain from `start` to the first package matching `to`, if any.
-fn forbidden_path(g: &Graph, start: &str, to: &[&str], except: &[&str]) -> Option<Vec<String>> {
+fn forbidden_path(
+    g: &Graph,
+    start: &str,
+    to: &[&str],
+    except: &[&str],
+    through: &[&str],
+) -> Option<Vec<String>> {
     let mut parent: BTreeMap<&str, &str> = BTreeMap::new();
     let mut queue = VecDeque::from([start]);
     let mut seen = BTreeSet::from([start]);
@@ -329,6 +358,9 @@ fn forbidden_path(g: &Graph, start: &str, to: &[&str], except: &[&str]) -> Optio
             }
             chain.reverse();
             return Some(chain);
+        }
+        if id != start && matches_any(through, name) {
+            continue;
         }
         for d in deps {
             if seen.insert(d) {
@@ -352,7 +384,7 @@ fn violations(meta: &Value) -> Vec<String> {
     for id in members {
         let Some((name, _)) = g.get(id) else { continue };
         for rule in RULES.iter().filter(|r| matches_any(r.from, name)) {
-            if let Some(chain) = forbidden_path(&g, id, rule.to, rule.except) {
+            if let Some(chain) = forbidden_path(&g, id, rule.to, rule.except, rule.through) {
                 out.push(format!("{}\n    rule: {}", chain.join(" -> "), rule.why));
             }
         }
@@ -523,6 +555,26 @@ mod tests {
             &["knorke-light2d", "knorke-types", "knorke-math"],
         );
         assert!(violations(&ok).is_empty());
+        // Feature `gpu`: SDL only behind knorke-gpu, never directly.
+        let gpu = meta(
+            &["knorke-light2d"],
+            vec![
+                node("knorke-light2d", &[("knorke-gpu", "normal")]),
+                node("knorke-gpu", &[("sdl3-sys", "normal")]),
+                node("sdl3-sys", &[]),
+            ],
+            &["knorke-light2d", "knorke-gpu", "sdl3-sys"],
+        );
+        assert!(violations(&gpu).is_empty());
+        let direct = meta(
+            &["knorke-light2d"],
+            vec![
+                node("knorke-light2d", &[("sdl3-sys", "normal")]),
+                node("sdl3-sys", &[]),
+            ],
+            &["knorke-light2d", "sdl3-sys"],
+        );
+        assert_eq!(violations(&direct).len(), 1);
         let back = meta(
             &["knorke-lighting"],
             vec![
