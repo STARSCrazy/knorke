@@ -18,20 +18,15 @@
 //! wait, as `gate_ref.c` does with `CHI_Render`).
 #![cfg(feature = "gpu")]
 
-use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::path::PathBuf;
 use std::time::Instant;
 
-use knorke_contract_tests::parity::{ParityBudget, ParityReport, compare_rgba8};
+use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, load_png_rgba8, save_png_rgba8};
 use knorke_gpu::sys::gpu::{
-    SDL_GPU_SHADERFORMAT_SPIRV, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-    SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUBufferUsageFlags,
-    SDL_GPUTextureUsageFlags,
+    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 };
-use knorke_gpu::{
-    CommandBuffer, Device, DownloadBuffer, Gpu, LiveCounter, Texture, TextureDesc, UploadBuffer,
-    init_video,
-};
+use knorke_gpu::test_support::{sampled_rgba8, texture, vulkan_device_with_pack, workspace_root};
+use knorke_gpu::{CommandBuffer, Device, DownloadBuffer, Gpu, LiveCounter, Texture};
 use knorke_integration::light2d::{Light2dFrame, Light2dRenderer, Light2dSettings};
 use knorke_light2d::codec::{AlphaSource, Material, NormalMapOptions, convert_normal_map};
 use knorke_light2d::light::{LightDesc, LightType};
@@ -42,13 +37,6 @@ use knorke_light2d::shadow::MaskUpdate;
 use knorke_light2d::{LightStore, NoResources, ObstacleStore};
 use knorke_math::{At, Vec2, Vec3};
 use knorke_post::settings::{Filter as OutputFilter, PostSettings};
-
-/// One device at a time: SDL's video init and the GPU tests of this crate must not overlap.
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn workspace() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
 
 /// A scene as RGBA8 inputs plus light and settings.
 struct Scene {
@@ -164,72 +152,6 @@ fn gate_sprite_shadow() -> Scene {
     }
 }
 
-/// A RGBA8 UNORM texture, filled with `pixels` if given (host work: in Chiaro the demo's
-/// renderer draws these layers).
-fn texture<'d>(
-    gpu: Gpu<'d>,
-    w: u32,
-    h: u32,
-    usage: SDL_GPUTextureUsageFlags,
-    pixels: Option<&[u8]>,
-) -> Texture<'d> {
-    let desc = TextureDesc::new(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, usage);
-    let texture = Texture::new(gpu, desc).expect("texture");
-    if let Some(px) = pixels {
-        let mut up = UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), px.len() as u32, "pixels");
-        up.reserve(px.len() as u64).unwrap();
-        up.map().unwrap().bytes()[..px.len()].copy_from_slice(px);
-        let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
-        cmd.copy_pass()
-            .unwrap()
-            .upload_to_texture(&up, texture.texture_ref(), false)
-            .unwrap();
-        cmd.submit_and_wait().unwrap();
-    }
-    texture
-}
-
-fn save_png(path: &Path, rgba: &[u8], w: u32, h: u32) {
-    let file = std::fs::File::create(path).unwrap();
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.write_header().unwrap().write_image_data(rgba).unwrap();
-}
-
-fn golden(name: &str, w: u32, h: u32) -> Vec<u8> {
-    let path = workspace().join(format!("tests/golden/chiaro/{name}.png"));
-    let decoder = png::Decoder::new(std::fs::File::open(&path).unwrap());
-    let mut reader = decoder.read_info().unwrap();
-    let mut buf = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buf).unwrap();
-    assert_eq!((info.width, info.height), (w, h), "{}", path.display());
-    let px = &buf[..info.buffer_size()];
-    match info.color_type {
-        png::ColorType::Rgb => px
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|c| [c[0], c[1], c[2], 255])
-            .collect(),
-        png::ColorType::Rgba => px.to_vec(),
-        other => panic!("unexpected golden colour type {other:?}"),
-    }
-}
-
-fn report(name: &str, budget: &str, r: &ParityReport) {
-    eprintln!(
-        "{name} vs C++ [{budget}]: max diff {}, differing {} / {} px ({:.4} %), outliers {} ({} ppm), mean {:.4}",
-        r.max_diff,
-        r.differing,
-        r.compared,
-        r.differing as f64 * 100.0 / r.compared as f64,
-        r.outliers,
-        r.outlier_ppm(),
-        r.sum_diff as f64 / r.compared as f64
-    );
-}
-
 /// Records one frame into a fresh command buffer, then the readback into `readback` if
 /// given, submits and waits.
 fn frame_once(
@@ -257,25 +179,8 @@ fn frame_once(
 
 #[test]
 fn scenes_match_chiaro_through_pass_plan_and_post() {
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let require = std::env::var("KNORKE_REQUIRE_GPU").is_ok_and(|v| v == "1");
-    let pack = workspace().join("target/shaders/knorke-chiaro.spirv.kpak");
-    let Ok(pack_bytes) = std::fs::read(&pack) else {
-        assert!(!require, "no shader pack at {}", pack.display());
-        eprintln!(
-            "skipped: no shader pack at {} (cargo xtask shaders)",
-            pack.display()
-        );
+    let Some((device, pack_bytes)) = vulkan_device_with_pack() else {
         return;
-    };
-    init_video(Some(c"vulkan"));
-    let device = match Device::create(SDL_GPU_SHADERFORMAT_SPIRV, false) {
-        Ok(d) => d,
-        Err(e) => {
-            assert!(!require, "no Vulkan device ({})", e.message);
-            eprintln!("skipped: no Vulkan device ({})", e.message);
-            return;
-        }
     };
     let counter = LiveCounter::new();
     let gpu = Gpu::new(&device, &counter);
@@ -288,17 +193,22 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
 
     for scene in [minimal_normal_map(), gate_sprite_shadow()] {
         let (w, h) = (scene.w, scene.h);
-        let sampled = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-        let color = texture(gpu, w, h, sampled, Some(&scene.color));
+        let color = sampled_rgba8(gpu, w, h, &scene.color);
         let material = scene
             .material
             .as_deref()
-            .map(|m| texture(gpu, w, h, sampled, Some(m)));
+            .map(|m| sampled_rgba8(gpu, w, h, m));
         let occlusion = scene
             .occlusion
             .as_deref()
-            .map(|o| texture(gpu, w, h, sampled, Some(o)));
-        let target = texture(gpu, w, h, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, None);
+            .map(|o| sampled_rgba8(gpu, w, h, o));
+        let target = texture(
+            gpu,
+            (w, h),
+            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+            None,
+        );
         let projection = Projection::default();
         let frame = Light2dFrame {
             material: material.as_ref().map(Texture::texture_ref),
@@ -341,18 +251,22 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
         let mut pixels = vec![0u8; (w * h * 4) as usize];
         download.read(&mut pixels).unwrap();
 
-        let reference = golden(scene.name, w, h);
+        let reference = load_png_rgba8(
+            &workspace_root().join(format!("tests/golden/chiaro/{}.png", scene.name)),
+            w,
+            h,
+        );
         let strict = compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::STRICT).unwrap();
-        report(scene.name, "STRICT", &strict);
+        strict.print(scene.name, "STRICT");
         if !strict.within(&ParityBudget::STRICT) {
             let loose =
                 compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::LOOSE).unwrap();
-            report(scene.name, "LOOSE", &loose);
+            loose.print(scene.name, "LOOSE");
             failures.push(format!("{}: {strict:?}", scene.name));
         }
         if let Some(dir) = &out {
             std::fs::create_dir_all(dir).unwrap();
-            save_png(&dir.join(format!("{}.rust.png", scene.name)), &pixels, w, h);
+            save_png_rgba8(&dir.join(format!("{}.rust.png", scene.name)), &pixels, w, h);
             // Diff x32, red where it exceeds the STRICT tolerance.
             let diff: Vec<u8> = pixels
                 .as_chunks::<4>()
@@ -366,7 +280,7 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
                     [v, g, g, 255]
                 })
                 .collect();
-            save_png(&dir.join(format!("{}.diff.png", scene.name)), &diff, w, h);
+            save_png_rgba8(&dir.join(format!("{}.diff.png", scene.name)), &diff, w, h);
         }
         // Host-side wall clock for the benchmark only; the renderers read no clock.
         #[allow(clippy::disallowed_methods)]

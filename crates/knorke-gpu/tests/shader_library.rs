@@ -5,41 +5,19 @@
 #![allow(unsafe_code)]
 
 use std::path::PathBuf;
-use std::sync::{Mutex, MutexGuard, Once};
 
 use knorke_gpu::kpak::{
     SHADER_PACK_CHECKSUM, SHADER_PACK_IO, SHADER_PACK_MISSING_PROGRAM,
     SHADER_PACK_UNSUPPORTED_FORMAT, ShaderFormat,
 };
 use knorke_gpu::sys::gpu::{
-    SDL_GPU_SHADERFORMAT_DXIL, SDL_GPU_SHADERFORMAT_MSL, SDL_GPU_SHADERFORMAT_SPIRV,
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
 };
-use knorke_gpu::sys::init::{SDL_INIT_VIDEO, SDL_Init};
+use knorke_gpu::test_support::any_device;
 use knorke_gpu::{
-    Blend, Device, Gpu, LiveCounter, PIPELINE_STAGE_MISMATCH, PipelineCache, ProgramDesc,
-    SecondTarget, ShaderLibrary, device_formats, preferred_format, sdl_shader_format,
+    Blend, Gpu, LiveCounter, PIPELINE_STAGE_MISMATCH, PipelineCache, ProgramDesc, SecondTarget,
+    ShaderLibrary, device_formats, preferred_format, sdl_shader_format,
 };
-
-/// One device at a time: drivers dislike many devices created in parallel.
-static SERIAL: Mutex<()> = Mutex::new(());
-static INIT: Once = Once::new();
-
-fn device() -> Option<(MutexGuard<'static, ()>, Device)> {
-    let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    INIT.call_once(|| {
-        // SAFETY: plain FFI call; failure is reported by device creation below.
-        unsafe { SDL_Init(SDL_INIT_VIDEO) };
-    });
-    let formats = SDL_GPU_SHADERFORMAT_SPIRV | SDL_GPU_SHADERFORMAT_DXIL | SDL_GPU_SHADERFORMAT_MSL;
-    match Device::create(formats, false) {
-        Ok(d) => Some((guard, d)),
-        Err(e) => {
-            eprintln!("skipped: no GPU device available ({})", e.message);
-            None
-        }
-    }
-}
 
 fn pack_path(format: ShaderFormat) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -55,7 +33,7 @@ fn library(gpu: Gpu<'_>) -> ShaderLibrary<'_> {
 
 #[test]
 fn shaders_are_created_lazily_and_released() {
-    let Some((_g, device)) = device() else { return };
+    let Some(device) = any_device() else { return };
     let counter = LiveCounter::new();
     {
         let gpu = Gpu::new(&device, &counter);
@@ -86,7 +64,7 @@ fn shaders_are_created_lazily_and_released() {
 
 #[test]
 fn wrong_pack_or_bad_file_is_a_diagnostic() {
-    let Some((_g, device)) = device() else { return };
+    let Some(device) = any_device() else { return };
     let counter = LiveCounter::new();
     let gpu = Gpu::new(&device, &counter);
     let supported = device_formats(gpu);
@@ -113,7 +91,7 @@ fn wrong_pack_or_bad_file_is_a_diagnostic() {
 
 #[test]
 fn pipeline_cache_keys_by_program_and_target_format() {
-    let Some((_g, device)) = device() else { return };
+    let Some(device) = any_device() else { return };
     let counter = LiveCounter::new();
     {
         let gpu = Gpu::new(&device, &counter);
