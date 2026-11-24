@@ -257,48 +257,25 @@ impl CrtSettings {
 
     /// Checks every field.
     pub fn validate(&self) -> Result<(), SettingsError> {
-        range(
-            "crt.curvature",
-            self.curvature,
-            0.0,
-            1.0,
-            "must be in [0, 1]",
-        )?;
-        range(
-            "crt.corner_radius",
-            self.corner_radius,
-            0.0,
-            1.0,
-            "must be in [0, 1]",
-        )?;
-        range(
-            "crt.scanlines",
-            self.scanlines,
-            0.0,
-            1.0,
-            "must be in [0, 1]",
-        )?;
+        #[rustfmt::skip]
+        ranges(&[
+            ("crt.curvature", self.curvature, 0.0, 1.0, "must be in [0, 1]"),
+            ("crt.corner_radius", self.corner_radius, 0.0, 1.0, "must be in [0, 1]"),
+            ("crt.scanlines", self.scanlines, 0.0, 1.0, "must be in [0, 1]"),
+        ])?;
         check(
             "crt.scanline_period",
             self.scanline_period,
             self.scanline_period > 0.0 && self.scanline_period <= MAX_SCANLINE_PERIOD,
             "must be in (0, 64]",
         )?;
-        range("crt.mask", self.mask, 0.0, 1.0, "must be in [0, 1]")?;
-        range(
-            "crt.mask_pitch",
-            self.mask_pitch,
-            MIN_MASK_PITCH,
-            MAX_MASK_PITCH,
-            "must be in [2, 16]",
-        )?;
-        range(
-            "crt.brightness",
-            self.brightness,
-            MIN_CRT_BRIGHTNESS,
-            MAX_CRT_BRIGHTNESS,
-            "must be in [0.5, 4]",
-        )
+        #[rustfmt::skip]
+        ranges(&[
+            ("crt.mask", self.mask, 0.0, 1.0, "must be in [0, 1]"),
+            ("crt.mask_pitch", self.mask_pitch, MIN_MASK_PITCH, MAX_MASK_PITCH, "must be in [2, 16]"),
+            ("crt.brightness", self.brightness, MIN_CRT_BRIGHTNESS, MAX_CRT_BRIGHTNESS, "must be in [0.5, 4]"),
+        ])?;
+        Ok(())
     }
 }
 
@@ -353,20 +330,11 @@ impl OutputSettings {
                 "must be in [0.5, 0.95]",
             )?;
         }
-        range(
-            "output.saturation",
-            self.saturation,
-            0.0,
-            MAX_SATURATION,
-            "must be in [0, 4]",
-        )?;
-        range(
-            "output.contrast",
-            self.contrast,
-            0.0,
-            MAX_CONTRAST,
-            "must be in [0, 4]",
-        )?;
+        #[rustfmt::skip]
+        ranges(&[
+            ("output.saturation", self.saturation, 0.0, MAX_SATURATION, "must be in [0, 4]"),
+            ("output.contrast", self.contrast, 0.0, MAX_CONTRAST, "must be in [0, 4]"),
+        ])?;
         color(
             "output.tint",
             self.tint,
@@ -374,27 +342,12 @@ impl OutputSettings {
             "components must be in [0, 16]",
         )?;
         let v = &self.vignette;
-        range(
-            "output.vignette.strength",
-            v.strength,
-            0.0,
-            1.0,
-            "must be in [0, 1]",
-        )?;
-        range(
-            "output.vignette.radius",
-            v.radius,
-            0.0,
-            MAX_VIGNETTE_DISTANCE,
-            "must be in [0, 4]",
-        )?;
-        range(
-            "output.vignette.softness",
-            v.softness,
-            0.0,
-            MAX_VIGNETTE_DISTANCE,
-            "must be in [0, 4]",
-        )?;
+        #[rustfmt::skip]
+        ranges(&[
+            ("output.vignette.strength", v.strength, 0.0, 1.0, "must be in [0, 1]"),
+            ("output.vignette.radius", v.radius, 0.0, MAX_VIGNETTE_DISTANCE, "must be in [0, 4]"),
+            ("output.vignette.softness", v.softness, 0.0, MAX_VIGNETTE_DISTANCE, "must be in [0, 4]"),
+        ])?;
         color(
             "output.vignette.color",
             v.color,
@@ -407,28 +360,14 @@ impl OutputSettings {
 impl BloomSettings {
     /// Checks every field, also while bloom is off.
     pub fn validate(&self) -> Result<(), SettingsError> {
-        range(
-            "bloom.threshold",
-            self.threshold,
-            0.0,
-            MAX_BLOOM_THRESHOLD,
-            "must be in [0, 64]",
-        )?;
-        range("bloom.knee", self.knee, 0.0, 1.0, "must be in [0, 1]")?;
-        range(
-            "bloom.intensity",
-            self.intensity,
-            0.0,
-            MAX_BLOOM_INTENSITY,
-            "must be in [0, 8]",
-        )?;
-        range(
-            "bloom.radius",
-            self.radius,
-            MIN_BLOOM_RADIUS,
-            MAX_BLOOM_RADIUS,
-            "must be in [1, 256]",
-        )
+        #[rustfmt::skip]
+        ranges(&[
+            ("bloom.threshold", self.threshold, 0.0, MAX_BLOOM_THRESHOLD, "must be in [0, 64]"),
+            ("bloom.knee", self.knee, 0.0, 1.0, "must be in [0, 1]"),
+            ("bloom.intensity", self.intensity, 0.0, MAX_BLOOM_INTENSITY, "must be in [0, 8]"),
+            ("bloom.radius", self.radius, MIN_BLOOM_RADIUS, MAX_BLOOM_RADIUS, "must be in [1, 256]"),
+        ])?;
+        Ok(())
     }
 }
 

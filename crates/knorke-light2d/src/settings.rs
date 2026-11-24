@@ -311,14 +311,11 @@ impl LightSettings {
         }
         positive("surface_height_step", self.surface_height_step)?;
         let m = &self.material;
-        range(
-            "material.specular_scale",
-            m.specular_scale,
-            0.0,
-            MAX_SPECULAR_SCALE,
-            "must be in [0, 16]",
-        )?;
-        range("material.wetness", m.wetness, 0.0, 1.0, "must be in [0, 1]")?;
+        #[rustfmt::skip]
+        ranges(&[
+            ("material.specular_scale", m.specular_scale, 0.0, MAX_SPECULAR_SCALE, "must be in [0, 16]"),
+            ("material.wetness", m.wetness, 0.0, 1.0, "must be in [0, 1]"),
+        ])?;
         if let Some(v) = m.wet_stretch {
             range(
                 "material.wet_stretch",

@@ -100,5 +100,13 @@ macro_rules! settings_error {
         ) -> Result<(), SettingsError> {
             check(field, v, v >= lo && v <= hi, rule)
         }
+
+        /// `range` for each row `(field, value, lo, hi, rule)` in order; the first violation wins.
+        fn ranges(
+            rows: &[(&'static str, f32, f32, f32, &'static str)],
+        ) -> Result<(), SettingsError> {
+            rows.iter()
+                .try_for_each(|&(field, v, lo, hi, rule)| range(field, v, lo, hi, rule))
+        }
     };
 }
