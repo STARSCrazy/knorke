@@ -8,6 +8,8 @@
 // scene: name, then "base:features" of every light program the context created, as in ../light/light_ref.cpp) and
 // <outdir>/atlases.txt (one line per scene with an atlas: "<scene> profile|mask <width> <height> <FNV-1a 64 of the
 // texture bytes, hex>").
+// Since P31 also <outdir>/<scene>.hdr.bin: the HDR buffer of the composite (RGBA16F), so the composite with ambient
+// zones (the pure ambient in direction mode) is checked as well.
 // Build and run like ../light/light_ref.cpp (the same command line with atlas_ref.cpp; its build_ref.bat style).
 // Captured 2026-11-24 on an AMD Radeon RX 6700 XT (Vulkan). The scenes are mirrored in
 // crates/knorke-light2d/tests/gpu_atlas_zones.rs (`scene_*`); change both together.
@@ -324,6 +326,7 @@ void Render(const std::string &out, const char *name, bool material)
     if (inspect.PureAmbient().texture) {
         DumpTexture(out + "/" + name + ".ambient.bin", inspect.PureAmbient());
     }
+    DumpTexture(out + "/" + name + ".hdr.bin", inspect.Hdr());
     Atlas(name, "profile", inspect.ProfileAtlas(), 4);
     Atlas(name, "mask", inspect.MaskAtlas(), 4);
     programs += name;

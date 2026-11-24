@@ -2,7 +2,9 @@
 // PreparePipelines, RecordMask, RecordShiftCopy, Commit), src/rendering/SdfShadows.hpp and
 // SdfShadows.cpp (Prepare, Record, RecordPasses, FieldPass, DrawTexelRects) and
 // src/gpu/PipelineCache.cpp (the program table entries MaskClearRects, MaskClearRectsHeight,
-// JfaSeed, JfaStep, JfaDistance, JfaSeedRects, JfaStepRects, JfaDistanceRects).
+// JfaSeed, JfaStep, JfaDistance, JfaSeedRects, JfaStepRects, JfaDistanceRects, OcclusionMask,
+// OcclusionMaskHeight); the sprite mask of OcclusionMask.cpp (PreparePipelines, DrawSources,
+// SpriteParams).
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any
 // express or implied warranty; the origin must not be misrepresented; altered source versions
 // must be plainly marked as such (this file is a Rust port) and this notice may not be removed or
@@ -21,6 +23,7 @@ use knorke_gpu::sys::gpu::{
     SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, SDL_GPU_TEXTUREFORMAT_R16_FLOAT,
     SDL_GPU_TEXTUREFORMAT_R32G32_FLOAT, SDL_GPUTextureFormat,
 };
+use knorke_gpu::sys::rect::SDL_Rect;
 use knorke_gpu::{
     Bindings, Blend, ColorTarget, CommandBuffer, Gpu, Load, PipelineCache, PipelineRef,
     ProgramDesc, ProgramIndex, RenderTarget, SamplerBinding, SamplerRef, SecondTarget,
@@ -51,8 +54,9 @@ const fn program(vertex: &'static str, fragment: &'static str) -> ProgramDesc {
 /// The programs of the stage, to be placed in the host's
 /// [`PipelineCache`](knorke_gpu::PipelineCache) table at [`MaskPrograms::at`], next to
 /// [`OCCLUDER_PROGRAMS`](crate::occluder_raster::OCCLUDER_PROGRAMS). None blends: the clear
-/// programs reset the rectangles of a local update, the field programs overwrite.
-pub const MASK_PROGRAMS: [ProgramDesc; 8] = [
+/// programs reset the rectangles of a local update, the field programs overwrite; the sprite
+/// programs (the application's occlusion buffer, E21) blend with MAX like the obstacles.
+pub const MASK_PROGRAMS: [ProgramDesc; 10] = [
     program("rect.vert", "clear.frag"),
     ProgramDesc {
         second: Some(SecondTarget {
@@ -67,23 +71,83 @@ pub const MASK_PROGRAMS: [ProgramDesc; 8] = [
     program("rect.vert", "jfa_seed.frag"),
     program("rect.vert", "jfa_step.frag"),
     program("rect.vert", "jfa_distance.frag"),
+    ProgramDesc {
+        blend: Blend::Max,
+        ..program("fullscreen.vert", "occlusion_mask.frag")
+    },
+    ProgramDesc {
+        blend: Blend::Max,
+        second: Some(SecondTarget {
+            format: HEIGHT_FORMAT,
+            blend: Blend::Max,
+        }),
+        ..program("fullscreen.vert", "occlusion_mask_height.frag")
+    },
 ];
+
+/// Size of the sprite mask's uniform block (`cbuffer SpriteParams` of `occlusion_mask.frag`).
+const SPRITE_PARAMS_SIZE: usize = 32;
+
+/// The sprite mask's parameters (Chiaro `SpriteParams`): the scene rectangle in mask texels,
+/// moved by the anchor remainder like every other mask writer, and the mask size; plus the
+/// scissor (rounded outwards) that keeps the rasterizer to the rectangle. The shader clips to
+/// it exactly: a fractional viewport would lose the last column or row.
+fn sprite_params(d: &OcclusionDomain, remainder: [f32; 2]) -> ([u8; SPRITE_PARAMS_SIZE], SDL_Rect) {
+    let rect = [
+        d.margin as f32 * d.texels_per_scene[0] - remainder[0],
+        d.margin as f32 * d.texels_per_scene[1] - remainder[1],
+        d.scene_w as f32 * d.texels_per_scene[0],
+        d.scene_h as f32 * d.texels_per_scene[1],
+    ];
+    let values = [
+        rect[0],
+        rect[1],
+        rect[2],
+        rect[3],
+        d.width as f32,
+        d.height as f32,
+        0.0,
+        0.0,
+    ];
+    let mut bytes = [0u8; SPRITE_PARAMS_SIZE];
+    for (chunk, v) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+        *chunk = v.to_le_bytes();
+    }
+    let lo = |v: f32, size: u32| v.floor().clamp(0.0, size as f32) as i32;
+    let hi = |v: f32, size: u32| v.ceil().clamp(0.0, size as f32) as i32;
+    let (x0, y0) = (lo(rect[0], d.width), lo(rect[1], d.height));
+    let (x1, y1) = (
+        hi(rect[0] + rect[2], d.width),
+        hi(rect[1] + rect[3], d.height),
+    );
+    let scissor = SDL_Rect {
+        x: x0,
+        y: y0,
+        w: x1 - x0,
+        h: y1 - y0,
+    };
+    (bytes, scissor)
+}
 
 /// Where [`MASK_PROGRAMS`] sit in a pipeline table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MaskPrograms {
-    /// The first of the eight programs.
+    /// The first of the ten programs.
     pub base: ProgramIndex,
 }
 
 impl MaskPrograms {
-    /// The eight programs at `base..base + 8`, in the order of [`MASK_PROGRAMS`].
+    /// The ten programs at `base..base + 10`, in the order of [`MASK_PROGRAMS`].
     pub const fn at(base: ProgramIndex) -> Self {
         Self { base }
     }
 
     fn clear(&self, height_mode: bool) -> ProgramIndex {
         self.base + usize::from(height_mode)
+    }
+
+    fn sprite(&self, height_mode: bool) -> ProgramIndex {
+        self.base + 8 + usize::from(height_mode)
     }
 
     /// Seed, step and distance program, fullscreen or over rectangles.
@@ -171,6 +235,10 @@ pub struct OcclusionMask<'d> {
     domain: OcclusionDomain,
     params: DomainParams,
     rects: RectParams,
+    /// The prepared frame draws the application's sprite mask (E21).
+    sprite: bool,
+    /// The anchor remainder of the prepared frame, for the sprite rectangle.
+    remainder: [f32; 2],
 }
 
 impl<'d> OcclusionMask<'d> {
@@ -195,6 +263,8 @@ impl<'d> OcclusionMask<'d> {
             domain: OcclusionDomain::new(1, 1, 1.0),
             params: DomainParams::default(),
             rects: RectParams::new(),
+            sprite: false,
+            remainder: [0.0; 2],
         }
     }
 
@@ -255,6 +325,8 @@ impl<'d> OcclusionMask<'d> {
         self.height_mode = height_mode;
         self.domain = d;
         self.params = DomainParams::new(input.projection, &d, &input.anchor);
+        self.sprite = input.sprite;
+        self.remainder = input.anchor.remainder;
 
         if update != MaskUpdate::Reused {
             // Every variant every time: the first camera pan must not create pipelines.
@@ -264,6 +336,9 @@ impl<'d> OcclusionMask<'d> {
                 pipelines.get(shaders, seed, SEED_FORMAT)?;
                 pipelines.get(shaders, step, SEED_FORMAT)?;
                 pipelines.get(shaders, distance, FIELD_FORMAT)?;
+            }
+            if input.sprite {
+                pipelines.get(shaders, self.programs.sprite(height_mode), MASK_FORMAT)?;
             }
         }
         self.prepared = Some(update);
@@ -293,12 +368,38 @@ impl<'d> OcclusionMask<'d> {
         geometry: &mut OccluderGeometry<'_>,
         tiles: &mut TileOccluders<'_>,
     ) -> Result<MaskRecord, Diagnostic> {
+        self.record_with_sprite(cmd, pipelines, nearest, geometry, tiles, None)
+    }
+
+    /// [`record`](Self::record) for a frame prepared with
+    /// [`MaskPlanInput::sprite`](crate::shadow::MaskPlanInput::sprite) set: after the obstacles
+    /// the application's occlusion buffer `sprite` (scene size, alpha at or above 0.5 occludes,
+    /// infinitely tall) is drawn into the scene rectangle of the mask (E21).
+    ///
+    /// # Errors
+    /// As [`record`](Self::record), and [`NOT_PREPARED`] if `sprite` is given although the
+    /// prepared frame has no sprite mask, or the other way round.
+    pub fn record_with_sprite(
+        &mut self,
+        cmd: &mut CommandBuffer<'_>,
+        pipelines: &PipelineCache<'_>,
+        nearest: SamplerRef<'_>,
+        geometry: &mut OccluderGeometry<'_>,
+        tiles: &mut TileOccluders<'_>,
+        sprite: Option<TextureRef<'_>>,
+    ) -> Result<MaskRecord, Diagnostic> {
         let Some(update) = self.prepared.filter(|_| !self.recorded) else {
             return Err(Diagnostic::error(
                 NOT_PREPARED,
                 "record needs a prepared, unrecorded frame",
             ));
         };
+        if sprite.is_some() != self.sprite {
+            return Err(Diagnostic::error(
+                NOT_PREPARED,
+                "the sprite mask of record does not match the prepared frame",
+            ));
+        }
         let mut out = MaskRecord::default();
         if update == MaskUpdate::Reused {
             self.recorded = true;
@@ -335,12 +436,13 @@ impl<'d> OcclusionMask<'d> {
             }
         }
 
-        out.draws = self.record_mask(cmd, pipelines, nearest, geometry, tiles, local)?;
+        out.draws = self.record_mask(cmd, pipelines, nearest, geometry, tiles, sprite, local)?;
         out.field_texels = self.record_field(cmd, pipelines, nearest, local)?;
         self.recorded = true;
         Ok(out)
     }
 
+    #[allow(clippy::too_many_arguments)] // the mask pass draws every source: all of it is needed
     fn record_mask(
         &mut self,
         cmd: &mut CommandBuffer<'_>,
@@ -348,6 +450,7 @@ impl<'d> OcclusionMask<'d> {
         nearest: SamplerRef<'_>,
         geometry: &OccluderGeometry<'_>,
         tiles: &TileOccluders<'_>,
+        sprite: Option<TextureRef<'_>>,
         local: bool,
     ) -> Result<u32, Diagnostic> {
         let t = self.target;
@@ -394,6 +497,28 @@ impl<'d> OcclusionMask<'d> {
         }
         let mut draws = geometry.record_draws(&mut pass, pipelines, &self.params, true, true)?;
         draws += tiles.record_draws(&mut pass, pipelines, nearest, &self.params)?;
+        if let Some(sprite) = sprite {
+            // Last, like Chiaro's DrawSources: the scissor stays set for the rest of the pass.
+            let program = pipeline(
+                pipelines,
+                self.programs.sprite(self.height_mode),
+                MASK_FORMAT,
+            )?;
+            let (params, scissor) = sprite_params(&self.domain, self.remainder);
+            let samplers = [SamplerBinding::new(sprite, nearest)];
+            let bindings = Bindings {
+                vertex: StageBindings::default(),
+                fragment: StageBindings {
+                    samplers: &samplers,
+                    uniforms: &[&params],
+                    ..Default::default()
+                },
+            };
+            pass.set_scissor(&scissor);
+            pass.bind_program(program, &bindings)?;
+            pass.draw_fullscreen()?;
+            draws += 1;
+        }
         Ok(draws)
     }
 

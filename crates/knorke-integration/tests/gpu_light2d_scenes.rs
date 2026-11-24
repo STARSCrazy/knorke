@@ -1,20 +1,20 @@
-//! Gate spike of the Chiaro port (plan §5.1, ADR 0014): renders two scenes through
-//! `knorke_light2d::gpu_spike` (whose light pass is the real `lighting::LightingStage` since
-//! P25, fed by `collect_lights`, and whose composite is the real `composite::CompositeStage`
-//! since P27) on Vulkan and compares them with C++ Chiaro reference images
-//! (`tests/golden/chiaro`) under `ParityBudget::STRICT`:
+//! The 2D GPU light of the Chiaro port end to end (P31): the scenes of the former gate spike
+//! rendered through `knorke_light2d::pass_plan::PassPlan` and `knorke_post::pass::PostRenderer`,
+//! joined by `knorke_integration::light2d::Light2dRenderer`, on Vulkan, and compared with C++
+//! Chiaro reference images (`tests/golden/chiaro`, chiaro @ 9bc5b9b, zlib license) under
+//! `ParityBudget::STRICT`:
 //!
 //! - `minimal_normal_map`: the P3 golden scene (one point light on a normal-mapped dome);
-//! - `gate_sprite_shadow`: one soft point light, shadows from an occlusion sprite buffer,
-//!   rendered by `tests/golden/chiaro/gate/gate_ref.c` (C++ Chiaro 9bc5b9b, Vulkan).
+//! - `gate_sprite_shadow`: one soft point light, shadows from an occlusion sprite buffer (the
+//!   application sprite mask of `OcclusionMask`), rendered by `tests/golden/chiaro/gate/gate_ref.c`.
 //!
 //! The test plays the host (ADR 0002): it owns device, textures and command buffers, submits
-//! and reads back, all through the safe API of `knorke-gpu` (no `unsafe`). It skips (passes
-//! with a note) without a Vulkan device or without the shader pack from `cargo xtask shaders`
-//! in `target/shaders/`.
+//! and reads back, all through the safe API of `knorke-gpu`. It skips (passes with a note)
+//! without a Vulkan device or without the shader pack from `cargo xtask shaders` in
+//! `target/shaders/`; with `KNORKE_REQUIRE_GPU=1` a skip is a failure.
 //!
-//! `KNORKE_SPIKE_OUT=<dir>` writes each image and an amplified diff image there;
-//! `KNORKE_SPIKE_BENCH=<frames>` also times that many frames (wall clock, record + submit +
+//! `KNORKE_SCENE_OUT=<dir>` writes each image and an amplified diff image there;
+//! `KNORKE_SCENE_BENCH=<frames>` also times that many frames (wall clock, record + submit +
 //! wait, as `gate_ref.c` does with `CHI_Render`).
 #![cfg(feature = "gpu")]
 
@@ -29,17 +29,19 @@ use knorke_gpu::sys::gpu::{
     SDL_GPUTextureUsageFlags,
 };
 use knorke_gpu::{
-    CommandBuffer, Device, DownloadBuffer, Filter, Gpu, LiveCounter, Texture, TextureDesc,
-    UploadBuffer, init_video,
+    CommandBuffer, Device, DownloadBuffer, Gpu, LiveCounter, Texture, TextureDesc, UploadBuffer,
+    init_video,
 };
+use knorke_integration::light2d::{Light2dFrame, Light2dRenderer, Light2dSettings};
 use knorke_light2d::codec::{AlphaSource, Material, NormalMapOptions, convert_normal_map};
-use knorke_light2d::gpu_spike::{SpikeFrame, SpikeRenderer};
 use knorke_light2d::light::{LightDesc, LightType};
-use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
+use knorke_light2d::pass_plan::{PassStages, SceneStores};
 use knorke_light2d::projection::Projection;
 use knorke_light2d::settings::LightSettings;
-use knorke_light2d::{LightStore, NoResources};
+use knorke_light2d::shadow::MaskUpdate;
+use knorke_light2d::{LightStore, NoResources, ObstacleStore};
 use knorke_math::{At, Vec2, Vec3};
+use knorke_post::settings::{Filter as OutputFilter, PostSettings};
 
 /// One device at a time: SDL's video init and the GPU tests of this crate must not overlap.
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -58,7 +60,7 @@ struct Scene {
     occlusion: Option<Vec<u8>>,
     light: LightDesc,
     ambient: f32,
-    filter: Filter,
+    filter: OutputFilter,
 }
 
 /// examples/minimal_normal_map/main.c: a grey square, a dome normal map (satin), one white
@@ -110,7 +112,7 @@ fn minimal_normal_map() -> Scene {
         occlusion: None,
         light: d,
         ambient: 0.1,
-        filter: Filter::Nearest,
+        filter: OutputFilter::Nearest,
     }
 }
 
@@ -158,7 +160,7 @@ fn gate_sprite_shadow() -> Scene {
         occlusion: Some(occlusion),
         light: d,
         ambient: 0.08,
-        filter: Filter::Linear,
+        filter: OutputFilter::Linear,
     }
 }
 
@@ -232,14 +234,17 @@ fn report(name: &str, budget: &str, r: &ParityReport) {
 /// given, submits and waits.
 fn frame_once(
     device: &Device,
-    renderer: &mut SpikeRenderer<'_>,
-    frame: &SpikeFrame<'_>,
-    lights: &LightList,
+    renderer: &mut Light2dRenderer<'_>,
+    frame: &Light2dFrame<'_>,
+    stores: &SceneStores<'_>,
+    settings: &Light2dSettings,
     readback: Option<&DownloadBuffer<'_>>,
-) {
-    let prepared = renderer.prepare(frame, lights).unwrap();
+) -> knorke_light2d::pass_plan::PassPrepared {
+    let prepared = renderer.prepare(frame, stores, settings).unwrap();
     let mut cmd = CommandBuffer::acquire(device).unwrap();
-    renderer.record(&mut cmd, frame, lights, prepared).unwrap();
+    renderer
+        .record(&mut cmd, frame, settings, prepared)
+        .unwrap();
     if let Some(download) = readback {
         cmd.copy_pass()
             .unwrap()
@@ -247,13 +252,16 @@ fn frame_once(
             .unwrap();
     }
     cmd.submit_and_wait().unwrap();
+    prepared.light
 }
 
 #[test]
-fn spike_matches_chiaro() {
+fn scenes_match_chiaro_through_pass_plan_and_post() {
     let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let require = std::env::var("KNORKE_REQUIRE_GPU").is_ok_and(|v| v == "1");
     let pack = workspace().join("target/shaders/knorke-chiaro.spirv.kpak");
     let Ok(pack_bytes) = std::fs::read(&pack) else {
+        assert!(!require, "no shader pack at {}", pack.display());
         eprintln!(
             "skipped: no shader pack at {} (cargo xtask shaders)",
             pack.display()
@@ -264,17 +272,18 @@ fn spike_matches_chiaro() {
     let device = match Device::create(SDL_GPU_SHADERFORMAT_SPIRV, false) {
         Ok(d) => d,
         Err(e) => {
+            assert!(!require, "no Vulkan device ({})", e.message);
             eprintln!("skipped: no Vulkan device ({})", e.message);
             return;
         }
     };
     let counter = LiveCounter::new();
     let gpu = Gpu::new(&device, &counter);
-    let mut renderer = SpikeRenderer::new(gpu, pack_bytes).unwrap();
-    let bench = std::env::var("KNORKE_SPIKE_BENCH")
+    let mut renderer = Light2dRenderer::new(gpu, pack_bytes).unwrap();
+    let bench = std::env::var("KNORKE_SCENE_BENCH")
         .ok()
         .and_then(|s| s.parse::<u32>().ok());
-    let out = std::env::var("KNORKE_SPIKE_OUT").ok().map(PathBuf::from);
+    let out = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
     let mut failures = Vec::new();
 
     for scene in [minimal_normal_map(), gate_sprite_shadow()] {
@@ -290,39 +299,45 @@ fn spike_matches_chiaro() {
             .as_deref()
             .map(|o| texture(gpu, w, h, sampled, Some(o)));
         let target = texture(gpu, w, h, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, None);
-        let frame = SpikeFrame {
-            scene: color.texture_ref(),
+        let projection = Projection::default();
+        let frame = Light2dFrame {
             material: material.as_ref().map(Texture::texture_ref),
             occlusion: occlusion.as_ref().map(Texture::texture_ref),
-            target: target.texture_ref(),
-            projection: Projection::default(),
-            ambient: Vec3::new(scene.ambient, scene.ambient, scene.ambient),
-            output_filter: scene.filter,
+            ..Light2dFrame::new(color.texture_ref(), target.texture_ref(), &projection)
         };
-        // The culling of Chiaro's context: one light, default settings with the ambient.
-        let mut store = LightStore::new();
-        store.create(&scene.light, &NoResources).unwrap();
-        let settings = LightSettings {
-            ambient: frame.ambient,
-            ..LightSettings::default()
+        // Chiaro's defaults with the scene's ambient and output filter.
+        let mut settings = Light2dSettings {
+            light: LightSettings {
+                ambient: Vec3::new(scene.ambient, scene.ambient, scene.ambient),
+                ..LightSettings::default()
+            },
+            post: PostSettings::default(),
         };
-        let modes = LightModes {
-            normal_mode: scene.material.is_some(),
-            ..Default::default()
-        };
-        let mut lights = LightList::default();
-        collect_lights(
-            &store,
-            &settings,
-            &frame.projection,
-            0.0,
-            w,
-            h,
-            &modes,
-            &mut lights,
-        );
+        settings.post.output.filter = scene.filter;
+        let mut lights = LightStore::new();
+        lights.create(&scene.light, &NoResources).unwrap();
+        let obstacles = ObstacleStore::new();
+        let stores = SceneStores::new(&lights, &obstacles);
         let mut download = DownloadBuffer::new(gpu, w * h * 4).unwrap();
-        frame_once(&device, &mut renderer, &frame, &lights, Some(&download));
+        let prepared = frame_once(
+            &device,
+            &mut renderer,
+            &frame,
+            &stores,
+            &settings,
+            Some(&download),
+        );
+        let shadows = scene.occlusion.is_some();
+        assert_eq!(
+            prepared.stages.contains(PassStages::OCCLUSION),
+            shadows,
+            "{}: the sprite mask is the only shadow source",
+            scene.name
+        );
+        if shadows {
+            // The sprite may change anywhere every frame: never reused.
+            assert_ne!(prepared.mask_update, Some(MaskUpdate::Reused));
+        }
         let mut pixels = vec![0u8; (w * h * 4) as usize];
         download.read(&mut pixels).unwrap();
 
@@ -353,13 +368,13 @@ fn spike_matches_chiaro() {
                 .collect();
             save_png(&dir.join(format!("{}.diff.png", scene.name)), &diff, w, h);
         }
-        // Host-side wall clock for the benchmark only; the spike itself reads no clock.
+        // Host-side wall clock for the benchmark only; the renderers read no clock.
         #[allow(clippy::disallowed_methods)]
         if let Some(frames) = bench {
             let mut times = Vec::with_capacity(frames as usize);
             for _ in 0..frames {
                 let t = Instant::now();
-                frame_once(&device, &mut renderer, &frame, &lights, None);
+                frame_once(&device, &mut renderer, &frame, &stores, &settings, None);
                 times.push(t.elapsed().as_secs_f64() * 1e6);
             }
             times.sort_by(f64::total_cmp);
@@ -373,6 +388,6 @@ fn spike_matches_chiaro() {
         }
     }
     drop(renderer);
-    assert_eq!(counter.live(), 0, "spike leaked GPU objects");
+    assert_eq!(counter.live(), 0, "the renderers leaked GPU objects");
     assert!(failures.is_empty(), "STRICT parity missed: {failures:#?}");
 }

@@ -1,6 +1,6 @@
 [package]
 name = "knorke-integration"
-description = "Adapters that join Knorke modules: AI glue (perception feeds memory, flow fields feed goal guesses, navigation costs feed squad rules) and the software renderer with its light pass. Domain modules never depend on it."
+description = "Adapters that join Knorke modules: AI glue (perception feeds memory, flow fields feed goal guesses, navigation costs feed squad rules), the software renderer with its light pass, and (feature `gpu`) the 2D GPU light with its post pass. Domain modules never depend on it."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -18,11 +18,18 @@ knorke-math = { workspace = true, optional = true }
 knorke-render = { workspace = true, optional = true }
 knorke-lighting = { workspace = true, optional = true }
 knorke-exec = { workspace = true, optional = true }
+knorke-gpu = { workspace = true, optional = true }
+knorke-light2d = { workspace = true, optional = true }
+knorke-post = { workspace = true, optional = true }
 
 [features]
 default = ["ai", "pixel"]
 ai = ["dep:knorke-ai", "dep:knorke-grid", "dep:knorke-navigation", "dep:knorke-observe", "dep:knorke-perception"]
 pixel = ["dep:knorke-math", "dep:knorke-render", "dep:knorke-lighting", "dep:knorke-exec"]
+# GPU 2D light: the pass plan of knorke-light2d and the post pass of knorke-post (not in default).
+gpu = ["dep:knorke-gpu", "dep:knorke-light2d", "dep:knorke-post", "knorke-light2d/gpu", "knorke-post/gpu"]
+# `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.
+sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
 
 [[example]]
 name = "ambush_rules"
@@ -55,6 +62,11 @@ required-features = ["ai"]
 [[example]]
 name = "walk_distance_scene"
 required-features = ["ai"]
+
+[dev-dependencies]
+# GPU scene test (feature `gpu`): golden PNGs and the parity metric of the Chiaro port (P3).
+png = "0.17"
+knorke-contract-tests = { path = "../../tests/contracts" }
 
 [lints]
 workspace = true

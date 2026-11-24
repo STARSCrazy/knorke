@@ -5,6 +5,8 @@
 //! - feature `ai`: navigation, perception and AI (ADR 0012), see below.
 //! - feature `pixel`: [`pixel`], software renderer (`knorke-render`) + light pass
 //!   (`knorke-lighting`), profile `scene.render.lighting` (ADR 0013).
+//! - feature `gpu` (not in `default`): [`light2d`], the pass plan of `knorke-light2d` followed
+//!   by the post pass of `knorke-post` on the host's GPU device (ADR 0014, ADR 0017).
 //!
 //! ## AI (feature `ai`)
 //!
@@ -23,6 +25,8 @@
 //! from flow fields; [`debug`] holds
 //! everything trace related.
 
+#[cfg(feature = "gpu")]
+pub mod light2d;
 #[cfg(feature = "pixel")]
 pub mod pixel;
 

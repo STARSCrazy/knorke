@@ -40,7 +40,7 @@ use super::params::{
     CompositeProgram, InputColorSpace, composite_layout_of, composite_program_of, medium_nearest,
 };
 use crate::light_program::{LightSampler, LightUniform};
-use crate::lighting::{DetailMode, LightingResult, LightingStage};
+use crate::lighting::{DetailMode, LightingResult, LightingStage, PureAmbient};
 use crate::projection::Projection;
 use crate::settings::LightSettings;
 
@@ -86,7 +86,9 @@ pub struct CompositeLight<'a> {
 
 impl<'a> CompositeLight<'a> {
     /// The result of a [`LightingStage`] frame: its buffers as far as `result` says the last
-    /// `prepare` drew them. `pure_ambient` stays `None` (the ambient zone pass is P26).
+    /// `prepare` drew them, the pure ambient of the zone pass included (Chiaro
+    /// `LightingResult::pureAmbient`: the separate target, or the light buffer of a frame with
+    /// zones and no lights; the composite reads it in direction mode only).
     pub fn from_stage(stage: &'a LightingStage<'_>, result: &LightingResult) -> Self {
         let drawn = result.light_buffer;
         Self {
@@ -103,7 +105,11 @@ impl<'a> CompositeLight<'a> {
             } else {
                 None
             },
-            pure_ambient: None,
+            pure_ambient: match result.pure_ambient {
+                PureAmbient::None => None,
+                PureAmbient::LightBuffer => stage.light_buffer(),
+                PureAmbient::Separate => stage.pure_ambient(),
+            },
         }
     }
 }
