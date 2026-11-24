@@ -305,7 +305,11 @@ fn steady_state_light2d_paths_allocate_nothing() {
             material_pixel(Material::preset(MaterialPreset::Glass), n),
         );
         // Composite pass: program choice, binding layout, parameter block.
-        let program = composite_program_of(i % 2 == 0, i % 3 == 0, i % 5 == 0);
+        let program = composite_program_of(
+            i.is_multiple_of(2),
+            i.is_multiple_of(3),
+            i.is_multiple_of(5),
+        );
         let composite = CompositeParams::new(&CompositeParamsInput {
             input_space: InputColorSpace::Srgb,
             scene_format_is_srgb: false,
