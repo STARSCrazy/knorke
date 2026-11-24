@@ -15,7 +15,8 @@ use knorke_gpu::{
     BINDING_MISMATCH, Bindings, Blend, ColorTarget, CommandBuffer, Device, DownloadBuffer, Filter,
     Gpu, LiveCounter, Load, PipelineCache, ProgramDesc, RECORD_NOT_BOUND, RECORD_OUT_OF_RANGE,
     RECORD_TARGET_MISMATCH, RECORD_USAGE, SamplerBinding, Samplers, ShaderLibrary, StageBindings,
-    Texture, TextureDesc, UploadBuffer, device_formats, init_video, preferred_format,
+    Texture, TextureDesc, TextureRegion, UploadBuffer, device_formats, init_video,
+    preferred_format,
 };
 
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -87,6 +88,56 @@ fn upload_and_download_round_trip() {
             .unwrap_err();
         assert_eq!(e.code, RECORD_OUT_OF_RANGE);
         // Dropped without submit: cancelled.
+    }
+    assert_eq!(counter.live(), 0);
+}
+
+#[test]
+fn partial_texture_upload_writes_only_its_region() {
+    let Some((_g, device)) = device() else { return };
+    let counter = LiveCounter::new();
+    {
+        let gpu = Gpu::new(&device, &counter);
+        let desc = TextureDesc::new(4, 4, RGBA8, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+        let texture = Texture::new(gpu, desc).unwrap();
+        upload(gpu, &texture, &[7; 64]);
+
+        // 2x2 texels staged at byte offset 512 (the alignment D3D12 wants), into (1, 2).
+        let mut up = UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), 1024, "cells");
+        up.reserve(1024).unwrap();
+        let patch: Vec<u8> = (100..116).collect();
+        up.map().unwrap().bytes()[512..528].copy_from_slice(&patch);
+        let region = TextureRegion {
+            x: 1,
+            y: 2,
+            width: 2,
+            height: 2,
+        };
+        let mut cmd = CommandBuffer::acquire(&device).unwrap();
+        {
+            let mut copy = cmd.copy_pass().unwrap();
+            // Outside the texture, or beyond the staged bytes: refused, nothing recorded.
+            let outside = TextureRegion { x: 3, ..region };
+            let e = copy
+                .upload_to_texture_region(&up, 512, texture.texture_ref(), outside, false)
+                .unwrap_err();
+            assert_eq!(e.code, RECORD_OUT_OF_RANGE);
+            let e = copy
+                .upload_to_texture_region(&up, 1020, texture.texture_ref(), region, false)
+                .unwrap_err();
+            assert_eq!(e.code, RECORD_OUT_OF_RANGE);
+            copy.upload_to_texture_region(&up, 512, texture.texture_ref(), region, false)
+                .unwrap();
+        }
+        cmd.submit_and_wait().unwrap();
+
+        let got = download(gpu, &texture);
+        let mut want = vec![7u8; 64];
+        for row in 0..2usize {
+            let dst = ((2 + row) * 4 + 1) * 4;
+            want[dst..dst + 8].copy_from_slice(&patch[row * 8..row * 8 + 8]);
+        }
+        assert_eq!(got, want);
     }
     assert_eq!(counter.live(), 0);
 }

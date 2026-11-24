@@ -82,7 +82,7 @@ pub use record::{
     ColorTarget, CommandBuffer, CopyPass, Load, MAX_COLOR_TARGETS, MAX_SAMPLERS,
     MAX_STORAGE_BUFFERS, MAX_STORAGE_TEXTURES, MAX_UNIFORMS, PipelineRef, RECORD_FAILED,
     RECORD_NOT_BOUND, RECORD_OUT_OF_RANGE, RECORD_TARGET_MISMATCH, RECORD_USAGE,
-    RECORD_WRONG_DEVICE, RenderPass,
+    RECORD_WRONG_DEVICE, RenderPass, TextureRegion,
 };
 #[cfg(feature = "sdl")]
 pub use render_target::{RENDER_TARGET_CREATE_FAILED, RENDER_TARGET_ZERO_SIZE, RenderTarget};
