@@ -21,10 +21,10 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use knorke_contract_tests::parity::{
-    ParityBudget, compare_rgba8, load_png_rgba8, save_png_rgba8,
+use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, load_png_rgba8, save_png_rgba8};
+use knorke_gpu::sys::gpu::{
+    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 };
-use knorke_gpu::sys::gpu::{SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET};
 use knorke_gpu::test_support::{sampled_rgba8, texture, vulkan_device_with_pack, workspace_root};
 use knorke_gpu::{CommandBuffer, Device, DownloadBuffer, Gpu, LiveCounter, Texture};
 use knorke_integration::light2d::{Light2dFrame, Light2dRenderer, Light2dSettings};
@@ -202,7 +202,13 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
             .occlusion
             .as_deref()
             .map(|o| sampled_rgba8(gpu, w, h, o));
-        let target = texture(gpu, (w, h), SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, None);
+        let target = texture(
+            gpu,
+            (w, h),
+            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+            None,
+        );
         let projection = Projection::default();
         let frame = Light2dFrame {
             material: material.as_ref().map(Texture::texture_ref),

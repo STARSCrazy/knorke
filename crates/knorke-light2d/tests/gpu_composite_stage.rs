@@ -332,11 +332,15 @@ impl<'d> Host<'d> {
     /// One golden scene: light pass, composite, the HDR buffer read back.
     fn frame(&mut self, s: &Scene) -> (LightingResult, CompositeProgram, Vec<u8>) {
         let scene_tex = sampled_rgba8(self.gpu, W, H, &scene_pixels());
-        let glow_tex = s.glow.then(|| sampled_rgba8(self.gpu, W, H, &glow_pixels()));
+        let glow_tex = s
+            .glow
+            .then(|| sampled_rgba8(self.gpu, W, H, &glow_pixels()));
         let material_tex = s
             .material
             .then(|| sampled_rgba8(self.gpu, W, H, &dome_material_pixels(W, H)));
-        let surface_tex = s.iso.then(|| sampled_rgba8(self.gpu, W, H, &surface_pixels()));
+        let surface_tex = s
+            .iso
+            .then(|| sampled_rgba8(self.gpu, W, H, &surface_pixels()));
         let settings = s.settings();
         let projection = if s.iso {
             Projection::iso(at(0.0, 0.0), 2.0, 1.0, W, H)
@@ -442,7 +446,8 @@ fn hdr_buffers_match_chiaro() {
                 "{name}: specular"
             );
             assert_eq!(program, CompositeProgram::Base, "{name}: program");
-            let (n, max) = rgba16f_diff(&hdr, &golden_bytes("composite", &format!("{name}.hdr.bin")));
+            let (n, max) =
+                rgba16f_diff(&hdr, &golden_bytes("composite", &format!("{name}.hdr.bin")));
             eprintln!("{name}: HDR buffer {n} differing texels (max {max})");
             if n > 0 {
                 failures.push(format!("{name}: {n} texels, max {max}"));

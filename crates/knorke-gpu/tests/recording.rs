@@ -6,17 +6,15 @@
 use std::path::PathBuf;
 
 use knorke_gpu::sys::gpu::{
-    SDL_GPU_SHADERFORMAT_DXIL, SDL_GPU_SHADERFORMAT_MSL, SDL_GPU_SHADERFORMAT_SPIRV,
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
     SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUBufferUsageFlags,
 };
 use knorke_gpu::test_support::{any_device, read_texture, upload_pixels};
 use knorke_gpu::{
-    BINDING_MISMATCH, Bindings, Blend, ColorTarget, CommandBuffer, Device, DownloadBuffer, Filter,
-    Gpu, LiveCounter, Load, PipelineCache, ProgramDesc, RECORD_NOT_BOUND, RECORD_OUT_OF_RANGE,
+    BINDING_MISMATCH, Bindings, Blend, ColorTarget, CommandBuffer, DownloadBuffer, Filter, Gpu,
+    LiveCounter, Load, PipelineCache, ProgramDesc, RECORD_NOT_BOUND, RECORD_OUT_OF_RANGE,
     RECORD_TARGET_MISMATCH, RECORD_USAGE, SamplerBinding, Samplers, ShaderLibrary, StageBindings,
-    Texture, TextureDesc, TextureRegion, UploadBuffer, device_formats, init_video,
-    preferred_format,
+    Texture, TextureDesc, TextureRegion, UploadBuffer, device_formats, preferred_format,
 };
 
 const RGBA8: knorke_gpu::sys::gpu::SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;

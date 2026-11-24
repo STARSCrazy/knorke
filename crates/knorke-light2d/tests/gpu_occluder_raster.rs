@@ -163,8 +163,8 @@ impl<'d> Host<'d> {
                 .unwrap();
         }
         let mask_down = queue_download(self.gpu, &mut cmd, self.mask.texture_ref());
-        let height_down = height_mode
-            .then(|| queue_download(self.gpu, &mut cmd, self.height.texture_ref()));
+        let height_down =
+            height_mode.then(|| queue_download(self.gpu, &mut cmd, self.height.texture_ref()));
         cmd.submit_and_wait().unwrap();
         let mask = read_download(mask_down);
         let heights = height_down.map_or_else(Vec::new, |down| {
@@ -718,7 +718,11 @@ fn the_mask_scene_matches_cpp_chiaro_texel_for_texel() {
             lit > 1500,
             "the scene should light a good part of the mask, got {lit}"
         );
-        assert_same_bytes("mask_scene", &out.mask, &golden_bytes("occluder", "mask_scene.mask.bin"));
+        assert_same_bytes(
+            "mask_scene",
+            &out.mask,
+            &golden_bytes("occluder", "mask_scene.mask.bin"),
+        );
     });
 }
 

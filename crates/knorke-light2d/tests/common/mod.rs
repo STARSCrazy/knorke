@@ -2,12 +2,14 @@
 //! `mod common;`, so items one binary does not use are fine).
 #![allow(dead_code)]
 
+pub(crate) mod light_host;
+
 use std::collections::BTreeMap;
 
+use knorke_gpu::ProgramDesc;
 use knorke_gpu::kpak::{Program, Stage};
 use knorke_light2d::codec::{AlphaSource, Material, NormalMapOptions, convert_normal_map};
 use knorke_light2d::light_program::{LightLayout, LightSampler, LightStorage, LightUniform};
-use knorke_gpu::ProgramDesc;
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc, TileGridDesc};
 use knorke_light2d::occluder_raster::OCCLUDER_PROGRAMS;
 use knorke_light2d::occlusion::MASK_PROGRAMS;
@@ -139,7 +141,11 @@ pub(crate) fn programs() -> Vec<ProgramDesc> {
         .collect()
 }
 
-pub(crate) fn polygon(store: &mut ObstacleStore, xy: &[Vec2], common: ObstacleCommon) -> ObstacleId {
+pub(crate) fn polygon(
+    store: &mut ObstacleStore,
+    xy: &[Vec2],
+    common: ObstacleCommon,
+) -> ObstacleId {
     store
         .create_shape(&ShapeDesc {
             common,

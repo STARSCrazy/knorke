@@ -13,10 +13,10 @@
 mod common;
 
 use common::check_layout;
+use knorke_gpu::ShaderLibrary;
 use knorke_gpu::kpak::ShaderPack;
 use knorke_gpu::sys::gpu::SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
 use knorke_gpu::test_support::{chiaro_pack, with_chiaro_pack};
-use knorke_gpu::ShaderLibrary;
 use knorke_light2d::light_pipelines::{LIGHT_PROGRAM_UNKNOWN, LightPipelines};
 use knorke_light2d::light_program::{
     LIGHT_PROGRAMS, LightBase, LightFeature, LightProgram, light_layout_of,

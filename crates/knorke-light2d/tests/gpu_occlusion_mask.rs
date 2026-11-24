@@ -187,8 +187,16 @@ fn the_full_frame_matches_cpp_chiaro_texel_for_texel() {
         scene_mask_into(&mut store);
         let out = host.frame(&store, false);
         assert_eq!(out.update, MaskUpdate::Full);
-        assert_same_bytes("full mask", &out.mask, &golden_bytes("field", "full.mask.bin"));
-        assert_same_bytes("full field", &out.field, &golden_bytes("field", "full.field.bin"));
+        assert_same_bytes(
+            "full mask",
+            &out.mask,
+            &golden_bytes("field", "full.mask.bin"),
+        );
+        assert_same_bytes(
+            "full field",
+            &out.field,
+            &golden_bytes("field", "full.field.bin"),
+        );
     });
 }
 
@@ -219,26 +227,30 @@ fn the_cached_sequence_matches_cpp_chiaro_texel_for_texel() {
         store.set_transform(bar, at(96.0, 44.0), 50.0).unwrap();
         let whole = host.frame(&store, false);
         got.push(whole.update);
-        assert_same_bytes("pan_whole mask", &whole.mask, &golden_bytes("field", "pan_whole.mask.bin"));
         assert_same_bytes(
-                "pan_whole field",
-                &whole.field,
-                &golden_bytes("field", "pan_whole.field.bin")
-            );
+            "pan_whole mask",
+            &whole.mask,
+            &golden_bytes("field", "pan_whole.mask.bin"),
+        );
+        assert_same_bytes(
+            "pan_whole field",
+            &whole.field,
+            &golden_bytes("field", "pan_whole.field.bin"),
+        );
 
         pan(&mut host.projection, -1.4, -0.6);
         let fraction = host.frame(&store, false);
         got.push(fraction.update);
         assert_same_bytes(
-                "pan_fraction mask",
-                &fraction.mask,
-                &golden_bytes("field", "pan_fraction.mask.bin")
-            );
+            "pan_fraction mask",
+            &fraction.mask,
+            &golden_bytes("field", "pan_fraction.mask.bin"),
+        );
         assert_same_bytes(
-                "pan_fraction field",
-                &fraction.field,
-                &golden_bytes("field", "pan_fraction.field.bin")
-            );
+            "pan_fraction field",
+            &fraction.field,
+            &golden_bytes("field", "pan_fraction.field.bin"),
+        );
         assert_eq!(got, want);
     });
 }

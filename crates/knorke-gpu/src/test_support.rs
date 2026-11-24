@@ -150,7 +150,10 @@ fn run_counted(device: &Device, body: impl for<'d> FnOnce(Gpu<'d>)) {
 
 /// A committed Chiaro dump: `tests/golden/chiaro/<dir>/<name>`. Panics if it is missing.
 pub fn golden_bytes(dir: &str, name: &str) -> Vec<u8> {
-    let path = workspace_root().join("tests/golden/chiaro").join(dir).join(name);
+    let path = workspace_root()
+        .join("tests/golden/chiaro")
+        .join(dir)
+        .join(name);
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
@@ -169,10 +172,11 @@ pub fn half_to_f32(h: u16) -> f32 {
 /// Differing RGBA16F texels of two readbacks and the largest channel difference.
 pub fn rgba16f_diff(a: &[u8], b: &[u8]) -> (usize, f32) {
     assert_eq!(a.len(), b.len(), "RGBA16F readbacks differ in size");
-    let channel = |texel: &[u8], c: usize| half_to_f32(u16::from_le_bytes([texel[c * 2], texel[c * 2 + 1]]));
+    let channel =
+        |texel: &[u8], c: usize| half_to_f32(u16::from_le_bytes([texel[c * 2], texel[c * 2 + 1]]));
     let mut differing = 0;
     let mut largest = 0.0f32;
-    for (x, y) in a.chunks_exact(8).zip(b.chunks_exact(8)) {
+    for (x, y) in a.as_chunks::<8>().0.iter().zip(b.as_chunks::<8>().0) {
         if x != y {
             differing += 1;
             for c in 0..4 {
@@ -213,7 +217,12 @@ pub fn assert_same_bytes(name: &str, got: &[u8], want: &[u8]) {
 /// Fills `texture` with `pixels` (the host's work: Chiaro's demos draw these layers with their
 /// renderer). The upload is submitted and waited for.
 pub fn upload_pixels(gpu: Gpu<'_>, texture: &Texture<'_>, pixels: &[u8]) {
-    let mut up = UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), pixels.len() as u32, "pixels");
+    let mut up = UploadBuffer::new(
+        gpu,
+        SDL_GPUBufferUsageFlags(0),
+        pixels.len() as u32,
+        "pixels",
+    );
     up.reserve(pixels.len() as u64).unwrap();
     up.map().unwrap().bytes()[..pixels.len()].copy_from_slice(pixels);
     let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
@@ -247,7 +256,13 @@ pub fn sampled<'d>(
     format: SDL_GPUTextureFormat,
     pixels: &[u8],
 ) -> Texture<'d> {
-    texture(gpu, (w, h), format, SDL_GPU_TEXTUREUSAGE_SAMPLER, Some(pixels))
+    texture(
+        gpu,
+        (w, h),
+        format,
+        SDL_GPU_TEXTUREUSAGE_SAMPLER,
+        Some(pixels),
+    )
 }
 
 /// A sampled `R8G8B8A8_UNORM` texture filled with `pixels`.
@@ -364,7 +379,10 @@ pub mod spirv {
                     })
                     .collect();
                 m.sort_by_key(|x| x.0);
-                (name.clone(), m.into_iter().map(|(_, n, o)| (n, o)).collect())
+                (
+                    name.clone(),
+                    m.into_iter().map(|(_, n, o)| (n, o)).collect(),
+                )
             })
             .collect();
         Module { bindings, structs }

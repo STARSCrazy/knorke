@@ -19,18 +19,16 @@
 
 use std::path::{Path, PathBuf};
 
-use knorke_contract_tests::parity::{
-    ParityBudget, compare_rgba8, load_png_rgba8, save_png_rgba8,
-};
+use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, load_png_rgba8, save_png_rgba8};
 use knorke_gpu::sys::gpu::{
-    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB, SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
-    SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUTextureFormat,
+    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB,
+    SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+    SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUTextureFormat,
 };
 use knorke_gpu::test_support::{texture, vulkan_device};
 use knorke_gpu::{
-    Bindings, Blend, ColorTarget, CommandBuffer, DownloadBuffer, Filter, Gpu, LiveCounter,
-    Load, PipelineCache, ProgramDesc, RenderTarget, SamplerBinding, Samplers, ShaderLibrary,
+    Bindings, Blend, ColorTarget, CommandBuffer, DownloadBuffer, Filter, Gpu, LiveCounter, Load,
+    PipelineCache, ProgramDesc, RenderTarget, SamplerBinding, Samplers, ShaderLibrary,
     StageBindings, TextureRef,
 };
 use knorke_math::Vec2;

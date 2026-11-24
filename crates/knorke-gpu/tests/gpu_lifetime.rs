@@ -16,8 +16,8 @@ use knorke_gpu::sys::gpu::{
 };
 use knorke_gpu::test_support::any_device;
 use knorke_gpu::{
-    Device, Filter, Gpu, LiveCounter, RENDER_TARGET_ZERO_SIZE, RenderTarget, Samplers,
-    UPLOAD_LIMIT, UPLOAD_NOT_RESERVED, UploadBuffer, global_live_gpu_objects,
+    Filter, Gpu, LiveCounter, RENDER_TARGET_ZERO_SIZE, RenderTarget, Samplers, UPLOAD_LIMIT,
+    UPLOAD_NOT_RESERVED, UploadBuffer, global_live_gpu_objects,
 };
 
 #[test]

@@ -193,12 +193,10 @@ dependencies = [
 name = "knorke-light2d"
 version = "0.0.1"
 dependencies = [
- "knorke-contract-tests",
  "knorke-gpu",
  "knorke-math",
  "knorke-observe",
  "knorke-types",
- "png",
 ]
 
 [[package]]
@@ -254,7 +252,6 @@ dependencies = [
  "knorke-gpu",
  "knorke-math",
  "knorke-types",
- "png",
 ]
 
 [[package]]

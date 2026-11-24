@@ -17,320 +17,37 @@
     clippy::chunks_exact_to_as_chunks
 )]
 
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+mod common;
 
-use knorke_gpu::sys::gpu::{
-    SDL_GPU_SHADERFORMAT_SPIRV, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER,
-    SDL_GPUBufferUsageFlags,
+use common::at;
+use common::light_host::{Host, L, L0, Out, Scene, golden_programs, with_host};
+use knorke_gpu::test_support::{
+    golden_bytes, half_to_f32, queue_download, read_download, rgba16f_diff, sampled_rgba8,
+    with_chiaro_pack,
 };
-use knorke_gpu::{
-    CommandBuffer, Device, DownloadBuffer, Filter, Gpu, LiveCounter, PipelineCache, ProgramDesc,
-    Samplers, ShaderLibrary, Texture, TextureDesc, TextureRef, UploadBuffer, init_video,
-};
+use knorke_gpu::{CommandBuffer, Gpu, Texture};
 use knorke_light2d::ambient_zone::{AmbientZoneParams, ZoneShape, fold_ambient, make_stored_zone};
-use knorke_light2d::ambient_zone_culling::{AmbientZoneList, CullScene, collect_ambient_zones};
-use knorke_light2d::ambient_zone_store::AmbientZoneStore;
-use knorke_light2d::animation::AnimationStore;
 use knorke_light2d::atlas::{
-    LightAtlases, fill_mask_atlas, fill_profile_atlas, mask_atlas_bytes, mask_atlas_rows,
-    profile_atlas_bytes, profile_atlas_rows,
+    fill_mask_atlas, fill_profile_atlas, mask_atlas_bytes, mask_atlas_rows, profile_atlas_bytes,
+    profile_atlas_rows,
 };
-use knorke_light2d::light::{Height, LightDesc, LightType, MaskMode, ProfileId};
-use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
+use knorke_light2d::light::{Height, LightType, ProfileId};
+use knorke_light2d::light_culling::{LightModes, collect_lights};
 use knorke_light2d::light_mask::{make_mask_placement, mask_factor};
 use knorke_light2d::light_math::{attenuation, spot_factor};
-use knorke_light2d::light_pipelines::LightPipelines;
-use knorke_light2d::light_program::{LIGHT_PROGRAMS, LightBase, LightProgram};
-use knorke_light2d::lighting::{
-    DetailMode, LightingFrame, LightingRecord, LightingResult, LightingStage, PureAmbient,
-    ShadowMaps,
-};
-use knorke_light2d::mask::{MaskPreset, MaskShape, build_pixel_mask};
-use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
-use knorke_light2d::occluder_raster::{
-    INFINITE_TOP, NoPatterns, OCCLUDER_PROGRAMS, OccluderGeometry, OccluderPrograms, TileOccluders,
-    thin_circle_radius,
-};
-use knorke_light2d::occlusion::{MASK_PROGRAMS, MaskPrograms, OcclusionMask};
+use knorke_light2d::lighting::{DetailMode, LightingFrame, PureAmbient};
+use knorke_light2d::mask::MaskPreset;
 use knorke_light2d::pass_plan::{
     PassFrame, PassPlan, PassPrepared, PassRecord, PassStages, SceneStores,
 };
-use knorke_light2d::profile::{
-    PROFILE_VALUES, ProfilePreset, ProfileShape, build_shape_profile, profile_factor,
-};
+use knorke_light2d::profile::{PROFILE_VALUES, ProfilePreset, profile_factor};
 use knorke_light2d::profile_import::import_ies;
-use knorke_light2d::settings::{LightSettings, Quality, Resolutions};
-use knorke_light2d::shadow::{MaskPlanInput, MaskUpdate};
-use knorke_light2d::zone_pass::ZoneInput;
-use knorke_light2d::{
-    LightStore, MaskId, MaskStore, ObstacleStore, Projection, StoreResources,
-    profile_store::ProfileStore,
-};
-use knorke_math::{At, Vec2, Vec3, World2};
-
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn workspace() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn at(x: f32, y: f32) -> At<World2, Vec2> {
-    At::new(Vec2::new(x, y))
-}
-
-/// The device of this machine, or a note why not. The note is a failure when
-/// `KNORKE_REQUIRE_GPU=1` is set, so a skip on a machine with a GPU cannot go unnoticed.
-fn device() -> Option<(MutexGuard<'static, ()>, Device, Vec<u8>)> {
-    let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let require = std::env::var("KNORKE_REQUIRE_GPU").is_ok_and(|v| v == "1");
-    let pack = workspace().join("target/shaders/knorke-chiaro.spirv.kpak");
-    let Ok(pack) = std::fs::read(&pack) else {
-        assert!(!require, "no shader pack at {}", pack.display());
-        eprintln!(
-            "skipped: no shader pack at {} (cargo xtask shaders)",
-            pack.display()
-        );
-        return None;
-    };
-    init_video(Some(c"vulkan"));
-    match Device::create(SDL_GPU_SHADERFORMAT_SPIRV, false) {
-        Ok(d) => Some((guard, d, pack)),
-        Err(e) => {
-            assert!(!require, "no Vulkan device ({})", e.message);
-            eprintln!("skipped: no Vulkan device ({})", e.message);
-            None
-        }
-    }
-}
-
-fn half(h: u16) -> f32 {
-    let (e, m) = (i32::from((h >> 10) & 0x1F), f32::from(h & 0x3FF));
-    let v = match e {
-        0 => m * f32::from_bits((127 - 24) << 23),
-        _ => (1.0 + m / 1024.0) * f32::from_bits(((e - 15 + 127) as u32) << 23),
-    };
-    if h & 0x8000 != 0 { -v } else { v }
-}
-
-/// A light of the dumper's `Light` struct (same defaults).
-#[derive(Clone, Copy)]
-struct L {
-    kind: LightType,
-    x: f32,
-    y: f32,
-    height: Height,
-    radius: f32,
-    color: Vec3,
-    intensity: f32,
-    source: f32,
-    falloff: f32,
-    shadows: bool,
-    direction: Vec3,
-    inner: f32,
-    outer: f32,
-    profile: Option<ProfileId>,
-    profile_rotation: f32,
-    mask: Option<MaskId>,
-    mask_angle: Option<f32>,
-    /// Window mode: centre, half extents u and v.
-    window: Option<[Vec3; 3]>,
-}
-
-const L0: L = L {
-    kind: LightType::Point,
-    x: 0.0,
-    y: 0.0,
-    height: Height::Auto,
-    radius: 30.0,
-    color: Vec3::new(1.0, 1.0, 1.0),
-    intensity: 1.0,
-    source: 0.0,
-    falloff: 2.0,
-    shadows: false,
-    direction: Vec3::new(1.0, 0.0, 0.0),
-    inner: 20.0,
-    outer: 30.0,
-    profile: None,
-    profile_rotation: 0.0,
-    mask: None,
-    mask_angle: None,
-    window: None,
-};
+use knorke_light2d::shadow::MaskUpdate;
+use knorke_light2d::{MaskId, Projection, StoreResources};
+use knorke_math::{Vec2, Vec3};
 
 /// Pointing down, as the Chiaro tests aim their profiled and masked lights.
 const DOWN: Vec3 = Vec3::new(0.0, 0.0, -1.0);
-
-impl L {
-    fn desc(&self) -> LightDesc {
-        let mut d = LightDesc::new(self.kind);
-        d.position = at(self.x, self.y);
-        d.height = self.height;
-        d.radius = self.radius;
-        d.color = self.color;
-        d.intensity = self.intensity;
-        d.source_radius = self.source;
-        d.falloff = self.falloff;
-        d.cast_shadows = self.shadows;
-        d.direction = self.direction;
-        d.inner_angle = self.inner;
-        d.outer_angle = self.outer;
-        d.profile = self.profile;
-        d.profile_rotation = self.profile_rotation;
-        d.mask = self.mask;
-        d.mask_angle = self.mask_angle;
-        if let Some([c, u, v]) = self.window {
-            d.mask_mode = MaskMode::Window;
-            d.mask_center = c;
-            d.mask_u = u;
-            d.mask_v = v;
-        }
-        d
-    }
-}
-
-/// One scene: lights, obstacles, stores, settings and which buffers are given.
-struct Scene {
-    name: &'static str,
-    size: (u32, u32),
-    lights: LightStore,
-    obstacles: ObstacleStore,
-    profiles: ProfileStore,
-    masks: MaskStore,
-    animations: AnimationStore,
-    zones: AmbientZoneStore,
-    settings: LightSettings,
-    material: bool,
-    surface: bool,
-    projection: Projection,
-}
-
-impl Scene {
-    fn new(name: &'static str, ambient: f32, light_resolution: f32) -> Self {
-        let mut settings = LightSettings {
-            ambient: Vec3::new(ambient, ambient, ambient),
-            ..LightSettings::default()
-        };
-        if light_resolution < 1.0 {
-            settings.quality.quality = Quality::Custom(Resolutions {
-                light: light_resolution,
-                shadow: 1.0,
-                medium: 0.5,
-            });
-        }
-        Self {
-            name,
-            size: (64, 64),
-            lights: LightStore::new(),
-            obstacles: ObstacleStore::new(),
-            profiles: ProfileStore::new(),
-            masks: MaskStore::new(),
-            animations: AnimationStore::new(),
-            zones: AmbientZoneStore::new(),
-            settings,
-            material: false,
-            surface: false,
-            projection: Projection::IDENTITY,
-        }
-    }
-
-    /// The 96 x 48 scenes of the dumper.
-    fn golden(name: &'static str, ambient: Vec3, light_resolution: f32) -> Self {
-        let mut s = Self::new(name, 0.0, light_resolution);
-        s.settings.ambient = ambient;
-        s.size = (96, 48);
-        s
-    }
-
-    fn light(&mut self, l: L) -> knorke_light2d::light::LightId {
-        let res = StoreResources::new(&self.animations, &self.masks).with_profiles(&self.profiles);
-        self.lights.create(&l.desc(), &res).unwrap()
-    }
-
-    fn lights(&mut self, ls: &[L]) -> &mut Self {
-        for l in ls {
-            self.light(*l);
-        }
-        self
-    }
-
-    fn polygon(&mut self, xy: &[f32], height: f32, opacity: f32) -> &mut Self {
-        let v: Vec<Vec2> = xy.chunks(2).map(|c| Vec2::new(c[0], c[1])).collect();
-        let common = ObstacleCommon {
-            height,
-            opacity,
-            ..Default::default()
-        };
-        self.obstacles
-            .create_shape(&ShapeDesc {
-                common,
-                shape: Shape::Polygon(&v),
-            })
-            .unwrap();
-        self
-    }
-
-    fn circle(&mut self, radius: f32, x: f32, y: f32, height: f32) -> &mut Self {
-        let common = ObstacleCommon {
-            position: at(x, y),
-            height,
-            ..Default::default()
-        };
-        self.obstacles
-            .create_shape(&ShapeDesc {
-                common,
-                shape: Shape::Circle { radius },
-            })
-            .unwrap();
-        self
-    }
-
-    /// A profile of a preset with the given quadrant gains replaced.
-    fn profile(&mut self, preset: ProfilePreset, gains: [Option<f32>; 4]) -> ProfileId {
-        let mut shape = ProfileShape::preset(preset);
-        for (g, new) in shape.gain.iter_mut().zip(gains) {
-            if let Some(new) = new {
-                *g = new;
-            }
-        }
-        self.profiles
-            .create(build_shape_profile(&shape).unwrap())
-            .unwrap()
-    }
-
-    fn mask_shape(&mut self, preset: MaskPreset, glass: Vec3) -> MaskId {
-        let mut shape = MaskShape::preset(preset);
-        shape.glass = glass;
-        shape.validate().unwrap();
-        let mut texels = Vec::new();
-        shape.build(&mut texels);
-        self.masks.create(texels).unwrap()
-    }
-
-    /// A gobo from RGBA pixels (sRGB, as `CHI_CreateMask` takes them).
-    fn mask_pixels(&mut self, w: u32, h: u32, rgba: &[u8]) -> MaskId {
-        let mut texels = Vec::new();
-        build_pixel_mask(w, h, rgba, (w * 4) as usize, &mut texels).unwrap();
-        self.masks.create(texels).unwrap()
-    }
-
-    fn zone(&mut self, p: &AmbientZoneParams) -> knorke_light2d::ambient_zone_store::AmbientZoneId {
-        self.zones.create(make_stored_zone(p).unwrap()).unwrap()
-    }
-
-    /// Normal mode: the highest height a lit pixel can have (`Context::BuildFrame`).
-    fn max_height(&self) -> f32 {
-        if !self.surface {
-            return 0.0;
-        }
-        let top = self.obstacles.max_finite_top();
-        if top <= 0.0 || self.obstacles.any_infinite_enabled() {
-            255.0 * self.settings.surface_height_step
-        } else {
-            top
-        }
-    }
-}
 
 fn zone_box(x: f32, y: f32, w: f32, d: f32, c: [f32; 3]) -> AmbientZoneParams {
     AmbientZoneParams {
@@ -366,26 +83,6 @@ fn zone_polygon(xy: &[f32], c: [f32; 3]) -> AmbientZoneParams {
 
 const CELLAR: [f32; 3] = [0.25, 0.5, 1.0];
 
-fn texture<'d>(gpu: Gpu<'d>, w: u32, h: u32, pixels: &[u8]) -> Texture<'d> {
-    let desc = TextureDesc::new(
-        w,
-        h,
-        SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        SDL_GPU_TEXTUREUSAGE_SAMPLER,
-    );
-    let texture = Texture::new(gpu, desc).unwrap();
-    let mut up = UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), pixels.len() as u32, "px");
-    up.reserve(pixels.len() as u64).unwrap();
-    up.map().unwrap().bytes()[..pixels.len()].copy_from_slice(pixels);
-    let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
-    cmd.copy_pass()
-        .unwrap()
-        .upload_to_texture(&up, texture.texture_ref(), false)
-        .unwrap();
-    cmd.submit_and_wait().unwrap();
-    texture
-}
-
 /// FNV-1a 64 of the bytes (the dumper's hash).
 fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| {
@@ -393,365 +90,9 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     })
 }
 
-/// An atlas texture read back: width, height, bytes.
-type AtlasDump = (u32, u32, Vec<u8>);
-
-/// What one frame left behind.
-struct Out {
-    result: LightingResult,
-    record: LightingRecord,
-    light: Vec<u8>,
-    light_size: (u32, u32),
-    second: Vec<u8>,
-    /// The pure ambient target, if the zone pass wrote one.
-    ambient: Vec<u8>,
-    programs: Vec<LightProgram>,
-    profile_atlas: Option<AtlasDump>,
-    mask_atlas: Option<AtlasDump>,
-    /// GPU objects alive after the frame.
-    live: u32,
-}
-
-impl Out {
-    /// Channel `c` of light buffer pixel (x, y).
-    fn px(&self, x: u32, y: u32, c: usize) -> f32 {
-        let i = ((y * self.light_size.0 + x) * 8) as usize + c * 2;
-        half(u16::from_le_bytes([self.light[i], self.light[i + 1]]))
-    }
-
-    /// Red channel of light buffer pixel (x, y).
-    fn red(&self, x: u32, y: u32) -> f32 {
-        self.px(x, y, 0)
-    }
-}
-
-struct Host<'d> {
-    gpu: Gpu<'d>,
-    device: &'d Device,
-    counter: &'d LiveCounter,
-    shaders: ShaderLibrary<'d>,
-    pipelines: PipelineCache<'d>,
-    light_pipelines: LightPipelines<'d>,
-    samplers: Samplers<'d>,
-    geometry: OccluderGeometry<'d>,
-    tiles: TileOccluders<'d>,
-    occlusion: OcclusionMask<'d>,
-    lighting: LightingStage<'d>,
-    atlases: LightAtlases<'d>,
-    list: LightList,
-    zone_list: AmbientZoneList,
-}
-
-fn programs() -> Vec<ProgramDesc> {
-    OCCLUDER_PROGRAMS
-        .iter()
-        .chain(&MASK_PROGRAMS)
-        .copied()
-        .collect()
-}
-
-/// Chiaro `AnyShadowCaster` (OcclusionStage.cpp).
-fn any_shadow_caster(l: &LightList) -> bool {
-    !(l.shadowed.is_empty()
-        && l.shadowed_area.is_empty()
-        && l.masked_shadowed.is_empty()
-        && l.directional_shadows == 0
-        && l.caster_classes == 0)
-}
-
-impl<'d> Host<'d> {
-    fn new(gpu: Gpu<'d>, device: &'d Device, counter: &'d LiveCounter, pack: &[u8]) -> Self {
-        let shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
-        let pipelines = PipelineCache::new(&shaders, &programs()).unwrap();
-        let light_pipelines = LightPipelines::new(&shaders).unwrap();
-        Self {
-            gpu,
-            device,
-            counter,
-            shaders,
-            pipelines,
-            light_pipelines,
-            samplers: Samplers::new(gpu).unwrap(),
-            geometry: OccluderGeometry::new(gpu, OccluderPrograms::default()),
-            tiles: TileOccluders::new(gpu, OccluderPrograms::default()),
-            occlusion: OcclusionMask::new(gpu, MaskPrograms::at(OCCLUDER_PROGRAMS.len())),
-            lighting: LightingStage::new(gpu),
-            atlases: LightAtlases::new(gpu),
-            list: LightList::default(),
-            zone_list: AmbientZoneList::default(),
-        }
-    }
-
-    fn download(&self, cmd: &mut CommandBuffer<'_>, t: TextureRef<'_>) -> DownloadBuffer<'d> {
-        let down = DownloadBuffer::new(self.gpu, t.desc().bytes() as u32).unwrap();
-        cmd.copy_pass().unwrap().download_texture(t, &down).unwrap();
-        down
-    }
-
-    /// One frame as Chiaro's `Context::Render` runs it up to the light pass, `time` seconds.
-    fn frame(&mut self, s: &Scene, time: f64) -> Out {
-        let (w, h) = s.size;
-        let scene_tex = texture(self.gpu, w, h, &vec![255u8; (w * h * 4) as usize]);
-        // Empty (all zero) buffers: normal mode on flat ground, as in Chiaro's tests.
-        let empty = (s.material || s.surface)
-            .then(|| texture(self.gpu, w, h, &vec![0u8; (w * h * 4) as usize]));
-        let material_tex = s.material.then(|| empty.as_ref().unwrap());
-        let surface_tex = s.surface.then(|| empty.as_ref().unwrap());
-        let normal_mode = s.material || s.surface;
-        let max_height = s.max_height();
-        let shadow_scale = s.settings.resolutions().shadow;
-        let modes = LightModes {
-            height_mode: s.obstacles.any_finite_height(),
-            normal_mode,
-            max_height,
-            profiles: Some(&s.profiles),
-            animations: Some(&s.animations),
-            masks: Some(&s.masks),
-            ..Default::default()
-        };
-        collect_lights(
-            &s.lights,
-            &s.settings,
-            &s.projection,
-            time,
-            w,
-            h,
-            &modes,
-            &mut self.list,
-        );
-        let ambient = s.settings.ambient;
-        let da = self.list.directional_ambient;
-        collect_ambient_zones(
-            &s.zones,
-            [ambient.x, ambient.y, ambient.z],
-            &CullScene {
-                projection: s.projection,
-                max_height,
-                has_surface: s.surface,
-                width: w,
-                height: h,
-            },
-            [da.x, da.y, da.z],
-            &mut self.zone_list,
-        );
-        let active = s.obstacles.iter().any(|(_, o)| o.is_active());
-        let shadows = any_shadow_caster(&self.list) && active;
-        let height_mode = s.obstacles.any_finite_height() || normal_mode;
-        let mut cmd = CommandBuffer::acquire(self.device).unwrap();
-        let input = MaskPlanInput::new(&s.obstacles, &s.projection, w, h, shadow_scale);
-        if shadows {
-            let update = self
-                .occlusion
-                .prepare(&mut self.shaders, &mut self.pipelines, &input, height_mode)
-                .unwrap();
-            if update != MaskUpdate::Reused {
-                let min_radius = thin_circle_radius(&s.projection, &input.domain);
-                self.geometry
-                    .prepare(
-                        &mut self.shaders,
-                        &mut self.pipelines,
-                        &s.obstacles,
-                        &NoPatterns,
-                        height_mode,
-                        min_radius,
-                    )
-                    .unwrap();
-                self.tiles
-                    .prepare(
-                        &mut self.shaders,
-                        &mut self.pipelines,
-                        &s.obstacles,
-                        &NoPatterns,
-                        height_mode,
-                    )
-                    .unwrap();
-            }
-            self.occlusion
-                .record(
-                    &mut cmd,
-                    &self.pipelines,
-                    self.samplers.sampler(Filter::Nearest),
-                    &mut self.geometry,
-                    &mut self.tiles,
-                )
-                .unwrap();
-            self.occlusion.commit();
-        }
-        let scene_max_top = if height_mode {
-            s.obstacles.max_finite_top()
-        } else {
-            0.0
-        };
-        let maps = shadows.then(|| ShadowMaps {
-            domain: input.domain,
-            remainder: input.anchor.remainder,
-            mask: self.occlusion.mask().unwrap(),
-            field: self.occlusion.field().unwrap(),
-            height: self.occlusion.height(),
-            height_mode,
-            any_partial: s.obstacles.any_partial(),
-            shadow_top: if s.obstacles.any_infinite_enabled() {
-                INFINITE_TOP
-            } else {
-                scene_max_top
-            },
-            scene_max_top,
-            casters: [None, None],
-        });
-        // The atlases the frame needs, uploaded before the light pass reads them.
-        let mut atlas_created = self
-            .atlases
-            .prepare(&self.list, Some(&s.profiles), Some(&s.masks))
-            .unwrap();
-        self.atlases.record(&mut cmd).unwrap();
-        let frame = LightingFrame {
-            scene: scene_tex.texture_ref(),
-            surface: surface_tex.map(Texture::texture_ref),
-            material: material_tex.map(Texture::texture_ref),
-            projection: &s.projection,
-            settings: &s.settings,
-            max_height,
-            lights: &self.list,
-            shadows: maps.as_ref(),
-            profile_atlas: self.atlases.profiles.texture(),
-            mask_atlas: self.atlases.masks.texture(),
-        };
-        let zones = ZoneInput {
-            store: &s.zones,
-            list: &self.zone_list,
-        };
-        let mut result = self
-            .lighting
-            .prepare_with_zones(
-                &mut self.shaders,
-                &mut self.light_pipelines,
-                &frame,
-                Some(zones),
-            )
-            .unwrap();
-        result.allocations += std::mem::take(&mut atlas_created);
-        let record = self
-            .lighting
-            .record(&mut cmd, &self.light_pipelines, &self.samplers, &frame)
-            .unwrap();
-        let mut programs: Vec<LightProgram> = LIGHT_PROGRAMS
-            .iter()
-            .map(|i| i.program())
-            .filter(|&p| self.light_pipelines.contains(p))
-            .collect();
-        programs.sort();
-        let light_tex = self.lighting.light_buffer();
-        let light_size = light_tex.map_or((0, 0), |t| (t.width(), t.height()));
-        let light = light_tex.map(|t| self.download(&mut cmd, t));
-        let second = match result.detail_mode {
-            DetailMode::Exact => self.lighting.specular_buffer(),
-            DetailMode::Direction => self.lighting.direction_buffer(),
-            DetailMode::None => None,
-        }
-        .map(|t| self.download(&mut cmd, t));
-        let ambient = self
-            .lighting
-            .pure_ambient()
-            .map(|t| self.download(&mut cmd, t));
-        let atlas = |t: Option<TextureRef<'_>>, cmd: &mut CommandBuffer<'_>| {
-            t.map(|t| (t.width(), t.height(), self.download(cmd, t)))
-        };
-        let profile_atlas = atlas(self.atlases.profiles.texture(), &mut cmd);
-        let mask_atlas = atlas(self.atlases.masks.texture(), &mut cmd);
-        cmd.submit_and_wait().unwrap();
-        let read = |mut d: DownloadBuffer<'_>| {
-            let mut v = vec![0; d.size() as usize];
-            d.read(&mut v).unwrap();
-            v
-        };
-        let read_atlas =
-            |a: Option<(u32, u32, DownloadBuffer<'_>)>| a.map(|(w, h, d)| (w, h, read(d)));
-        Out {
-            result,
-            record,
-            light: light.map(read).unwrap_or_default(),
-            light_size,
-            second: second.map(read).unwrap_or_default(),
-            ambient: ambient.map(read).unwrap_or_default(),
-            programs,
-            profile_atlas: read_atlas(profile_atlas),
-            mask_atlas: read_atlas(mask_atlas),
-            live: self.counter.live(),
-        }
-    }
-}
-
-/// A fresh host per call; the counter is the one of all GPU objects of the device.
-type Fresh<'a, 'd> = &'a mut dyn FnMut() -> Host<'d>;
-
-fn with_host(body: impl for<'d> FnOnce(Fresh<'_, 'd>)) {
-    let Some((_guard, device, pack)) = device() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    {
-        let gpu = Gpu::new(&device, &counter);
-        let mut fresh = || Host::new(gpu, &device, &counter, &pack);
-        body(&mut fresh);
-    }
-    assert_eq!(counter.live(), 0, "GPU objects leaked");
-}
-
-fn golden(name: &str) -> Vec<u8> {
-    let path = workspace().join("tests/golden/chiaro/atlas").join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-}
-
-/// Differing RGBA16F texels and the largest difference.
-fn diff(a: &[u8], b: &[u8]) -> (usize, f32) {
-    assert_eq!(a.len(), b.len());
-    let mut n = 0;
-    let mut max = 0.0f32;
-    for (x, y) in a.chunks(8).zip(b.chunks(8)) {
-        if x != y {
-            n += 1;
-            for c in 0..4 {
-                let u = half(u16::from_le_bytes([x[c * 2], x[c * 2 + 1]]));
-                let v = half(u16::from_le_bytes([y[c * 2], y[c * 2 + 1]]));
-                let d = (u - v).abs();
-                if d > max {
-                    max = d;
-                }
-            }
-        }
-    }
-    (n, max)
-}
-
-/// The programs a scene used according to `programs.txt` (`base:features`).
-fn golden_programs(name: &str) -> Vec<LightProgram> {
-    let text = String::from_utf8(golden("programs.txt")).unwrap();
-    let line = text
-        .lines()
-        .find(|l| l.split(' ').next() == Some(name))
-        .unwrap();
-    let mut v: Vec<LightProgram> = line
-        .split(' ')
-        .skip(1)
-        .map(|p| {
-            let (b, f) = p.split_once(':').unwrap();
-            let base = LightBase::ALL[b.parse::<usize>().unwrap()];
-            LIGHT_PROGRAMS
-                .iter()
-                .map(|i| i.program())
-                .find(|q| {
-                    q.base == base && u32::from(q.features.bits()) == f.parse::<u32>().unwrap()
-                })
-                .unwrap()
-        })
-        .collect();
-    v.sort();
-    v
-}
-
 /// The `atlases.txt` line of a scene and atlas kind: width, height and the hash of the bytes.
 fn golden_atlas(scene: &str, kind: &str) -> Option<(u32, u32, u64)> {
-    let text = String::from_utf8(golden("atlases.txt")).unwrap();
+    let text = String::from_utf8(golden_bytes("atlas", "atlases.txt")).unwrap();
     text.lines().find_map(|l| {
         let f: Vec<&str> = l.split(' ').collect();
         (f[0] == scene && f[1] == kind).then(|| {
@@ -982,21 +323,34 @@ fn scenes_match_chiaro() {
             let mut host = fresh();
             let out = host.frame(&scene, 0.0);
             let name = scene.name;
-            assert_eq!(out.programs, golden_programs(name), "{name}: programs");
-            let (n, max) = diff(&out.light, &golden(&format!("{name}.light.bin")));
+            assert_eq!(
+                out.programs,
+                golden_programs("atlas", name),
+                "{name}: programs"
+            );
+            let (n, max) = rgba16f_diff(
+                &out.light,
+                &golden_bytes("atlas", &format!("{name}.light.bin")),
+            );
             eprintln!("{name}: light buffer {n} differing texels (max {max})");
             if n > 0 {
                 failures.push(format!("{name}.light: {n} texels, max {max}"));
             }
             if out.result.detail_mode == DetailMode::Direction {
-                let (n, max) = diff(&out.second, &golden(&format!("{name}.direction.bin")));
+                let (n, max) = rgba16f_diff(
+                    &out.second,
+                    &golden_bytes("atlas", &format!("{name}.direction.bin")),
+                );
                 eprintln!("{name}: direction buffer {n} differing texels (max {max})");
                 if n > 0 {
                     failures.push(format!("{name}.direction: {n} texels, max {max}"));
                 }
             }
             if out.result.pure_ambient == PureAmbient::Separate {
-                let (n, max) = diff(&out.ambient, &golden(&format!("{name}.ambient.bin")));
+                let (n, max) = rgba16f_diff(
+                    &out.ambient,
+                    &golden_bytes("atlas", &format!("{name}.ambient.bin")),
+                );
                 eprintln!("{name}: pure ambient {n} differing texels (max {max})");
                 if n > 0 {
                     failures.push(format!("{name}.ambient: {n} texels, max {max}"));
@@ -1401,7 +755,7 @@ fn a_profiled_light_without_a_profile_atlas_is_refused() {
         });
         // The host forgot `LightAtlases::prepare`: the stage reports it instead of drawing.
         let (w, h) = s.size;
-        let scene_tex = texture(host.gpu, w, h, &vec![255u8; (w * h * 4) as usize]);
+        let scene_tex = sampled_rgba8(host.gpu, w, h, &vec![255u8; (w * h * 4) as usize]);
         let modes = LightModes {
             profiles: Some(&s.profiles),
             ..Default::default()
@@ -1734,7 +1088,7 @@ fn the_profile_tables_of_the_golden_scene_stay_within_four_ulp_of_chiaro() {
     let s = scene_profile();
     let (mut count, mut differing, mut worst) = (0, 0usize, 0u32);
     for (index, (_, table)) in s.profiles.iter().enumerate() {
-        let theirs = golden(&format!("table{index}.bin"));
+        let theirs = golden_bytes("atlas", &format!("table{index}.bin"));
         assert_eq!(theirs.len(), table.len() * 4, "profile {index}");
         for (v, c) in table.iter().zip(theirs.chunks_exact(4)) {
             let c = f32::from_le_bytes([c[0], c[1], c[2], c[3]]);
@@ -2310,7 +1664,7 @@ fn highlight_in_a_dark_room_keeps_the_pure_ambient_per_pixel() {
         assert_eq!(out.result.detail_mode, DetailMode::Direction);
         let at = |buf: &[u8], x: u32, y: u32| {
             let i = ((y * out.light_size.0 + x) * 8) as usize;
-            half(u16::from_le_bytes([buf[i], buf[i + 1]]))
+            half_to_f32(u16::from_le_bytes([buf[i], buf[i + 1]]))
         };
         assert!(
             near(at(&out.ambient, 16, 16), 0.1),
@@ -2356,10 +1710,10 @@ impl<'d> PlanTextures<'d> {
         let (w, h) = s.size;
         assert!(!s.surface, "the plan scenes have no surface buffer");
         Self {
-            scene: texture(gpu, w, h, &vec![255u8; (w * h * 4) as usize]),
+            scene: sampled_rgba8(gpu, w, h, &vec![255u8; (w * h * 4) as usize]),
             material: s
                 .material
-                .then(|| texture(gpu, w, h, &vec![0u8; (w * h * 4) as usize])),
+                .then(|| sampled_rgba8(gpu, w, h, &vec![0u8; (w * h * 4) as usize])),
         }
     }
 
@@ -2400,47 +1754,28 @@ fn plan_frame(
     let prepared = plan.prepare(&frame, stores, &s.settings).unwrap();
     let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
     let record = plan.record(&mut cmd, &frame, &s.settings).unwrap();
-    let download = |cmd: &mut CommandBuffer<'_>, t: TextureRef<'_>| {
-        let down = DownloadBuffer::new(gpu, t.desc().bytes() as u32).unwrap();
-        cmd.copy_pass().unwrap().download_texture(t, &down).unwrap();
-        down
-    };
-    let hdr = download(&mut cmd, plan.hdr().unwrap());
+    let hdr = queue_download(gpu, &mut cmd, plan.hdr().unwrap());
     let light = plan
         .lighting()
         .light_buffer()
-        .map(|t| download(&mut cmd, t));
+        .map(|t| queue_download(gpu, &mut cmd, t));
     cmd.submit_and_wait().unwrap();
-    let read = |mut d: DownloadBuffer<'_>| {
-        let mut v = vec![0; d.size() as usize];
-        d.read(&mut v).unwrap();
-        v
-    };
     PlanOut {
         prepared,
         record,
-        hdr: read(hdr),
-        light: light.map(read).unwrap_or_default(),
+        hdr: read_download(hdr),
+        light: light.map_or_else(Vec::new, read_download),
     }
 }
 
-/// The device, the pack and a counter for one test of the plan.
-fn with_plan(body: impl for<'d> FnOnce(Gpu<'d>, &'d LiveCounter, &dyn Fn() -> PassPlan<'d>)) {
-    let Some((_guard, device, pack)) = device() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    {
-        let gpu = Gpu::new(&device, &counter);
-        let fresh = || PassPlan::new(gpu, pack.clone()).unwrap();
-        body(gpu, &counter, &fresh);
-    }
-    assert_eq!(counter.live(), 0, "GPU objects leaked");
+/// A plan per call of the closure, on the device with the pack, with the leak check.
+fn with_plan(body: impl for<'d> FnOnce(Gpu<'d>, &dyn Fn() -> PassPlan<'d>)) {
+    with_chiaro_pack(|gpu, pack| body(gpu, &|| PassPlan::new(gpu, pack.to_vec()).unwrap()));
 }
 
 #[test]
 fn pass_plan_matches_chiaro_up_to_the_hdr_buffer() {
-    with_plan(|gpu, _, fresh| {
+    with_plan(|gpu, fresh| {
         let mut failures = Vec::new();
         for s in [
             scene_profile(),
@@ -2454,7 +1789,8 @@ fn pass_plan_matches_chiaro_up_to_the_hdr_buffer() {
             let out = plan_frame(gpu, &mut plan, &s, &plan_stores(&s), &tex);
             let name = s.name;
             for (what, got) in [("light", &out.light), ("hdr", &out.hdr)] {
-                let (n, max) = diff(got, &golden(&format!("{name}.{what}.bin")));
+                let (n, max) =
+                    rgba16f_diff(got, &golden_bytes("atlas", &format!("{name}.{what}.bin")));
                 eprintln!("{name}: {what} buffer {n} differing texels (max {max})");
                 if n > 0 {
                     failures.push(format!("{name}.{what}: {n} texels, max {max}"));
@@ -2498,7 +1834,8 @@ impl knorke_observe::Sink<knorke_types::Diagnostic> for Diagnostics {
 
 #[test]
 fn pass_plan_steady_state_reuses_the_mask_and_allocates_nothing() {
-    with_plan(|gpu, counter, fresh| {
+    with_plan(|gpu, fresh| {
+        let counter = gpu.counter();
         let mut plan = fresh();
         let s = scene_zones();
         let tex = PlanTextures::new(gpu, &s);
@@ -2533,7 +1870,7 @@ fn pass_plan_steady_state_reuses_the_mask_and_allocates_nothing() {
 #[test]
 fn pass_plan_rebuilds_the_same_image_from_restored_stores() {
     use knorke_types::{Reader, SnapshotBuf, restore};
-    with_plan(|gpu, _, fresh| {
+    with_plan(|gpu, fresh| {
         let s = scene_mask();
         let tex = PlanTextures::new(gpu, &s);
         let mut plan = fresh();
@@ -2590,7 +1927,7 @@ impl knorke_observe::Visitor for Lines {
 #[test]
 fn pass_plan_inspects_its_stages_and_rejects_bad_frames() {
     use knorke_observe::Inspect;
-    with_plan(|gpu, _, fresh| {
+    with_plan(|gpu, fresh| {
         let mut plan = fresh();
         let s = scene_zones_direction();
         let tex = PlanTextures::new(gpu, &s);
@@ -2603,7 +1940,7 @@ fn pass_plan_inspects_its_stages_and_rejects_bad_frames() {
         assert_eq!(e.code, knorke_light2d::pass_plan::NOT_PREPARED);
         cmd.submit_and_wait().unwrap();
         // A buffer of the wrong size.
-        let small = texture(gpu, 8, 8, &[0u8; 8 * 8 * 4]);
+        let small = sampled_rgba8(gpu, 8, 8, &[0u8; 8 * 8 * 4]);
         let bad = PassFrame {
             glow: Some(small.texture_ref()),
             ..tex.frame(&s)

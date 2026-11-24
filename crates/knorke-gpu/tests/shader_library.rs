@@ -11,13 +11,12 @@ use knorke_gpu::kpak::{
     SHADER_PACK_UNSUPPORTED_FORMAT, ShaderFormat,
 };
 use knorke_gpu::sys::gpu::{
-    SDL_GPU_SHADERFORMAT_DXIL, SDL_GPU_SHADERFORMAT_MSL, SDL_GPU_SHADERFORMAT_SPIRV,
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
 };
 use knorke_gpu::test_support::any_device;
 use knorke_gpu::{
-    Blend, Gpu, LiveCounter, PIPELINE_STAGE_MISMATCH, PipelineCache, ProgramDesc,
-    SecondTarget, ShaderLibrary, device_formats, preferred_format, sdl_shader_format,
+    Blend, Gpu, LiveCounter, PIPELINE_STAGE_MISMATCH, PipelineCache, ProgramDesc, SecondTarget,
+    ShaderLibrary, device_formats, preferred_format, sdl_shader_format,
 };
 
 fn pack_path(format: ShaderFormat) -> PathBuf {
