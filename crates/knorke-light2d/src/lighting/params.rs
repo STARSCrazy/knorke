@@ -15,6 +15,7 @@
 //! against the member offsets in the compiled SPIR-V (`tests/light_uniform_layouts.rs`).
 
 use knorke_math::Vec3;
+use knorke_math::uniform_block;
 
 use crate::gpu_light::GpuDirectional;
 use crate::light_math::scaled_buffer_size;
@@ -120,73 +121,30 @@ pub fn height_tolerance(settings: &LightSettings) -> f32 {
     0.01 * settings.surface_height_step
 }
 
-/// Writes `f32`/`u32` values in order into a fixed byte array (little endian).
-struct Writer<const N: usize> {
-    bytes: [u8; N],
-    at: usize,
-}
-
-impl<const N: usize> Writer<N> {
-    fn new() -> Self {
-        Self {
-            bytes: [0; N],
-            at: 0,
-        }
+uniform_block! {
+    /// `cbuffer LightPassParams` of `light.vert` and `light_point.vert` (64 bytes).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct LightPassParams[64] {
+        /// xy projection origin, zw x axis (scene pixels).
+        pub origin_x_axis: [f32; 4],
+        /// xy y axis, zw scene size in pixels.
+        pub y_axis_scene_size: [f32; 4],
+        /// Occlusion mask texels per scene pixel.
+        pub mask_texel_scale: [f32; 2],
+        /// Margin band of the mask in scene pixels.
+        pub mask_margin: f32,
+        /// Index of the draw's first light in the light buffer.
+        pub instance_offset: u32,
+        /// Mask anchor remainder, subtracted from the mask position.
+        pub mask_remainder: [f32; 2],
+        /// `_mask` programs: light buffer index of the first masked light.
+        pub mask_base: u32,
+        /// Padding.
+        pub pad: f32,
     }
-    fn f(&mut self, v: f32) -> &mut Self {
-        self.bytes[self.at..self.at + 4].copy_from_slice(&v.to_le_bytes());
-        self.at += 4;
-        self
-    }
-    fn u(&mut self, v: u32) -> &mut Self {
-        self.bytes[self.at..self.at + 4].copy_from_slice(&v.to_le_bytes());
-        self.at += 4;
-        self
-    }
-    fn fs(&mut self, v: &[f32]) -> &mut Self {
-        for &x in v {
-            self.f(x);
-        }
-        self
-    }
-    fn us(&mut self, v: &[u32]) -> &mut Self {
-        for &x in v {
-            self.u(x);
-        }
-        self
-    }
-    fn finish(&self) -> [u8; N] {
-        debug_assert_eq!(self.at, N, "uniform block not filled completely");
-        self.bytes
-    }
-}
-
-/// `cbuffer LightPassParams` of `light.vert` and `light_point.vert` (64 bytes).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct LightPassParams {
-    /// xy projection origin, zw x axis (scene pixels).
-    pub origin_x_axis: [f32; 4],
-    /// xy y axis, zw scene size in pixels.
-    pub y_axis_scene_size: [f32; 4],
-    /// Occlusion mask texels per scene pixel.
-    pub mask_texel_scale: [f32; 2],
-    /// Margin band of the mask in scene pixels.
-    pub mask_margin: f32,
-    /// Index of the draw's first light in the light buffer.
-    pub instance_offset: u32,
-    /// Mask anchor remainder, subtracted from the mask position.
-    pub mask_remainder: [f32; 2],
-    /// `_mask` programs: light buffer index of the first masked light.
-    pub mask_base: u32,
-    /// Padding.
-    pub pad: f32,
 }
 
 impl LightPassParams {
-    /// Size in bytes.
-    pub const SIZE: usize = 64;
-
     /// The block of a frame (`instance_offset` 0); `domain`/`remainder` zero without shadows.
     pub fn new(
         p: &Projection,
@@ -207,44 +165,28 @@ impl LightPassParams {
             pad: 0.0,
         }
     }
+}
 
-    /// The bytes as the shader reads them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        Writer::<{ Self::SIZE }>::new()
-            .fs(&self.origin_x_axis)
-            .fs(&self.y_axis_scene_size)
-            .fs(&self.mask_texel_scale)
-            .f(self.mask_margin)
-            .u(self.instance_offset)
-            .fs(&self.mask_remainder)
-            .u(self.mask_base)
-            .f(self.pad)
-            .finish()
+uniform_block! {
+    /// `cbuffer LightSurfacePassParams` of `light_surface.vert` (64 bytes).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct LightSurfacePassParams[64] {
+        /// xy projection origin, zw x axis.
+        pub origin_x_axis: [f32; 4],
+        /// xy y axis, zw scene size in pixels.
+        pub y_axis_scene_size: [f32; 4],
+        /// xy z axis, z highest height a lit pixel can have, w 0.
+        pub z_axis_max_height: [f32; 4],
+        /// Index of the draw's first light in the light buffer.
+        pub instance_offset: u32,
+        /// `_mask` programs: light buffer index of the first masked light.
+        pub mask_base: u32,
+        /// Padding.
+        pub pad: [u32; 2],
     }
 }
 
-/// `cbuffer LightSurfacePassParams` of `light_surface.vert` (64 bytes).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct LightSurfacePassParams {
-    /// xy projection origin, zw x axis.
-    pub origin_x_axis: [f32; 4],
-    /// xy y axis, zw scene size in pixels.
-    pub y_axis_scene_size: [f32; 4],
-    /// xy z axis, z highest height a lit pixel can have, w 0.
-    pub z_axis_max_height: [f32; 4],
-    /// Index of the draw's first light in the light buffer.
-    pub instance_offset: u32,
-    /// `_mask` programs: light buffer index of the first masked light.
-    pub mask_base: u32,
-    /// Padding.
-    pub pad: [u32; 2],
-}
-
 impl LightSurfacePassParams {
-    /// Size in bytes.
-    pub const SIZE: usize = 64;
-
     /// The block of a frame (`instance_offset` 0).
     pub fn new(
         p: &Projection,
@@ -263,50 +205,36 @@ impl LightSurfacePassParams {
             pad: [0; 2],
         }
     }
+}
 
-    /// The bytes as the shader reads them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        Writer::<{ Self::SIZE }>::new()
-            .fs(&self.origin_x_axis)
-            .fs(&self.y_axis_scene_size)
-            .fs(&self.z_axis_max_height)
-            .u(self.instance_offset)
-            .u(self.mask_base)
-            .us(&self.pad)
-            .finish()
+uniform_block! {
+    /// `CHI_SURFACE_PARAMS` of `surface.hlsli` (160 bytes).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct SurfaceParams[160] {
+        /// Rows of the inverse of `[x_axis y_axis]`.
+        pub inv_axes: [f32; 4],
+        /// xy origin, zw z axis.
+        pub origin_z_axis: [f32; 4],
+        /// xy scene size, z surface height step, w 1 = surface buffer.
+        pub scene_step: [f32; 4],
+        /// xy mask texels per scene pixel, z margin.
+        pub mask_map: [f32; 4],
+        /// xy mask anchor remainder.
+        pub mask_remainder: [f32; 4],
+        /// xy x axis, zw y axis.
+        pub xy_axes: [f32; 4],
+        /// xyz view direction.
+        pub view_dir: [f32; 4],
+        /// xyz screen right.
+        pub screen_right: [f32; 4],
+        /// xy z axis, z specular scale.
+        pub z_axis_spec: [f32; 4],
+        /// Wet ground: x stretch, y breakup, z 1 / ripple size.
+        pub wet: [f32; 4],
     }
 }
 
-/// `CHI_SURFACE_PARAMS` of `surface.hlsli` (160 bytes).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SurfaceParams {
-    /// Rows of the inverse of `[x_axis y_axis]`.
-    pub inv_axes: [f32; 4],
-    /// xy origin, zw z axis.
-    pub origin_z_axis: [f32; 4],
-    /// xy scene size, z surface height step, w 1 = surface buffer.
-    pub scene_step: [f32; 4],
-    /// xy mask texels per scene pixel, z margin.
-    pub mask_map: [f32; 4],
-    /// xy mask anchor remainder.
-    pub mask_remainder: [f32; 4],
-    /// xy x axis, zw y axis.
-    pub xy_axes: [f32; 4],
-    /// xyz view direction.
-    pub view_dir: [f32; 4],
-    /// xyz screen right.
-    pub screen_right: [f32; 4],
-    /// xy z axis, z specular scale.
-    pub z_axis_spec: [f32; 4],
-    /// Wet ground: x stretch, y breakup, z 1 / ripple size.
-    pub wet: [f32; 4],
-}
-
 impl SurfaceParams {
-    /// Size in bytes.
-    pub const SIZE: usize = 160;
-
     /// Chiaro `MakeSurfaceParams`. `domain` is zero without shadows (only the shadow programs
     /// read it); `surface_buffer` tells whether a surface buffer is given (otherwise every
     /// pixel is ground).
@@ -362,39 +290,22 @@ impl SurfaceParams {
             ],
         }
     }
+}
 
-    /// The bytes as the shader reads them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        Writer::<{ Self::SIZE }>::new()
-            .fs(&self.inv_axes)
-            .fs(&self.origin_z_axis)
-            .fs(&self.scene_step)
-            .fs(&self.mask_map)
-            .fs(&self.mask_remainder)
-            .fs(&self.xy_axes)
-            .fs(&self.view_dir)
-            .fs(&self.screen_right)
-            .fs(&self.z_axis_spec)
-            .fs(&self.wet)
-            .finish()
+uniform_block! {
+    /// `cbuffer ShadowParams` of `light_sdf_surface.frag` and `light_sdf_height.frag` (32 bytes);
+    /// `light_sdf.frag` declares the first row only, which is pushed alone then
+    /// ([`FLAT_SIZE`](Self::FLAT_SIZE)).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct SurfaceShadowParams[32] {
+        /// xy mask size in texels, z field bound, w 1 if an obstacle is partly transparent.
+        pub domain_size: [f32; 4],
+        /// x height above which nothing occludes, y tolerance below a top.
+        pub height_params: [f32; 4],
     }
 }
 
-/// `cbuffer ShadowParams` of `light_sdf_surface.frag` and `light_sdf_height.frag` (32 bytes);
-/// `light_sdf.frag` declares the first row only, which is pushed alone then
-/// ([`FLAT_SIZE`](Self::FLAT_SIZE)).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SurfaceShadowParams {
-    /// xy mask size in texels, z field bound, w 1 if an obstacle is partly transparent.
-    pub domain_size: [f32; 4],
-    /// x height above which nothing occludes, y tolerance below a top.
-    pub height_params: [f32; 4],
-}
-
 impl SurfaceShadowParams {
-    /// Size in bytes.
-    pub const SIZE: usize = 32;
     /// Size of the flat program's block (first row only).
     pub const FLAT_SIZE: usize = 16;
 
@@ -410,36 +321,26 @@ impl SurfaceShadowParams {
             height_params: [shadow_top, tolerance, 0.0, 0.0],
         }
     }
+}
 
-    /// The bytes as the shader reads them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        Writer::<{ Self::SIZE }>::new()
-            .fs(&self.domain_size)
-            .fs(&self.height_params)
-            .finish()
+uniform_block! {
+    /// `cbuffer DirectionalParams` of `directional*.frag` (112 bytes).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct DirectionalParams[112] {
+        /// The light (first three rows).
+        pub light: GpuDirectional,
+        /// xy scene size, z mask margin in scene pixels.
+        pub scene_size_margin: [f32; 4],
+        /// xy mask texels per scene pixel, zw mask anchor remainder.
+        pub texel_scale_remainder: [f32; 4],
+        /// xy mask size, z field bound, w 1 if an obstacle is partly transparent.
+        pub domain_size: [f32; 4],
+        /// x highest finite top, y tolerance below a top, z 1 (infinite tops do not block).
+        pub height_params: [f32; 4],
     }
 }
 
-/// `cbuffer DirectionalParams` of `directional*.frag` (112 bytes).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct DirectionalParams {
-    /// The light (first three rows).
-    pub light: GpuDirectional,
-    /// xy scene size, z mask margin in scene pixels.
-    pub scene_size_margin: [f32; 4],
-    /// xy mask texels per scene pixel, zw mask anchor remainder.
-    pub texel_scale_remainder: [f32; 4],
-    /// xy mask size, z field bound, w 1 if an obstacle is partly transparent.
-    pub domain_size: [f32; 4],
-    /// x highest finite top, y tolerance below a top, z 1 (infinite tops do not block).
-    pub height_params: [f32; 4],
-}
-
 impl DirectionalParams {
-    /// Size in bytes.
-    pub const SIZE: usize = 112;
-
     /// The frame part of the block (the light is set per draw); `domain` zero without shadows.
     pub fn new(
         scene_w: u32,
@@ -466,19 +367,6 @@ impl DirectionalParams {
             ],
             height_params: [scene_max_top, tolerance, 1.0, 0.0],
         }
-    }
-
-    /// The bytes as the shader reads them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        Writer::<{ Self::SIZE }>::new()
-            .fs(&self.light.dir_slope)
-            .fs(&self.light.color)
-            .fs(&self.light.world)
-            .fs(&self.scene_size_margin)
-            .fs(&self.texel_scale_remainder)
-            .fs(&self.domain_size)
-            .fs(&self.height_params)
-            .finish()
     }
 }
 

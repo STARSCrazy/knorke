@@ -11,37 +11,31 @@
 use crate::Projection;
 use crate::obstacle::{ObstacleCommon, StoredObstacle};
 use crate::shadow::{MaskAnchor, OcclusionDomain};
+use knorke_math::uniform_block;
 use knorke_math::{Vec2, det};
 
 /// Top of an infinitely tall obstacle in the height texture: the largest half float.
 pub const INFINITE_TOP: f32 = 65504.0;
 
-fn put(out: &mut [u8], at: usize, values: &[f32]) {
-    for (i, v) in values.iter().enumerate() {
-        out[at + 4 * i..at + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
+uniform_block! {
+    /// `cbuffer DomainParams` of `occluder.vert` and `tile.vert`: how a world position becomes a
+    /// mask texel (the projection, the margin band, the texel scale and the anchor remainder).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct DomainParams[64] {
+        /// xy projection origin, zw x axis (scene pixels).
+        pub origin_x_axis: [f32; 4],
+        /// xy y axis, zw margin in scene pixels.
+        pub y_axis_margin: [f32; 4],
+        /// xy mask texels per scene pixel, zw mask size in texels.
+        pub texel_scale_domain_size: [f32; 4],
+        /// xy [`MaskAnchor::remainder`]; `z` is, for the occluder shaders, where the opacities
+        /// start in the vertex buffer (a `u32` stored as its bits, see
+        /// [`with_opacity_start`](Self::with_opacity_start)).
+        pub remainder_pad: [f32; 4],
     }
 }
 
-/// `cbuffer DomainParams` of `occluder.vert` and `tile.vert`: how a world position becomes a
-/// mask texel (the projection, the margin band, the texel scale and the anchor remainder).
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct DomainParams {
-    /// xy projection origin, zw x axis (scene pixels).
-    pub origin_x_axis: [f32; 4],
-    /// xy y axis, zw margin in scene pixels.
-    pub y_axis_margin: [f32; 4],
-    /// xy mask texels per scene pixel, zw mask size in texels.
-    pub texel_scale_domain_size: [f32; 4],
-    /// xy [`MaskAnchor::remainder`]; `z` is, for the occluder shaders, where the opacities
-    /// start in the vertex buffer (a `u32` stored as its bits, see
-    /// [`with_opacity_start`](Self::with_opacity_start)).
-    pub remainder_pad: [f32; 4],
-}
-
 impl DomainParams {
-    /// Size of the block in bytes.
-    pub const SIZE: usize = 64;
-
     /// The parameters of a frame.
     pub fn new(p: &Projection, d: &OcclusionDomain, a: &MaskAnchor) -> Self {
         let origin = p.origin.raw();
@@ -66,40 +60,18 @@ impl DomainParams {
         self.remainder_pad[2] = f32::from_bits(vertices);
         self
     }
-
-    /// The block as the shader reads it (little endian).
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        let mut out = [0; Self::SIZE];
-        put(&mut out, 0, &self.origin_x_axis);
-        put(&mut out, 16, &self.y_axis_margin);
-        put(&mut out, 32, &self.texel_scale_domain_size);
-        put(&mut out, 48, &self.remainder_pad);
-        out
-    }
 }
 
-/// `cbuffer DomainParams` of `tile.vert`: the domain and where one grid stands.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct TileParams {
-    /// The domain.
-    pub domain: DomainParams,
-    /// xy world position, z rotation in radians.
-    pub placement: [f32; 4],
-    /// xy cell size, zw columns and rows.
-    pub grid_size: [f32; 4],
-}
-
-impl TileParams {
-    /// Size of the block in bytes.
-    pub const SIZE: usize = 96;
-
-    /// The block as the shader reads it (little endian).
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        let mut out = [0; Self::SIZE];
-        out[..DomainParams::SIZE].copy_from_slice(&self.domain.to_bytes());
-        put(&mut out, 64, &self.placement);
-        put(&mut out, 80, &self.grid_size);
-        out
+uniform_block! {
+    /// `cbuffer DomainParams` of `tile.vert`: the domain and where one grid stands.
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct TileParams[96] {
+        /// The domain.
+        pub domain: DomainParams,
+        /// xy world position, z rotation in radians.
+        pub placement: [f32; 4],
+        /// xy cell size, zw columns and rows.
+        pub grid_size: [f32; 4],
     }
 }
 

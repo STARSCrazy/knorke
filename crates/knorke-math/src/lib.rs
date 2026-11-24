@@ -25,6 +25,7 @@ mod snapshot;
 mod space;
 mod srgb_table;
 mod transform;
+pub mod uniform;
 mod vector;
 
 pub use bytemuck;

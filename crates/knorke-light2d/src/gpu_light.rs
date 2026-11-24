@@ -8,116 +8,73 @@
 //! dependency, so the culling that builds them runs and is tested headless. The GPU stages
 //! upload them as they are.
 
-/// Per-light data of the light pass; matches `struct GpuLight` in `light_common.hlsli`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct GpuLight {
-    /// xyz world position, w radius.
-    pub position_radius: [f32; 4],
-    /// rgb colour * intensity * flicker, a falloff.
-    pub color_falloff: [f32; 4],
-    /// xyz normalized direction (a rect light's normal), w type: 0 point, 1 spot, 2 line,
-    /// 3 rect, 4 two-sided rect (plus the soft near field share for point and spot lights).
-    pub direction_type: [f32; 4],
-    /// x cos(inner), y cos(outer), z quad half extent (ground radius), w 1 / profile atlas
-    /// height (profiles only).
-    pub spot_cos: [f32; 4],
-    /// x source radius R in mask texels (negative for `inside_obstacle`: `-1 - R`), zw ground
-    /// position of the light in mask texels (shadow-casting lights only, zero otherwise); y the
-    /// light's specular factor (every light, E47).
-    pub shadow: [f32; 4],
-    /// x first atlas row of the light's profile or -1 without, yzw C0 unit vector.
-    pub profile: [f32; 4],
-    /// Line and rect lights (zero otherwise): xyz half extent U along the length, w half width
-    /// (rect).
-    pub area: [f32; 4],
-    /// Shadow-casting line and rect lights: xy U and zw V (the rect's half extent across) in
-    /// mask texels. Lights of the medium stage: xy the heights `[bottom, top]` of the reach,
-    /// zw zero.
-    pub area_mask: [f32; 4],
+use knorke_math::uniform_block;
+
+uniform_block! {
+    /// Per-light data of the light pass; matches `struct GpuLight` in `light_common.hlsli`.
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct GpuLight[128] {
+        /// xyz world position, w radius.
+        pub position_radius: [f32; 4],
+        /// rgb colour * intensity * flicker, a falloff.
+        pub color_falloff: [f32; 4],
+        /// xyz normalized direction (a rect light's normal), w type: 0 point, 1 spot, 2 line,
+        /// 3 rect, 4 two-sided rect (plus the soft near field share for point and spot lights).
+        pub direction_type: [f32; 4],
+        /// x cos(inner), y cos(outer), z quad half extent (ground radius), w 1 / profile atlas
+        /// height (profiles only).
+        pub spot_cos: [f32; 4],
+        /// x source radius R in mask texels (negative for `inside_obstacle`: `-1 - R`), zw ground
+        /// position of the light in mask texels (shadow-casting lights only, zero otherwise); y the
+        /// light's specular factor (every light, E47).
+        pub shadow: [f32; 4],
+        /// x first atlas row of the light's profile or -1 without, yzw C0 unit vector.
+        pub profile: [f32; 4],
+        /// Line and rect lights (zero otherwise): xyz half extent U along the length, w half width
+        /// (rect).
+        pub area: [f32; 4],
+        /// Shadow-casting line and rect lights: xy U and zw V (the rect's half extent across) in
+        /// mask texels. Lights of the medium stage: xy the heights `[bottom, top]` of the reach,
+        /// zw zero.
+        pub area_mask: [f32; 4],
+    }
 }
 
-/// The mask of a masked point or spot light (E115); matches `struct GpuMask` in
-/// `light_mask.hlsli`. Kept in a second buffer parallel to the light buffer (same index). The
-/// mask coordinates of a pixel are `u = (w . p) / (w . n)`, `v = (w . q) / (w . n)` for
-/// `w = pixel - light`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct GpuMask {
-    /// xyz plane vector n' (projector: the direction; window: normal / distance), w 1 window, 0
-    /// projector.
-    pub n: [f32; 4],
-    /// xyz P' (u), w the block's first atlas v (`block / blocks`).
-    pub p: [f32; 4],
-    /// xyz Q' (v), w the block's atlas v extent (`1 / blocks`).
-    pub q: [f32; 4],
+uniform_block! {
+    /// The mask of a masked point or spot light (E115); matches `struct GpuMask` in
+    /// `light_mask.hlsli`. Kept in a second buffer parallel to the light buffer (same index). The
+    /// mask coordinates of a pixel are `u = (w . p) / (w . n)`, `v = (w . q) / (w . n)` for
+    /// `w = pixel - light`.
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct GpuMask[48] {
+        /// xyz plane vector n' (projector: the direction; window: normal / distance), w 1 window, 0
+        /// projector.
+        pub n: [f32; 4],
+        /// xyz P' (u), w the block's first atlas v (`block / blocks`).
+        pub p: [f32; 4],
+        /// xyz Q' (v), w the block's atlas v extent (`1 / blocks`).
+        pub q: [f32; 4],
+    }
 }
 
-/// A directional light drawn per pixel (E24); the first three rows of `DirectionalParams` in
-/// `directional.frag`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct GpuDirectional {
-    /// xy unit direction toward the light in mask texels, z height per texel, w penumbra per
-    /// texel.
-    pub dir_slope: [f32; 4],
-    /// rgb colour * intensity * flicker, w 1 if it casts shadows.
-    pub color: [f32; 4],
-    /// xyz unit vector toward the light in world space, w specular factor (E47).
-    pub world: [f32; 4],
+uniform_block! {
+    /// A directional light drawn per pixel (E24); the first three rows of `DirectionalParams` in
+    /// `directional.frag`.
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct GpuDirectional[48] {
+        /// xy unit direction toward the light in mask texels, z height per texel, w penumbra per
+        /// texel.
+        pub dir_slope: [f32; 4],
+        /// rgb colour * intensity * flicker, w 1 if it casts shadows.
+        pub color: [f32; 4],
+        /// xyz unit vector toward the light in world space, w specular factor (E47).
+        pub world: [f32; 4],
+    }
 }
 
 const _: () = assert!(size_of::<GpuLight>() == 128);
 const _: () = assert!(size_of::<GpuMask>() == 48);
 const _: () = assert!(size_of::<GpuDirectional>() == 48);
-
-/// Writes the rows of a record as little-endian `f32`s.
-fn rows_to_bytes<const N: usize>(rows: &[&[f32; 4]]) -> [u8; N] {
-    let mut out = [0u8; N];
-    for (i, v) in rows.iter().flat_map(|r| r.iter()).enumerate() {
-        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
-    }
-    out
-}
-
-impl GpuLight {
-    /// Size in bytes (`StructuredBuffer<GpuLight>` stride).
-    pub const SIZE: usize = 128;
-
-    /// The bytes as the shaders read them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        rows_to_bytes(&[
-            &self.position_radius,
-            &self.color_falloff,
-            &self.direction_type,
-            &self.spot_cos,
-            &self.shadow,
-            &self.profile,
-            &self.area,
-            &self.area_mask,
-        ])
-    }
-}
-
-impl GpuMask {
-    /// Size in bytes (`StructuredBuffer<GpuMask>` stride).
-    pub const SIZE: usize = 48;
-
-    /// The bytes as the shaders read them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        rows_to_bytes(&[&self.n, &self.p, &self.q])
-    }
-}
-
-impl GpuDirectional {
-    /// Size in bytes.
-    pub const SIZE: usize = 48;
-
-    /// The bytes as the shaders read them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        rows_to_bytes(&[&self.dir_slope, &self.color, &self.world])
-    }
-}
 
 #[cfg(test)]
 mod tests {
