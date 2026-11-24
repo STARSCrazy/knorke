@@ -20,11 +20,12 @@
 //! | [`frame_warnings`] | debug-check findings of a frame as stable diagnostics | P18 |
 //! | [`light_program`] (+ `light_pipelines` with `gpu`) | light program family: table of the 92 programs, rules, binding layouts, lazy pipelines | P24 |
 //! | [`lighting`] | light pass: uniform blocks, program choice, draw plan; `LightingStage` with `gpu` | P25 |
+//! | [`composite`] | composite pass: programs, binding layouts, uniform block; `CompositeStage` with `gpu` | P27 |
 //!
 //! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
 //! dependency: the occluder raster (P22), the occlusion mask (P23), the light pipelines (P24),
-//! the light pass (P25) and the rest of the gate spike `gpu_spike` (composite and output, to be
-//! replaced by P27 and P31).
+//! the light pass (P25), the composite pass (P27) and the rest of the gate spike `gpu_spike`
+//! (sprite mask, distance field and output, to be replaced by P31).
 //! This crate does not know `knorke-post`, `knorke-lighting`, `knorke-render` or
 //! the AI crates (`cargo xtask deps`).
 //!
@@ -46,6 +47,7 @@ pub mod ambient_zone_store;
 pub mod animation;
 pub mod area_light;
 pub mod codec;
+pub mod composite;
 pub mod frame_warnings;
 pub mod gpu_light;
 #[cfg(feature = "gpu")]

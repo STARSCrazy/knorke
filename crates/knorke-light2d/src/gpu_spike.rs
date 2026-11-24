@@ -2,8 +2,7 @@
 // src/rendering/LightingStage.cpp (light pass: unshadowed exact material mode, shadowed flat mode),
 // src/lighting/LightCulling.cpp (MakeGpuLight, CollectLights for one point light),
 // src/shadows/OcclusionDomain.cpp, src/rendering/OcclusionMask.cpp (sprite mask only),
-// src/rendering/SdfShadows.cpp (full rebuild), src/rendering/CompositeStage.cpp and
-// src/rendering/OutputStage.cpp (parameter blocks).
+// src/rendering/SdfShadows.cpp (full rebuild) and src/rendering/OutputStage.cpp (parameter block).
 //
 // Original notice (zlib):
 // Copyright (C) 2026 Manuel Vögele
@@ -25,8 +24,8 @@
 // 3. This notice may not be removed or altered from any source distribution.
 //
 // Altered: rewritten in Rust for the Knorke Engine as a throw-away gate spike. Since P25 the
-// light pass is the real `lighting::LightingStage`; what is left here (sprite mask, field,
-// composite, output) goes with P27 and P31.
+// light pass is the real `lighting::LightingStage`, since P27 the composite is the real
+// `composite::CompositeStage`; what is left here (sprite mask, field, output) goes with P31.
 
 //! **SPIKE – not an API.** Gate spike of the Chiaro port (plan §5.1, §17.12 step 2,
 //! ADR 0014): proves that a native Rust path on `knorke-gpu` reproduces Chiaro's image with
@@ -38,8 +37,8 @@
 //! - **flat shadow mode** (occlusion sprite buffer, no material): occlusion mask from the
 //!   sprite, jump-flooding distance field (seed, 6 steps, distance).
 //!
-//! The light pass itself is the real [`LightingStage`] (P25). Then composite and output, with
-//! Chiaro's default settings. No obstacle store (only the sprite mask), no heights, zones,
+//! The light pass itself is the real [`LightingStage`] (P25) and the composite the real
+//! [`CompositeStage`] (P27). Then the output, with Chiaro's default settings. No obstacle store (only the sprite mask), no heights, zones,
 //! medium, bloom or incremental mask updates. The output pass belongs to `knorke-post` (P20)
 //! after the port; it sits here only because the spike needs a finished image.
 //!
@@ -48,7 +47,7 @@
 //! never submits, presents or reads back.
 //!
 //! The rest of the port replaces this module: the sprite mask goes into the occlusion stage
-//! (P23 follow-up), composite is P27, the frame plan P31. Remove it then.
+//! (P23 follow-up), the output is `knorke-post`, the frame plan is P31. Remove it then.
 
 //! It records through the safe recording API of `knorke-gpu` (P1b, ADR 0015): borrowed
 //! [`CommandBuffer`], [`TextureRef`] views of the host's textures, no `unsafe`.
@@ -57,8 +56,7 @@ use std::borrow::Cow;
 
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8_UNORM, SDL_GPU_TEXTUREFORMAT_R16_FLOAT,
-    SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, SDL_GPU_TEXTUREFORMAT_R32G32_FLOAT,
-    SDL_GPUTextureFormat,
+    SDL_GPU_TEXTUREFORMAT_R32G32_FLOAT, SDL_GPUTextureFormat,
 };
 use knorke_gpu::sys::rect::SDL_Rect;
 use knorke_gpu::{
@@ -68,17 +66,16 @@ use knorke_gpu::{
 use knorke_math::{Vec3, det};
 use knorke_types::{Diagnostic, DiagnosticCode};
 
+use crate::composite::{CompositeFrame, CompositeLight, CompositeStage, InputColorSpace};
 use crate::light_culling::LightList;
 use crate::light_math::scaled_buffer_size;
 use crate::light_pipelines::LightPipelines;
-use crate::lighting::{DetailMode, LightingFrame, LightingStage, ShadowMaps};
+use crate::lighting::{LightingFrame, LightingResult, LightingStage, ShadowMaps};
 use crate::occluder_raster::INFINITE_TOP;
 use crate::projection::Projection;
 use crate::settings::LightSettings;
 use crate::shadow::{MaskAnchor, OcclusionDomain};
 
-/// Format of the light, specular and HDR buffers (Chiaro `kLightFormat`, `kHdrFormat`).
-pub const HDR_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
 const MASK_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
 const SEED_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R32G32_FLOAT;
 const FIELD_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R16_FLOAT;
@@ -92,15 +89,13 @@ const FIELD_BOUND: u32 = 32; // SdfShadows::kFieldBound (power of two: JfaSpan()
 /// Jump distances: JfaSpan() / 2 … 1, plus one extra 1 (SdfShadows::RecordPasses).
 const JFA_STEPS: [u32; 6] = [16, 8, 4, 2, 1, 1];
 
-const COMPOSITE: ProgramIndex = 0;
-const OUTPUT: ProgramIndex = 1;
-const OCCLUSION_MASK: ProgramIndex = 2;
-const JFA_SEED: ProgramIndex = 3;
-const JFA_STEP: ProgramIndex = 4;
-const JFA_DISTANCE: ProgramIndex = 5;
+const OUTPUT: ProgramIndex = 0;
+const OCCLUSION_MASK: ProgramIndex = 1;
+const JFA_SEED: ProgramIndex = 2;
+const JFA_STEP: ProgramIndex = 3;
+const JFA_DISTANCE: ProgramIndex = 4;
 
-const PROGRAMS: [ProgramDesc; 6] = [
-    ProgramDesc::new("fullscreen.vert", "composite.frag", Blend::Opaque),
+const PROGRAMS: [ProgramDesc; 5] = [
     ProgramDesc::new("fullscreen.vert", "output.frag", Blend::Opaque),
     ProgramDesc::new("fullscreen.vert", "occlusion_mask.frag", Blend::Max),
     ProgramDesc::new("fullscreen.vert", "jfa_seed.frag", Blend::Opaque),
@@ -219,7 +214,7 @@ pub struct SpikeRenderer<'d> {
     light_pipelines: LightPipelines<'d>,
     samplers: Samplers<'d>,
     lighting: LightingStage<'d>,
-    hdr: RenderTarget<'d>,
+    composite: CompositeStage<'d>,
     mask: RenderTarget<'d>,
     seeds: [RenderTarget<'d>; 2],
     field: RenderTarget<'d>,
@@ -229,8 +224,7 @@ pub struct SpikeRenderer<'d> {
 #[derive(Clone, Copy, Debug)]
 pub struct Prepared {
     shadows: bool,
-    ambient: Vec3,
-    detail: DetailMode,
+    lit: LightingResult,
 }
 
 /// The settings of the spike: Chiaro's defaults with the frame's ambient.
@@ -283,6 +277,25 @@ fn shadow_maps_of<'a>(
     }
 }
 
+/// The composite inputs of the frame: sRGB scene colour, no glow, no surface, no medium.
+fn composite_frame<'a>(
+    frame: &'a SpikeFrame<'a>,
+    settings: &'a LightSettings,
+    light: CompositeLight<'a>,
+) -> CompositeFrame<'a> {
+    CompositeFrame {
+        scene: frame.scene,
+        glow: None,
+        material: frame.material,
+        surface: None,
+        light,
+        medium: None,
+        projection: &frame.projection,
+        settings,
+        input_space: InputColorSpace::Srgb,
+    }
+}
+
 fn missing(what: &str) -> Diagnostic {
     Diagnostic::error(
         SPIKE_UNSUPPORTED,
@@ -307,13 +320,14 @@ impl<'d> SpikeRenderer<'d> {
         let shaders = ShaderLibrary::new(gpu, pack)?;
         let pipelines = PipelineCache::new(&shaders, &PROGRAMS)?;
         let light_pipelines = LightPipelines::new(&shaders)?;
+        let composite = CompositeStage::new(gpu, &shaders)?;
         Ok(Self {
             shaders,
             pipelines,
             light_pipelines,
             samplers: Samplers::new(gpu)?,
             lighting: LightingStage::new(gpu),
-            hdr: RenderTarget::new(gpu),
+            composite,
             mask: RenderTarget::new(gpu),
             seeds: [RenderTarget::new(gpu), RenderTarget::new(gpu)],
             field: RenderTarget::new(gpu),
@@ -337,9 +351,7 @@ impl<'d> SpikeRenderer<'d> {
                 "the spike draws lights with either a material buffer or a shadow-casting occlusion buffer",
             ));
         }
-        let (w, h) = (frame.width(), frame.height());
         let d = domain(frame);
-        self.hdr.ensure(w, h, HDR_FORMAT)?;
         if shadows {
             self.mask.ensure(d.width, d.height, MASK_FORMAT)?;
             self.field.ensure(d.width, d.height, FIELD_FORMAT)?;
@@ -355,7 +367,6 @@ impl<'d> SpikeRenderer<'d> {
             get(JFA_STEP, SEED_FORMAT)?;
             get(JFA_DISTANCE, FIELD_FORMAT)?;
         }
-        get(COMPOSITE, HDR_FORMAT)?;
         get(OUTPUT, frame.target.format())?;
         let settings = settings(frame);
         let maps = match (shadows, self.mask.texture_ref(), self.field.texture_ref()) {
@@ -368,11 +379,15 @@ impl<'d> SpikeRenderer<'d> {
             &mut self.light_pipelines,
             &lighting_frame(frame, &settings, lights, maps.as_ref()),
         )?;
-        Ok(Prepared {
-            shadows,
-            ambient: lit.ambient,
-            detail: lit.detail_mode,
-        })
+        self.composite.prepare(
+            &mut self.shaders,
+            &composite_frame(
+                frame,
+                &settings,
+                CompositeLight::from_stage(&self.lighting, &lit),
+            ),
+        )?;
+        Ok(Prepared { shadows, lit })
     }
 
     /// Records upload, occlusion and distance field (shadow mode), light pass, composite and
@@ -386,16 +401,11 @@ impl<'d> SpikeRenderer<'d> {
         lights: &LightList,
         prepared: Prepared,
     ) -> Result<(), Diagnostic> {
-        let hdr_tex = self
-            .hdr
-            .texture_ref()
-            .ok_or_else(|| missing("hdr buffer"))?;
         let nearest = self.samplers.sampler(Filter::Nearest);
         let linear = self.samplers.sampler(Filter::Linear);
         let pair = SamplerBinding::new;
         let d = domain(frame);
         let (w, h) = (frame.width() as f32, frame.height() as f32);
-        let a = prepared.ambient;
         let zero = [0.0; 4];
 
         // Shadow mode: occlusion mask from the sprite buffer, then the distance field.
@@ -496,41 +506,18 @@ impl<'d> SpikeRenderer<'d> {
             &self.samplers,
             &lighting_frame(frame, &settings, lights, maps.as_ref()),
         )?;
-        let light_tex = self
-            .lighting
-            .light_buffer()
-            .ok_or_else(|| missing("light buffer"))?;
-        let specular = self.lighting.specular_buffer();
 
-        // Composite into the HDR buffer.
-        let exact = prepared.detail == DetailMode::Exact;
-        let mut composite = Block::<160>::new();
-        composite
-            .u(1) // decode sRGB: sRGB scene colour in an UNORM texture
-            .u(1) // light buffer
-            .u(0)
-            .u(0) // no glow
-            .f4([a.x, a.y, a.z, 1.0])
-            .u(0) // glow colour from the glow buffer
-            .f(1.0) // glow scale
-            .u(u32::from(exact)) // specular buffer
-            .u(0); // no direction mode
-        let (material, detail) = match (frame.material, specular) {
-            (Some(m), Some(s)) if exact => (pair(m, nearest), pair(s, linear)),
-            _ => (pair(frame.scene, nearest), pair(frame.scene, linear)),
-        };
-        let samplers = [
-            pair(frame.scene, nearest), // Scene
-            pair(light_tex, linear),    // LightBuffer
-            pair(frame.scene, nearest), // Glow: none
-            material,                   // Material
-            detail,                     // Detail: specular buffer
-            pair(frame.scene, nearest), // Surface: none
-        ];
-        let uniforms: [&[u8]; 1] = [&composite.bytes];
-        let b = fragment_only(&samplers, &uniforms);
-        let t = [ColorTarget::new(hdr_tex, Load::DontCare).cycled(true)];
-        self.pass(cmd, &t, COMPOSITE, &b, 3, None)?;
+        // Composite into the HDR buffer (P27).
+        let light = CompositeLight::from_stage(&self.lighting, &prepared.lit);
+        self.composite.record(
+            cmd,
+            &self.samplers,
+            &composite_frame(frame, &settings, light),
+        )?;
+        let hdr_tex = self
+            .composite
+            .hdr_buffer()
+            .ok_or_else(|| missing("hdr buffer"))?;
 
         // Output into the host's target (not cycled: it is the host's texture).
         let mut output = Block::<{ 240 + 32 * MAX_SHOCKWAVES }>::new();
