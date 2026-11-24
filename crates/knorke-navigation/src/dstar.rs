@@ -61,8 +61,9 @@ use std::hash::Hash;
 use crate::grid::{Cell, GridRules};
 use crate::hex::HexLayout;
 use knorke_observe::{NoopSink, Sink};
-use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer, by_fields, by_tag};
 
+use crate::open_list;
 use crate::search::{Cost, Graph, SearchStatus, SearchTrace};
 use crate::table::NodeTable;
 
@@ -597,67 +598,23 @@ impl<N: Copy + Eq + Hash, H: Heuristic<N>> DStarLite<N, H> {
 
 // --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
 
-impl SnapshotValue for HexHeuristic {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.layout);
-        w.put(&self.step_cost);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(HexHeuristic {
-            layout: r.get()?,
-            step_cost: r.get()?,
-        })
-    }
+// Plain values: tags and field order are pinned by `value_bytes::value_bytes_are_pinned`.
+by_fields! {
+    HexHeuristic { layout, step_cost };
+    Entry { key, index };
 }
 
-impl SnapshotValue for DStarStatus {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&match self {
-            DStarStatus::Idle => 0u8,
-            DStarStatus::Running => 1,
-            DStarStatus::Found => 2,
-            DStarStatus::Unreachable => 3,
-        });
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => DStarStatus::Idle,
-            1 => DStarStatus::Running,
-            2 => DStarStatus::Found,
-            3 => DStarStatus::Unreachable,
-            _ => return Err(SnapshotError::Invalid("knorke.navigation: d* status")),
-        })
-    }
+by_fields! {
+    [N: SnapshotValue] Record<N> { node, g, rhs, queued }
 }
 
-impl<N: SnapshotValue> SnapshotValue for Record<N> {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.node);
-        w.put(&self.g);
-        w.put(&self.rhs);
-        w.put(&self.queued);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Record {
-            node: r.get()?,
-            g: r.get()?,
-            rhs: r.get()?,
-            queued: r.get()?,
-        })
-    }
-}
-
-impl SnapshotValue for Entry {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.key);
-        w.put(&self.index);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Entry {
-            key: r.get()?,
-            index: r.get()?,
-        })
-    }
+by_tag! {
+    DStarStatus, SnapshotError::Invalid("knorke.navigation: d* status") => {
+        0 => Idle,
+        1 => Running,
+        2 => Found,
+        3 => Unreachable,
+    };
 }
 
 /// The complete plan, so a planner stopped by its expansion budget or told about map
@@ -671,10 +628,7 @@ impl<N: Copy + Eq + Hash + SnapshotValue, H: Heuristic<N> + SnapshotValue> Snaps
 {
     fn put(&self, w: &mut Writer<'_>) {
         w.put(&self.records);
-        w.put_len(self.open.len());
-        for e in self.open.iter() {
-            w.put(e);
-        }
+        open_list::put(&self.open, w);
         w.put(&self.heuristic);
         w.put(&self.start);
         w.put(&self.goal);
@@ -696,11 +650,7 @@ impl<N: Copy + Eq + Hash + SnapshotValue, H: Heuristic<N> + SnapshotValue> Snaps
         const BAD: SnapshotError = SnapshotError::Invalid("knorke.navigation: d* index");
         let result = (|| {
             r.get_into_vec(&mut self.records)?;
-            let mut open = std::mem::take(&mut self.open).into_vec();
-            let read = r.get_into_vec(&mut open);
-            // A valid heap is left as it is by `from`, so the order matches the saved one.
-            self.open = BinaryHeap::from(open);
-            read?;
+            open_list::get_into(&mut self.open, r)?;
             self.heuristic = r.get()?;
             self.start = r.get()?;
             self.goal = r.get()?;
@@ -715,14 +665,10 @@ impl<N: Copy + Eq + Hash + SnapshotValue, H: Heuristic<N> + SnapshotValue> Snaps
             if len > u32::MAX as usize || self.open.iter().any(|e| e.index as usize >= len) {
                 return Err(BAD);
             }
-            self.index.clear();
-            for (i, rec) in self.records.iter().enumerate() {
-                if self.index.get(&rec.node).is_some() {
-                    return Err(SnapshotError::Invalid(
-                        "knorke.navigation: repeated d* node",
-                    ));
-                }
-                self.index.insert_new(rec.node, i as u32);
+            if !self.index.refill(self.records.iter().map(|rec| rec.node)) {
+                return Err(SnapshotError::Invalid(
+                    "knorke.navigation: repeated d* node",
+                ));
             }
             Ok(())
         })();

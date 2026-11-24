@@ -692,22 +692,13 @@ pub fn write_way_traced<M: CellMap, S: Sink<SmoothTrace<Cell>> + ?Sized>(
 
 // --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
 
-impl SnapshotValue for Last {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&match self {
-            Last::Nothing => 0u8,
-            Last::Path => 1,
-            Last::Area => 2,
-        });
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Last::Nothing,
-            1 => Last::Path,
-            2 => Last::Area,
-            _ => return Err(SnapshotError::Invalid("knorke.navigation: last result")),
-        })
-    }
+// Tags are pinned by `tests::last_bytes_are_pinned`.
+knorke_types::by_tag! {
+    Last, SnapshotError::Invalid("knorke.navigation: last result") => {
+        0 => Nothing,
+        1 => Path,
+        2 => Area,
+    };
 }
 
 /// Section `knorke.navigation`: the running or finished search (a search stopped by its

@@ -163,19 +163,9 @@ impl Timers {
     }
 }
 
-impl SnapshotValue for Timer {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.id);
-        w.put(&self.since);
-        w.put(&self.duration);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Timer {
-            id: r.get()?,
-            since: r.get()?,
-            duration: r.get()?,
-        })
-    }
+// Field order pinned by `value_bytes::value_bytes_are_pinned`.
+knorke_types::by_fields! {
+    Timer { id, since, duration };
 }
 
 /// One character's timers with their capacity. Restore reuses the buffer and rejects a

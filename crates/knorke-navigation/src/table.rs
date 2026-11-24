@@ -70,6 +70,21 @@ impl<N: Copy + Eq + Hash> NodeTable<N> {
         }
     }
 
+    /// Replaces the contents with `nodes`, numbered 0, 1, 2, … in order: the index of a
+    /// restored record list. Returns `false` as soon as a node appears twice; the table
+    /// then holds a partial index, so the caller must discard it (and its records).
+    /// The caller has checked that the count fits in `u32`.
+    pub(crate) fn refill(&mut self, nodes: impl Iterator<Item = N>) -> bool {
+        self.clear();
+        for (number, node) in nodes.enumerate() {
+            if self.get(&node).is_some() {
+                return false;
+            }
+            self.insert_new(node, number as u32);
+        }
+        true
+    }
+
     #[inline]
     fn home(&self, key: &N) -> usize {
         let mut h = FxHasher::default();

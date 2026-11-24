@@ -133,34 +133,17 @@ impl Preset {
     }
 }
 
-/// Saved with a [`DStarLite`](crate::dstar::DStarLite) that uses it as its heuristic.
-impl knorke_types::SnapshotValue for GridRules {
-    fn put(&self, w: &mut knorke_types::Writer<'_>) {
-        w.put(&match self.moves {
-            Moves::Four => 0u8,
-            Moves::Eight => 1,
-        });
-        w.put(&self.cut_corners);
-        w.put(&self.straight);
-        w.put(&self.diagonal);
-    }
-    fn get(r: &mut knorke_types::Reader<'_>) -> Result<Self, knorke_types::SnapshotError> {
-        let moves = match r.get::<u8>()? {
-            0 => Moves::Four,
-            1 => Moves::Eight,
-            _ => {
-                return Err(knorke_types::SnapshotError::Invalid(
-                    "knorke.navigation: grid moves",
-                ));
-            }
-        };
-        Ok(GridRules {
-            moves,
-            cut_corners: r.get()?,
-            straight: r.get()?,
-            diagonal: r.get()?,
-        })
-    }
+// Saved with a [`DStarLite`](crate::dstar::DStarLite) that uses it as its heuristic.
+// Tags and field order are pinned by `tests::rules_bytes_are_pinned`.
+knorke_types::by_tag! {
+    Moves, knorke_types::SnapshotError::Invalid("knorke.navigation: grid moves") => {
+        0 => Four,
+        1 => Eight,
+    };
+}
+
+knorke_types::by_fields! {
+    GridRules { moves, cut_corners, straight, diagonal };
 }
 
 impl GridRules {

@@ -20,6 +20,14 @@ pub enum Grid {
     Hex = 1,
 }
 
+// Tags are pinned by `contagion::value_bytes::value_bytes_are_pinned`.
+knorke_types::by_tag! {
+    Grid, knorke_types::SnapshotError::Invalid("knorke.perception: grid") => {
+        0 => Square,
+        1 => Hex,
+    };
+}
+
 /// How a stimulus on a channel travels.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[repr(u8)]

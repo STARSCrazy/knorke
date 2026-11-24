@@ -23,20 +23,13 @@ pub use cell::{Cell, Pos};
 pub use heading::{Sine, sine};
 pub use hex::{HexLayout, axial_step};
 
-use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
+use knorke_types::SnapshotError;
 
-impl SnapshotValue for Cell {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.x);
-        w.put(&self.y);
-        w.put(&self.level);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Cell::new(r.get()?, r.get()?, r.get()?))
-    }
+// Field order and tags pinned by `tests::snapshot_values_round_trip`.
+knorke_types::by_fields! {
+    Cell { x, y, level };
 }
 
-// Tags pinned by `tests::snapshot_values_round_trip`.
 knorke_types::by_tag! {
     HexLayout, SnapshotError::Invalid("knorke.grid: hex layout out of range") => {
         0 => OddR,
@@ -53,6 +46,7 @@ knorke_types::by_tag! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use knorke_types::{Reader, Writer};
 
     #[test]
     fn snapshot_values_round_trip() {
