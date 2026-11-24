@@ -26,8 +26,9 @@ fn core_does_not_import_kit() {
         let entry = entry.unwrap();
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().into_owned();
-        if path.is_dir() || name == "mod.rs" || name.ends_with("tests.rs") || !name.ends_with(".rs")
-        {
+        // Test-only files (`*tests.rs`, `test_support.rs`) may use the kit.
+        let test_only = name.ends_with("tests.rs") || name == "test_support.rs";
+        if path.is_dir() || name == "mod.rs" || test_only || !name.ends_with(".rs") {
             continue;
         }
         let source = fs::read_to_string(&path).unwrap();

@@ -2,18 +2,11 @@
 //! on restore, and rejected input.
 use super::orders::Status;
 use super::squad::DangerReport;
+use super::test_support::*;
 use super::*;
-use crate::memory::{Fact, Message, Metric};
+use crate::memory::Metric;
 use knorke_grid::HexLayout;
 use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
-
-const ENEMY: u32 = 1;
-const SEED: u64 = 7;
-const RADIO: Channel = Channel::Radio {
-    base: 2,
-    per_unit: 1,
-};
-const MEMBERS: [(u32, i32, i32); 4] = [(1, 0, 0), (2, 0, 2), (3, 0, -2), (4, -3, 0)];
 
 fn save<T: SnapshotValue>(v: &T) -> Vec<u8> {
     let mut out = Vec::new();
@@ -32,80 +25,12 @@ fn load<T: SnapshotValue>(bytes: &[u8]) -> Result<T, SnapshotError> {
     T::get(&mut Reader::new(bytes))
 }
 
-fn config() -> SquadConfig {
-    SquadConfig {
-        members: 4,
-        memory: 8,
-        areas: 4,
-        inbox: 8,
-        metric: Metric::Chebyshev,
-        ..SquadConfig::default()
-    }
-}
-
-fn member(id: u32, x: i32, y: i32) -> Member {
-    Member {
-        id,
-        pos: [x, y, 0],
-        roles: 0,
-        skill: 192,
-        state: MemberState::Active,
-    }
-}
-
-fn spots() -> [Spot; 4] {
-    [
-        Spot {
-            pos: [16, 0, 0],
-            tags: TAG_COVER,
-        },
-        Spot {
-            pos: [16, 2, 0],
-            tags: 0,
-        },
-        Spot {
-            pos: [20, 4, 0],
-            tags: TAG_HIGH,
-        },
-        Spot {
-            pos: [20, -4, 0],
-            tags: 0,
-        },
-    ]
-}
-
-fn enemy(subject: u32, x: i32, y: i32, now: u32) -> Fact {
-    Fact {
-        subject,
-        kind: ENEMY,
-        pos: [x, y, 0],
-        seen_at: now,
-        ..Fact::default()
-    }
-}
-
-/// Channels, leader, skill, tactics and a reported enemy.
-fn setup(sq: &mut Squad) {
-    for (id, ..) in MEMBERS {
-        if id != 1 {
-            assert!(sq.set_channel(id, RADIO));
-        }
-    }
-    assert!(sq.set_leader(1));
-    sq.set_skill(192);
-    sq.set_target_kind(ENEMY);
-    sq.add_tactic(tactics::rush());
-    sq.add_tactic(tactics::formation(Shape::Line, 2));
-    sq.add_tactic(tactics::flank(3, 4));
-    assert!(sq.report(Message::enemy(2, enemy(11, 24, 10, 0)), 0));
-}
-
 fn squad() -> Squad {
-    let mut sq = Squad::new(config()).unwrap();
+    let mut sq = Squad::new(flank_config(8)).unwrap();
     for (id, x, y) in MEMBERS {
-        sq.group_mut().add(member(id, x, y));
+        sq.group_mut().add(flank_member(id, x, y));
     }
-    setup(&mut sq);
+    setup_flank(&mut sq, 0);
     sq.observe(0, enemy(10, 20, 0, 0));
     sq
 }
@@ -119,7 +44,7 @@ fn step(sq: &mut Squad, t: u32, out: &mut Vec<Order>) -> (Status, Vec<Order>) {
     if t.is_multiple_of(5) {
         let _ = sq.report_danger(3, [t as i32, 1, 0], Some([20, 0, 0]), t + 2);
     }
-    let status = sq.check(t, &[], &spots(), SEED).unwrap();
+    let status = sq.check(t, &[], &flank_spots(), SEED).unwrap();
     out.clear();
     sq.orders_due(t, out);
     (status, out.clone())
@@ -143,7 +68,7 @@ fn squad_round_trip_continues_identically() {
     let t0 = run_until_orders_in_flight(&mut a);
     assert!(!a.dangers.is_empty() || a.areas().iter().next().is_some());
     let bytes = save(&a);
-    let mut b = Squad::new(config()).unwrap();
+    let mut b = Squad::new(flank_config(8)).unwrap();
     load_into(&mut b, &bytes).unwrap();
     assert_eq!(save(&b), bytes);
     let c: Squad = load(&bytes).unwrap();
@@ -363,19 +288,9 @@ fn keeper_round_trip() {
 
 fn crew_config() -> CrewConfig {
     CrewConfig {
-        squad: config(),
+        squad: flank_config(8),
         ..CrewConfig::default()
     }
-}
-
-fn crew() -> Crew {
-    let mut c = Crew::new(crew_config()).unwrap();
-    for (id, x, y) in MEMBERS {
-        assert!(c.add_member(member(id, x, y)).is_some());
-    }
-    setup(c.squad_mut());
-    c.observe(0, enemy(10, 20, 0, 0));
-    c
 }
 
 /// One crew tick: members walk one cell toward their goal every other tick, member 3
@@ -392,7 +307,7 @@ fn crew_step(c: &mut Crew, t: u32, events: &mut Vec<CrewEvent>) -> Vec<CrewEvent
             assert!(c.set_pos(id, [s(at[0], to[0]), s(at[1], to[1]), 0]));
         }
     }
-    c.tick(t, &[], &spots(), SEED, events).unwrap();
+    c.tick(t, &[], &flank_spots(), SEED, events).unwrap();
     for (id, ..) in MEMBERS {
         let won = !(id == 3 && t % 7 < 3);
         c.member_chose(id, t, won);
@@ -417,7 +332,7 @@ fn crew_until_orders_in_flight(c: &mut Crew) -> u32 {
 
 #[test]
 fn crew_round_trip_continues_identically() {
-    let mut a = crew();
+    let mut a = flank_crew(8, 0);
     let t0 = crew_until_orders_in_flight(&mut a);
     let bytes = save(&a);
     let mut b = Crew::new(crew_config()).unwrap();
@@ -441,7 +356,7 @@ fn crew_round_trip_continues_identically() {
 
 #[test]
 fn crew_restore_reuses_buffers() {
-    let mut a = crew();
+    let mut a = flank_crew(8, 0);
     let t0 = crew_until_orders_in_flight(&mut a);
     let bytes = save(&a);
     let mut events = Vec::new();
@@ -458,7 +373,7 @@ fn crew_restore_reuses_buffers() {
 
 fn crew_rejects(bad: &Crew) {
     let bytes = save(bad);
-    let mut c = crew();
+    let mut c = flank_crew(8, 0);
     assert!(matches!(
         load_into(&mut c, &bytes),
         Err(SnapshotError::Invalid(_))
@@ -471,7 +386,7 @@ fn crew_rejects(bad: &Crew) {
 
 #[test]
 fn crew_rejects_invalid_state() {
-    let mut base = crew();
+    let mut base = flank_crew(8, 0);
     crew_until_orders_in_flight(&mut base);
 
     let mut c = base.clone();
@@ -505,9 +420,9 @@ fn hex_crew_round_trip() {
     cfg.hex_layout = Some(HexLayout::OddR);
     let mut a = Crew::new(cfg).unwrap();
     for (id, x, y) in MEMBERS {
-        assert!(a.add_member(member(id, x, y)).is_some());
+        assert!(a.add_member(flank_member(id, x, y)).is_some());
     }
-    setup(a.squad_mut());
+    setup_flank(a.squad_mut(), 0);
     a.observe(0, enemy(10, 20, 0, 0));
     let mut events = Vec::new();
     for t in 0..10 {
