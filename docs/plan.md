@@ -836,3 +836,9 @@ Quelle: `D:\Entwicklung\chiaro` @ `9bc5b9b` (gleicher Stand wie die Inventur `do
 | 6 | Post-Stufe (Tonemap, Bloom, sRGB-Encode) – Zuordnung `knorke-render` vs. `knorke-lighting` klären | offen | Inventur §7.2 |
 | 7 | **Integration** in `knorke-integration` als eigenes Feature (z. B. `gpu`), Snapshot/Inspect/Diagnostics (`knorke.lighting.*`), Vertragstests (keine Allokation im Steady State, nullgroße Aus-Zustände) | geplant | wie das `pixel`-Profil |
 | 8 | Feature-Matrix vollständig, C++-Chiaro archivieren | geplant | erst bei ausreichender Parität (5.2/8) |
+
+Aus P23 (Okklusionsmaske, Distanzfeld, Cache; 2026-11-24):
+- **Dirty-`BitSet`s im `ObstacleStore`** – entschieden: `occlusion::OcclusionMask` verbraucht sie nicht (wie schon der Plan aus P16). Maske und Plan lesen nur `&ObstacleStore` und sind ohne die Bits exakt (eigene Fußabdrücke je dynamischem Hindernis, `static_version` für die statische Geometrie). Ein Verbraucher mit `clear_dirty` bräuchte `&mut ObstacleStore` im Render-Pfad, wäre der einzige Leser eines geteilten Stores (Lichtstufe, Caster-Klassen E53, Werkzeuge lesen mit) und verlöre bei einem fehlgeschlagenen Frame still Änderungen. Status: **offen**, ob die Bits bleiben (Host-Komfort) oder mit einer Snapshot-Version entfernt werden; Entscheidung, sobald ein echter Verbraucher „geändert seit meinem letzten Blick“ braucht.
+- **Sprite-Maske der Anwendung** (`occlusion_mask.frag`, E21-Szenenrechteck) in der Maske – **offen** (der Plan aus P16 unterstützt sie schon; fehlt nur die Zeichenstufe).
+- **Masken und Felder der Caster-Klassen** gefilterter Schatten (E53, `RecordCasters`) – **offen**, mit P25 (erst die Lichtstufe braucht sie).
+- Belegt: volle Maske und Feld sowie eine Cache-Folge (wiederverwendet, ganzzahliger Schwenk mit bewegtem Hindernis, Bruchteil-Schwenk) texelgleich zu C++-Chiaro (`tests/golden/chiaro/field/`); inkrementell = voll exakt bei ganzzahligen Schwenks, auch mit Höhentextur. **erledigt**.

@@ -10,13 +10,14 @@ use sdl3_sys::gpu::{
     SDL_BindGPUFragmentSamplers, SDL_BindGPUFragmentStorageBuffers,
     SDL_BindGPUFragmentStorageTextures, SDL_BindGPUGraphicsPipeline, SDL_BindGPUVertexSamplers,
     SDL_BindGPUVertexStorageBuffers, SDL_BindGPUVertexStorageTextures, SDL_CancelGPUCommandBuffer,
-    SDL_DownloadFromGPUTexture, SDL_DrawGPUPrimitives, SDL_EndGPUCopyPass, SDL_EndGPURenderPass,
-    SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, SDL_GPU_LOADOP_CLEAR, SDL_GPU_LOADOP_DONT_CARE,
-    SDL_GPU_LOADOP_LOAD, SDL_GPU_STOREOP_STORE, SDL_GPU_TEXTUREFORMAT_INVALID,
-    SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ,
-    SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUBuffer, SDL_GPUBufferRegion, SDL_GPUColorTargetInfo,
-    SDL_GPUCommandBuffer, SDL_GPUCopyPass, SDL_GPUDevice, SDL_GPUGraphicsPipeline,
-    SDL_GPURenderPass, SDL_GPUTexture, SDL_GPUTextureFormat, SDL_GPUTextureRegion,
+    SDL_CopyGPUTextureToTexture, SDL_DownloadFromGPUTexture, SDL_DrawGPUPrimitives,
+    SDL_EndGPUCopyPass, SDL_EndGPURenderPass, SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
+    SDL_GPU_LOADOP_CLEAR, SDL_GPU_LOADOP_DONT_CARE, SDL_GPU_LOADOP_LOAD, SDL_GPU_STOREOP_STORE,
+    SDL_GPU_TEXTUREFORMAT_INVALID, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+    SDL_GPU_TEXTUREUSAGE_GRAPHICS_STORAGE_READ, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUBuffer,
+    SDL_GPUBufferRegion, SDL_GPUColorTargetInfo, SDL_GPUCommandBuffer, SDL_GPUCopyPass,
+    SDL_GPUDevice, SDL_GPUGraphicsPipeline, SDL_GPURenderPass, SDL_GPUTexture,
+    SDL_GPUTextureFormat, SDL_GPUTextureLocation, SDL_GPUTextureRegion,
     SDL_GPUTextureSamplerBinding, SDL_GPUTextureTransferInfo, SDL_GPUTextureUsageFlags,
     SDL_GPUTransferBufferLocation, SDL_GPUViewport, SDL_PushGPUFragmentUniformData,
     SDL_PushGPUVertexUniformData, SDL_ReleaseGPUFence, SDL_SubmitGPUCommandBuffer,
@@ -1025,6 +1026,64 @@ impl CopyPass<'_> {
         // SAFETY: as in `upload_to_texture`; the transfer buffer holds the region from
         // `offset` on (checked above) and the region lies within the texture.
         unsafe { SDL_UploadToGPUTexture(self.raw.as_ptr(), &from, &to, cycle) };
+        Ok(())
+    }
+
+    /// Copies the `size[0]` x `size[1]` texels at `src_at` of `src` to `dst_at` of `dst`, on
+    /// the GPU. Both textures must have the same format and be different textures. `cycle`
+    /// drops the other texels of `dst`, so it is only for a copy that, together with later
+    /// writes, covers the whole texture. Fails before recording if a rectangle leaves its
+    /// texture or the formats differ.
+    pub fn copy_texture_region(
+        &mut self,
+        src: TextureRef<'_>,
+        src_at: [u32; 2],
+        dst: TextureRef<'_>,
+        dst_at: [u32; 2],
+        size: [u32; 2],
+        cycle: bool,
+    ) -> Result<(), Diagnostic> {
+        self.same_device(src.device_ptr(), "the source texture")?;
+        self.same_device(dst.device_ptr(), "the destination texture")?;
+        if src.format() != dst.format() || src.as_ptr() == dst.as_ptr() {
+            return Err(Diagnostic::error(
+                RECORD_USAGE,
+                "a texture copy needs two different textures of the same format",
+            ));
+        }
+        let fits = |start: u32, size: u32, limit: u32| {
+            size > 0 && start.checked_add(size).is_some_and(|end| end <= limit)
+        };
+        for (what, at, t) in [("source", src_at, &src), ("destination", dst_at, &dst)] {
+            if !fits(at[0], size[0], t.width()) || !fits(at[1], size[1], t.height()) {
+                return Err(out_of_range(format!(
+                    "the {what} region {}x{} at ({}, {}) leaves the {}x{} texture",
+                    size[0],
+                    size[1],
+                    at[0],
+                    at[1],
+                    t.width(),
+                    t.height()
+                )));
+            }
+        }
+        let from = SDL_GPUTextureLocation {
+            texture: src.as_ptr(),
+            x: src_at[0],
+            y: src_at[1],
+            ..Default::default()
+        };
+        let to = SDL_GPUTextureLocation {
+            texture: dst.as_ptr(),
+            x: dst_at[0],
+            y: dst_at[1],
+            ..Default::default()
+        };
+        // SAFETY: the pass is open; both textures are live objects of this device with the
+        // same format, and both rectangles lie within their textures (checked above).
+        unsafe {
+            SDL_CopyGPUTextureToTexture(self.raw.as_ptr(), &from, &to, size[0], size[1], 1, cycle)
+        };
         Ok(())
     }
 
