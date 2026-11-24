@@ -27,16 +27,8 @@ impl Interval {
     }
 }
 
-/// A plain value; every bit pattern is a valid interval.
-impl knorke_types::SnapshotValue for Interval {
-    fn put(&self, w: &mut knorke_types::Writer<'_>) {
-        w.put(&self.last);
-        w.put(&self.started);
-    }
-    fn get(r: &mut knorke_types::Reader<'_>) -> Result<Self, knorke_types::SnapshotError> {
-        Ok(Interval {
-            last: r.get()?,
-            started: r.get()?,
-        })
-    }
+// A plain value; every bit pattern is a valid interval.
+// Field order pinned by `snapshot_tests::value_bytes_are_pinned`.
+knorke_types::by_fields! {
+    Interval { last, started };
 }
