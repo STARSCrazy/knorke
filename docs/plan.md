@@ -857,5 +857,21 @@ Aus P25 (Lichtstufe; 2026-11-24):
 Aus P26/P27 (Atlanten, Ambient-Zonen-Pass, Composite; 2026-11-24):
 - Belegt: Lichtpuffer mit Profil-Licht, Masken-Licht und Ambient-Zonen (5 Szenen, `tests/golden/chiaro/atlas/`) sowie Composite-HDR (7 Szenen, `tests/golden/chiaro/composite/`) bytegleich zu C++-Chiaro (Vulkan, RX 6700 XT, 2026-11-24). Schließt „maskierte und profilierte Lichter ohne GPU-Test“ aus P25. **erledigt**.
 - **Profiltabellen nicht ulp-genau** – **erledigt** (entschieden 2026-11-24, Manuel: so lassen): `build_shape_profile` (P9) rechnet mit `knorke_math::det` und weicht in 879 von 3×13 032 Werten um höchstens 2 ulp von C++ `std` ab (belegt: `tests/golden/chiaro/atlas/table*.bin`, Test mit Grenze 4 ulp). Der Lichtpuffer bleibt bitgleich. `det` ist nach ADR 0011 Pflicht; ulp-genaue Tabellen hieße, Chiaros `std`-Ergebnisse als Tabelle zu übernehmen. Bleibt so, solange das Bild bitgleich ist; kippt ein Golden-Test deswegen, neu entscheiden.
-- **Composite mit Zonen** (`*_zones`-Programme, `pure_ambient`) und **mit Medium** – **offen**: nur Layout und Pipelines geprüft, kein Bildtest. Zonen → P31 (verdrahten + Bildtest), Medium → P29.
-- **`InputColorSpace` doppelt** (light2d-Enum neben dem Szenen-Farbraum in `knorke-post`, weil light2d `knorke-post` nicht kennen darf) – **geplant**, P31: beide aus einer Host-Einstellung speisen.
+- **Composite mit Zonen** (`*_zones`-Programme, `pure_ambient`) – **erledigt** mit P31 (5 Atlas-Szenen bis HDR bitgleich). **Composite mit Medium** – **offen** (P29): nur Layout und Pipelines geprüft.
+- **`InputColorSpace` doppelt** (light2d-Enum neben dem Szenen-Farbraum in `knorke-post`, weil light2d `knorke-post` nicht kennen darf) – **erledigt** mit P31: `Light2dRenderer` speist beide aus `PostSettings::output.scene_color_space`.
+
+Aus P31 (Pass-Plan, Integration; 2026-11-24):
+- Belegt: `minimal_normal_map`, `gate_sprite_shadow` über Pass-Plan + Post STRICT max diff 0; Snapshot der Stores → neuer Plan → gleiches Bild; 0 Allokationen in 5 warmen Frames (`no_alloc_pass_plan.rs`). **erledigt**. Sprite-Maske (E21) ist Stufe in `OcclusionMask`. **erledigt**.
+- **ADR 0017** (Pass-Plan, GPU-Profil in `knorke-integration`, verschärfte Abhängigkeitsregeln) – **offen**: Status „vorgeschlagen“, Entscheidung Manuel.
+- **Sprite-Maske im Höhenmodus** (`occlusion_mask_height.frag`) – **offen**: gebaut, aber ohne Chiaro-Golden.
+- **Demo-Szenen aus P3** (10 Szenen, 1280×720) – **offen**: brauchen Layers/Sprites (P33–P35), teils Medium (P29/P30) und Ringlicht (P21); vier davon sind nicht deterministisch (Uhr/Maus).
+- **Leistung Pass-Plan gegen alten Spike** – **offen**: nicht gemessen (`KNORKE_SCENE_BENCH` vorhanden).
+- **`check_invariants` des Pass-Plans** ist eine Methode mit `Sink`, kein `knorke_observe::Invariants` (Lebensdauer `'d`) – **offen**, bei P32 ansehen.
+
+Aufräumen (Auftrag Manuel 2026-11-24; zwei Opus-Audits, nur gelesen; Ersparnis meist geschätzt):
+- Leitlinie: wenig Code, nichts doppelt, Leser ist ein Agent; Kommentare sagen „warum“ und Nebeneffekte; Verhalten, Bitgleichheit, Snapshot-Formate und Diagnose-Codes bleiben.
+- **GPU-Tests**: Helfer (Gerät, Sperre, Golden laden, Textur, Readback, `KNORKE_REQUIRE_GPU`) stehen in 8–14 Dateien als Kopie → ein gemeinsamer Helfer. Geschätzt 1 500–2 500 Zeilen. **geplant** (`cleanup/gpu-tests`).
+- **Licht-Fachcode** (~950–1 000 Zeilen): `LIGHT_PROGRAMS` per Makro eine Zeile je Programm (~540, gezählt); ein `uniform_block`-Makro statt drei Byte-Schreibern und 17 `to_bytes` (~200); `SettingsError` einmal (~70); `validate` tabellengetrieben (~110); `AtlasTexture<S>` statt zwei Hüllen (~50). **geplant** (`cleanup/light-src`). Zurückgestellt: `Projection` doppelt in light2d/post (API-Änderung).
+- **KI-Crates**: `SnapshotValue` per Makro (`by_fields!` nach `knorke-types`, neu `by_tag!`; ~700–900, vorher Byte-Tests); Zähl-Allokator der Vertragstests einmal (~200); `SquadRules`-Weiterreichen per Makro (~70); Test-Helfer Gruppe/Golden/Karten (~250–350). **geplant** (`cleanup/ai`).
+- Geprüft, lohnt nicht: Stores (bauen schon auf `Slots`), `prepare`/`record`-Gerüste (Bausteine liegen in `knorke-gpu`), Szenario-Tests der KI (jeder prüft einen eigenen Fall). `knorke-integration/tests/images.rs` (4 310 Zeilen) ist die Bild-Suite des Software-Renderers – liegt am falschen Ort, Größe berechtigt. Nicht geprüft: `knorke-render` (`grid.rs`), toter öffentlicher Code.
+- **DLL-Größen** (dylib, release, 2026-11-24): Code (`.text`) je Crate 30–300 KB, z. B. math 81, ai 305, light2d 300 (ohne GPU); die Dateien sind größer wegen Rust-Metadaten (`.rustc`, bis 2,7 MB), die nicht ausgeliefert werden. Mit GPU kommen ~3,3 MB statisches SDL3 dazu. **erledigt** (Messung); nach dem Aufräumen wiederholen.

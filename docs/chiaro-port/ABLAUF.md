@@ -12,9 +12,11 @@
 
 ## Nächster Schritt
 
-- Jetzt: P31 läuft (Opus, Branch `port/p31-pass-plan`). Danach P32, dann die 2D-Helfer (P33–P35) bei Verbraucher.
-- Mitgegeben an P31: reines Ambient aus dem Zonen-Pass (`LightingStage::pure_ambient()`, `PureAmbient`) in `CompositeLight::from_stage` verdrahten und mit Bild testen; `InputColorSpace` (light2d) und Szenen-Farbraum (`knorke-post`) aus einer Quelle speisen; Reste des Spikes (Sprite-Maske, JFA, Output) ersetzen; Atlanten (`LightAtlases`) in den Frame-Ablauf einhängen.
-- Abnahme von GPU-Paketen mit `KNORKE_REQUIRE_GPU=1` (bisher nur `gpu_atlas_zones.rs` wertet es aus: Skip wird zum Fehler).
+- Jetzt: **Aufräumen** (Auftrag Manuel 2026-11-24: weniger Code, nichts doppelt, Verhalten gleich). Drei Branches parallel: `cleanup/gpu-tests` (gemeinsamer GPU-Test-Helfer), `cleanup/light-src` (Programmtabelle, Uniform-Blöcke, Settings), `cleanup/ai` (Snapshot-Makros, Test-Helfer). Listen der Fundstellen: Plan 17.12 „Aufräumen“.
+- Danach: P32 (Debug-Prüfung, hängt sich über `FrameFindings.gpu_findings` in den Pass-Plan), dann P33–P35 (2D-Helfer; erst damit sind die Demo-Szenen aus P3 nachstellbar).
+- ADR 0017 (Pass-Plan) steht auf „vorgeschlagen“ – Manuel entscheidet.
+- Abnahme von GPU-Paketen mit `KNORKE_REQUIRE_GPU=1` (Skip wird zum Fehler; bisher in `gpu_atlas_zones.rs`, `gpu_light2d_scenes.rs`, `no_alloc_pass_plan.rs`).
+- DLL-Größen zum Vergleich: `target/dll-out/groessen.txt` (nicht im Repo; Bau siehe Protokoll).
 - P12, P15 (exotisch) erst bei Verbraucher.
 - Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten. Parallele Agenten in `knorke-light2d` erzeugen kleine Konflikte in `lib.rs` und `tests/contracts/tests/no_alloc_light2d.rs` – beide Seiten behalten.
 
@@ -65,7 +67,7 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 | P28 | Muster-GPU | `knorke-light2d` | S/O | P23, P15 | offen (exotisch) |
 | P29 | Medium-GPU 1 | `knorke-light2d` | S | P25, P12 | offen (exotisch) |
 | P30 | Medium-GPU 2 | `knorke-light2d` | S | P29 | offen (exotisch) |
-| P31 | Pass-Plan + Einbindung `knorke-integration` (Feature `gpu`), Snapshot/Inspect | Integration | O | P20, P25, P27 | läuft (Branch `port/p31-pass-plan`) |
+| P31 | Pass-Plan + Einbindung `knorke-integration` (Feature `gpu`), Snapshot/Inspect | Integration | O | P20, P25, P27 | fertig (Merge 2026-11-24): `pass_plan::PassPlan` (feste Stufenfolge, `prepare`/`record`, `Inspect`), Sprite-Maske als Stufe (`record_with_sprite`), reines Ambient im Composite, `knorke-integration` Feature `gpu` (`light2d::Light2dRenderer` = Pass-Plan + Post); Spike entfernt; 2 Spike-Szenen + 5 Atlas-Szenen bis HDR bitgleich; ADR 0017 (vorgeschlagen); Demo-Szenen aus P3 warten auf P33–P35 |
 | P32 | Debug-Prüfung (opt-in) | `knorke-light2d` | S | P31 | offen |
 | P33 | 2D-Helfer: Layers | offen (Verbraucher) | S | P2, P31 | offen |
 | P34 | 2D-Helfer: Sprite + Streaming | offen (Verbraucher) | S | P33 | offen |
@@ -81,6 +83,7 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 
 Neueste oben. Datum · wer · was · Ergebnis (auch Fehlschläge, Messwerte).
 
+- 2026-11-24 · Opus-Agent + Claude · Gemerged: P31 (Pass-Plan, Integration Feature `gpu`, Spike entfernt). Der Agent konnte seine Abschlussprüfung wegen Speichermangel (Jest-Läufe einer anderen Session) nicht beenden; Koordinator hat voll geprüft: 1538 Tests grün (all-features, auch `--release`, mit `KNORKE_REQUIRE_GPU=1`), 1407 (no-default), Clippy 0, 21 Regeln, standalone ok. Nicht geschafft: weitere Demo-Szene (braucht P33–P35). Zwei Opus-Audits (nur lesen) zur Codemenge: Fachcode im Kern knapp, ~1 700–1 950 Zeilen kürzbar; größter Hebel im Testcode. DLL-Messung (dylib, release): Code je Crate 30–300 KB, Rest der Dateigröße sind Rust-Metadaten (`.rustc`).
 - 2026-11-24 · Sonnet-Agenten + Claude · Gemerged: P27 (Composite, 7 Szenen bytegleich) und P26 (Atlanten + Ambient-Zonen-Pass, 5 Szenen bitgleich; Profiltabellen ≤ 2 ulp neben Chiaro, Ursache `det`-Mathe in P9, Bild bleibt bitgleich). Prüfungen nach P27 allein: 1488 / 1399 grün. Nach beiden: 1528 Tests grün (all-features, auch `--release`, mit `KNORKE_REQUIRE_GPU=1`), 1402 (no-default), Clippy 0, 20 Regeln, standalone ok. Gestartet: P31 (Opus).
 - 2026-11-24 · Opus-Agent + Claude · Gemerged: P25 (Lichtstufe, 5 Szenen bytegleich zu Chiaro, Uniform-Layouts ohne Abweichung). Bei der Abnahme stürzte der Release-Lauf einmal ab (Speicherzugriffsfehler in `knorke-post` `gpu_parity`, aus P20): `SDL_Init` gleichzeitig aus mehreren Test-Threads. Nachgestellt (3 von 60 Läufen unter Last), behoben (Sperre in `init_video`, Tests nacheinander), danach 160 Läufe ohne Absturz. Prüfungen: 1466 Tests grün (all-features, auch `--release`), 1390 (no-default), Clippy 0, 20 Regeln, standalone ok. Gestartet: P26, P27 (Sonnet).
 - 2026-11-24 · Claude · P25 neu gestartet (Opus, eigener Worktree). Auftrag: Lichtstufe, Uniform-Layouts gegen Chiaro prüfen, Lichtteil des Spikes ersetzen, Golden-Dumper; E53 und Sprite-Maske, wenn es passt.
