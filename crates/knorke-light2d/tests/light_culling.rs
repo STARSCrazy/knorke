@@ -18,6 +18,7 @@ use knorke_light2d::light_culling::*;
 use knorke_light2d::light_math::NEAR_FIELD_SHARE;
 use knorke_light2d::mask::{MaskPreset, MaskShape};
 use knorke_light2d::mask_store::MaskId;
+use knorke_light2d::settings::{LightSettings, Quality, QualitySettings, Resolutions};
 use knorke_light2d::{
     AnimationStore, LightStore, MaskStore, NoResources, Projection, StoreResources,
 };
@@ -56,7 +57,7 @@ fn add_point(
 
 fn collect(
     store: &LightStore,
-    settings: &CullSettings,
+    settings: &LightSettings,
     projection: &Projection,
     time: f64,
     modes: &LightModes<'_>,
@@ -69,7 +70,7 @@ fn collect(
 fn plain(store: &LightStore) -> LightList {
     collect(
         store,
-        &CullSettings::default(),
+        &LightSettings::default(),
         &Projection::IDENTITY,
         0.0,
         &LightModes::default(),
@@ -132,7 +133,7 @@ fn directional_lights_go_into_the_ambient_sum_unless_they_cast_shadows_in_height
     d.direction = v(1.0, 0.0, -1.0); // elevation 45 degrees, light from -x
     d.cast_shadows = true;
     store.create(&d, &NoResources).unwrap();
-    let (s, p) = (CullSettings::default(), Projection::IDENTITY);
+    let (s, p) = (LightSettings::default(), Projection::IDENTITY);
 
     // No heights: phase 3 behaviour.
     let list = collect(&store, &s, &p, 0.0, &LightModes::default());
@@ -165,9 +166,16 @@ fn directional_lights_go_into_the_ambient_sum_unless_they_cast_shadows_in_height
 #[test]
 fn shadow_parameters_follow_zoom_camera_and_shadow_scale() {
     let mut store = LightStore::new();
-    let settings = CullSettings {
-        shadow_resolution: 0.5,
-        ..CullSettings::default()
+    let settings = LightSettings {
+        quality: QualitySettings {
+            quality: Quality::Custom(Resolutions {
+                light: 1.0,
+                shadow: 0.5,
+                medium: 0.5,
+            }),
+            ..QualitySettings::default()
+        },
+        ..LightSettings::default()
     };
     // Two scene pixels per world unit.
     let projection = Projection::ortho(at(10.0, 20.0), 2.0, W, H);
@@ -192,7 +200,7 @@ fn normal_mode_draws_every_directional_light_per_pixel() {
     store.create(&d, &NoResources).unwrap();
     d.cast_shadows = true;
     store.create(&d, &NoResources).unwrap();
-    let (s, p) = (CullSettings::default(), Projection::IDENTITY);
+    let (s, p) = (LightSettings::default(), Projection::IDENTITY);
 
     let normal = LightModes {
         normal_mode: true,
@@ -318,7 +326,7 @@ fn lights_without_animation_are_bit_identical_animated_ones_get_factors() {
         animations: Some(&animations),
         ..LightModes::default()
     };
-    let (s, p) = (CullSettings::default(), Projection::IDENTITY);
+    let (s, p) = (LightSettings::default(), Projection::IDENTITY);
 
     let list = collect(&lights, &s, &p, 0.0, &modes);
     assert_eq!(list.ordered.len(), 2);
@@ -395,7 +403,7 @@ fn a_beacon_turns_the_spot_direction_and_the_profile_c0_about_z() {
     };
     let list = collect(
         &lights,
-        &CullSettings::default(),
+        &LightSettings::default(),
         &Projection::IDENTITY,
         1.0,
         &modes,
@@ -435,7 +443,7 @@ fn animated_directional_lights_in_the_ambient_sum_are_tinted_and_scaled() {
         animations: Some(&animations),
         ..LightModes::default()
     };
-    let (s, p) = (CullSettings::default(), Projection::IDENTITY);
+    let (s, p) = (LightSettings::default(), Projection::IDENTITY);
     // Before the trigger: no light from the sun.
     let base = collect(&lights, &s, &p, 0.0, &modes).ambient;
     let at_peak = collect(
@@ -471,7 +479,7 @@ fn a_beacon_turns_a_rect_lights_normal_and_length_axis() {
     };
     let list = collect(
         &lights,
-        &CullSettings::default(),
+        &LightSettings::default(),
         &Projection::IDENTITY,
         1.0,
         &modes,
@@ -528,7 +536,7 @@ fn masked_lights_leave_the_plain_lists_for_the_masked_ones() {
         masks: Some(&masks),
         ..LightModes::default()
     };
-    let (s, p) = (CullSettings::default(), Projection::IDENTITY);
+    let (s, p) = (LightSettings::default(), Projection::IDENTITY);
     let list = collect(&store, &s, &p, 0.0, &modes);
     assert_eq!(list.ordered.len(), 1);
     assert_eq!(list.masked_ordered.len(), 1);

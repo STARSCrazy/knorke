@@ -13,6 +13,8 @@
 //! | [`obstacle`] | obstacle descriptions, handle-based store, dirty tracking for the shadow cache, snapshots | P13 |
 //! | [`animation`], [`area_light`], [`light_culling`], [`gpu_light`] | animation curves and store, area-light model, per-frame light lists | P8 |
 //! | [`mask`], [`mask_store`], [`light_mask`], [`resources`] | masks (gobo, window): shapes, store, placement; stores as light resources | P10 |
+//! | [`settings`] | settings and quality presets of the light (replace `CullSettings`) | P19 |
+//! | [`frame_warnings`] | debug-check findings of a frame as stable diagnostics | P18 |
 //!
 //! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
 //! dependency; today that is only the gate spike `gpu_spike` (to be replaced by P20–P27).
@@ -37,6 +39,7 @@ pub mod ambient_zone_store;
 pub mod animation;
 pub mod area_light;
 pub mod codec;
+pub mod frame_warnings;
 pub mod gpu_light;
 #[cfg(feature = "gpu")]
 pub mod gpu_spike;
@@ -54,6 +57,7 @@ pub mod profile_import;
 pub mod profile_store;
 pub mod projection;
 pub mod resources;
+pub mod settings;
 pub mod triangulate;
 
 pub use animation::{AnimationDesc, AnimationError, AnimationId, AnimationStore};
