@@ -280,3 +280,13 @@ fn profile_store_rejects_a_table_of_the_wrong_size() {
     assert!(matches!(err, ProfileError::WrongSize { .. }));
     assert_eq!(store.len(), 0);
 }
+
+/// From chiaro's ProfileTests ("light desc defaults have no profile"): the light description
+/// starts without a profile and without rotation.
+#[test]
+fn light_desc_defaults_have_no_profile() {
+    use knorke_light2d::light::{LightDesc, LightType};
+    let d = LightDesc::new(LightType::Point);
+    assert!(d.profile.is_none());
+    assert_eq!(d.profile_rotation, 0.0);
+}
