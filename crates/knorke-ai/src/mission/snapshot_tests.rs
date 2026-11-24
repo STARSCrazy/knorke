@@ -224,3 +224,97 @@ fn truncated_input_is_refused_safely() {
         assert!(into.plan().is_none());
     }
 }
+
+/// Exact bytes of every plain mission value, each enum variant at least once (see
+/// `pinned_bytes`): a swapped tag or field order fails here even though it round-trips.
+#[test]
+fn value_bytes_are_pinned() {
+    use crate::mission::types::{
+        BreakReason, DetourEnd, Fail, Leash, Leeway, Motive, MotiveKind, OnLost, StepKind, Where,
+    };
+    let fact = Fail::Fact {
+        subject: 1,
+        kind: 2,
+        mask: 3,
+        value: 4,
+    };
+    let motive = Motive {
+        kind: MotiveKind::Reach,
+        place: Some([1, 2, 3]),
+        subject: None,
+        radius: 4,
+    };
+    let leash = Leash {
+        distance: Some(3),
+        ticks: None,
+        on_lost: OnLost::Search {
+            ticks: 6,
+            radius: 2,
+        },
+    };
+    assert_bytes!(
+        Where::Fixed([1, -2, 3]) => "0001000000feffffff03000000",
+        Where::Subject(4) => "0104000000",
+        Where::MotivePlace => "02",
+        Where::MotiveSubject => "03",
+        Where::Here => "04",
+        StepKind::GoTo(Where::Here) => "0004",
+        StepKind::Wait(3) => "0103000000",
+        StepKind::Pause => "02",
+        StepKind::Follow(4) => "0304000000",
+        StepKind::WaitFor { subject: 5, radius: 6 } => "040500000006000000",
+        StepKind::Search { centre: Where::Subject(1), radius: 2, ticks: 3 } => "0501010000000200000003000000",
+        StepKind::Hold(Where::MotivePlace) => "0602",
+        StepKind::Attack(7) => "0707000000",
+        StepKind::Wander => "08",
+        StepKind::Signal(8) => "0908000000",
+        StepKind::Custom { kind: 1, at: Where::Here, param: 2 } => "0a010000000402000000",
+        StepKind::Call { channel: 3, kind: 4 } => "0b0300000004000000",
+        StepKind::Squad { tactic: 5, target: Where::MotiveSubject } => "0c0500000003",
+        Fail::Unknown { subject: 1 } => "0001000000",
+        Fail::Defeated { subject: 2 } => "0102000000",
+        fact => "0201000000020000000300000004000000",
+        Fail::Flags { mask: 5, value: 6 } => "0305000000000000000600000000000000",
+        Fail::Custom(7) => "0407000000",
+        Step { kind: StepKind::Pause, fails: [Some(Fail::Custom(1)), None, Some(fact), None], skip_if_impossible: true } => "02010401000000000102010000000200000003000000040000000001",
+        MotiveKind::Guard => "00",
+        MotiveKind::Defeat => "01",
+        MotiveKind::Reach => "02",
+        MotiveKind::Custom(9) => "0309000000",
+        motive => "02010100000002000000030000000004000000",
+        OnLost::Return => "00",
+        leash => "010300000000010600000002000000",
+        OnLost::Keep => "02",
+        Leeway { leash, replan: true, widen: false } => "0103000000000106000000020000000100",
+        Detour::Engage(1) => "0001000000",
+        Detour::Flee { from: Where::Subject(2), to: Some([3, 4, 5]) } => "01010200000001030000000400000005000000",
+        Detour::Custom { kind: 6, at: Where::Here, param: 7 } => "02060000000407000000",
+        BreakReason::Fail(Fail::Custom(1)) => "000401000000",
+        BreakReason::Impossible => "01",
+        BreakReason::PlanEnded => "02",
+        DetourEnd::Defeated => "00",
+        DetourEnd::Forgotten => "01",
+        DetourEnd::Lost => "02",
+        DetourEnd::Leash => "03",
+        DetourEnd::Safe => "04",
+        DetourEnd::Arrived => "05",
+        DetourEnd::Ended => "06",
+        Activity::Idle => "00",
+        Activity::Plan => "01",
+        Activity::Wander => "02",
+        Activity::Detour => "03",
+        Activity::Returning => "04",
+        MissionEvent::StepDone(3) => "000300",
+        MissionEvent::Looped => "01",
+        MissionEvent::PlanDone => "02",
+        MissionEvent::Broken(BreakReason::Impossible) => "0301",
+        MissionEvent::Replanned { option: 4 } => "0404000000",
+        MissionEvent::FellBack => "05",
+        MissionEvent::DetourStarted => "06",
+        MissionEvent::DetourEnded(DetourEnd::Safe) => "0704",
+        MissionEvent::Returned => "08",
+        MissionEvent::Signal(5) => "0905000000",
+        MissionEvent::Call { channel: 1, kind: 2, pos: [3, 4, 5], motive } => "0a010000000200000003000000040000000500000002010100000002000000030000000004000000",
+        MissionEvent::WantsSquad { tactic: 6, target: Some([7, 8, 9]), subject: Some(1) } => "0b06000000010700000008000000090000000101000000",
+    );
+}

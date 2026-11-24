@@ -6,7 +6,7 @@
 //! restored into any object (one built with the same config allocates nothing). Scratch
 //! buffers are not saved.
 
-use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer, by_fields, by_tag};
 
 use super::crew::{Crew, Seat};
 use super::keeper::GoalKeeper;
@@ -62,184 +62,77 @@ fn unique(ids: impl Iterator<Item = u32> + Clone) -> bool {
         .all(|(i, a)| ids.clone().skip(i + 1).all(|b| b != a))
 }
 
-impl SnapshotValue for Side {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&(*self as u8));
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Side::Front,
-            1 => Side::Left,
-            2 => Side::Right,
-            3 => Side::Rear,
-            _ => return Err(bad("knorke.ai: squad side")),
-        })
-    }
+// Plain values: tags and field order are pinned by `snapshot_tests::value_bytes_are_pinned`.
+by_tag! {
+    Side, bad("knorke.ai: squad side") => {
+        0 => Front,
+        1 => Left,
+        2 => Right,
+        3 => Rear,
+    };
+    Place, bad("knorke.ai: squad place") => {
+        0 => Offset(p),
+        1 => Side(s),
+        2 => Between,
+        3 => Tagged(t),
+        4 => Here,
+        5 => Custom(id),
+    };
+    GoalKind, bad("knorke.ai: squad goal kind") => {
+        0 => Move,
+        1 => Hold,
+        2 => Attack,
+        3 => Wait,
+        4 => Retreat,
+        5 => Custom(id),
+    };
+    Start, bad("knorke.ai: squad start") => {
+        0 => Now,
+        1 => AfterTicks(n),
+        2 => OnSignal,
+    };
+    Trigger, bad("knorke.ai: squad trigger") => {
+        0 => None,
+        1 => AllArrived { max_wait },
+        2 => TargetInRadius(d),
+        3 => Manual,
+        4 => Custom(id),
+    };
+    Compare, bad("knorke.ai: squad compare") => {
+        0 => AtLeast,
+        1 => AtMost,
+        2 => Equal,
+        3 => NotEqual,
+    };
+    Channel, bad("knorke.ai: squad channel") => {
+        0 => Shout { range },
+        1 => Radio { base, per_unit },
+        2 => None,
+        3 => Custom(id),
+    };
+    Status, bad("knorke.ai: squad status") => {
+        0 => Keep,
+        1 => Replan(id),
+        2 => Signal,
+        3 => NoPlan,
+    };
+    MemberState, bad("knorke.ai: squad member state") => {
+        0 => Active,
+        1 => Suspended,
+        2 => Gone,
+    };
 }
 
-impl SnapshotValue for Place {
-    fn put(&self, w: &mut Writer<'_>) {
-        match *self {
-            Place::Offset(p) => {
-                w.put(&0u8);
-                w.put(&p);
-            }
-            Place::Side(s) => {
-                w.put(&1u8);
-                w.put(&s);
-            }
-            Place::Between => w.put(&2u8),
-            Place::Tagged(t) => {
-                w.put(&3u8);
-                w.put(&t);
-            }
-            Place::Here => w.put(&4u8),
-            Place::Custom(id) => {
-                w.put(&5u8);
-                w.put(&id);
-            }
-        }
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Place::Offset(r.get()?),
-            1 => Place::Side(r.get()?),
-            2 => Place::Between,
-            3 => Place::Tagged(r.get()?),
-            4 => Place::Here,
-            5 => Place::Custom(r.get()?),
-            _ => return Err(bad("knorke.ai: squad place")),
-        })
-    }
-}
-
-impl SnapshotValue for GoalKind {
-    fn put(&self, w: &mut Writer<'_>) {
-        match *self {
-            GoalKind::Move => w.put(&0u8),
-            GoalKind::Hold => w.put(&1u8),
-            GoalKind::Attack => w.put(&2u8),
-            GoalKind::Wait => w.put(&3u8),
-            GoalKind::Retreat => w.put(&4u8),
-            GoalKind::Custom(id) => {
-                w.put(&5u8);
-                w.put(&id);
-            }
-        }
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => GoalKind::Move,
-            1 => GoalKind::Hold,
-            2 => GoalKind::Attack,
-            3 => GoalKind::Wait,
-            4 => GoalKind::Retreat,
-            5 => GoalKind::Custom(r.get()?),
-            _ => return Err(bad("knorke.ai: squad goal kind")),
-        })
-    }
-}
-
-impl SnapshotValue for Start {
-    fn put(&self, w: &mut Writer<'_>) {
-        match *self {
-            Start::Now => w.put(&0u8),
-            Start::AfterTicks(n) => {
-                w.put(&1u8);
-                w.put(&n);
-            }
-            Start::OnSignal => w.put(&2u8),
-        }
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Start::Now,
-            1 => Start::AfterTicks(r.get()?),
-            2 => Start::OnSignal,
-            _ => return Err(bad("knorke.ai: squad start")),
-        })
-    }
-}
-
-impl SnapshotValue for Slot {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.roles);
-        w.put(&self.min);
-        w.put(&self.max);
-        w.put(&self.gather);
-        w.put(&self.place);
-        w.put(&self.kind);
-        w.put(&self.start);
-        w.put(&self.want_tags);
-        w.put(&self.dist);
-        w.put(&self.gather_dist);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Slot {
-            roles: r.get()?,
-            min: r.get()?,
-            max: r.get()?,
-            gather: r.get()?,
-            place: r.get()?,
-            kind: r.get()?,
-            start: r.get()?,
-            want_tags: r.get()?,
-            dist: r.get()?,
-            gather_dist: r.get()?,
-        })
-    }
-}
-
-impl SnapshotValue for Trigger {
-    fn put(&self, w: &mut Writer<'_>) {
-        match *self {
-            Trigger::None => w.put(&0u8),
-            Trigger::AllArrived { max_wait } => {
-                w.put(&1u8);
-                w.put(&max_wait);
-            }
-            Trigger::TargetInRadius(d) => {
-                w.put(&2u8);
-                w.put(&d);
-            }
-            Trigger::Manual => w.put(&3u8),
-            Trigger::Custom(id) => {
-                w.put(&4u8);
-                w.put(&id);
-            }
-        }
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Trigger::None,
-            1 => Trigger::AllArrived { max_wait: r.get()? },
-            2 => Trigger::TargetInRadius(r.get()?),
-            3 => Trigger::Manual,
-            4 => Trigger::Custom(r.get()?),
-            _ => return Err(bad("knorke.ai: squad trigger")),
-        })
-    }
-}
-
-impl SnapshotValue for Compare {
-    fn put(&self, w: &mut Writer<'_>) {
-        let tag: u8 = match self {
-            Compare::AtLeast => 0,
-            Compare::AtMost => 1,
-            Compare::Equal => 2,
-            Compare::NotEqual => 3,
-        };
-        w.put(&tag);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Compare::AtLeast,
-            1 => Compare::AtMost,
-            2 => Compare::Equal,
-            3 => Compare::NotEqual,
-            _ => return Err(bad("knorke.ai: squad compare")),
-        })
-    }
+by_fields! {
+    Slot { roles, min, max, gather, place, kind, start, want_tags, dist, gather_dist };
+    Spot { pos, tags };
+    Goal {
+        kind, pos, unchecked, then_pos, then_unchecked, target, start, slot, plan, issued_at,
+        start_delay,
+    };
+    Order { member, goal };
+    Member { id, pos, roles, skill, state };
+    DangerReport { sender, centre, shooter, arrive_at };
 }
 
 impl SnapshotValue for Abort {
@@ -357,19 +250,6 @@ impl SnapshotValue for RoleCounts {
     }
 }
 
-impl SnapshotValue for Spot {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.pos);
-        w.put(&self.tags);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Spot {
-            pos: r.get()?,
-            tags: r.get()?,
-        })
-    }
-}
-
 impl SnapshotValue for SpotPick {
     fn put(&self, w: &mut Writer<'_>) {
         match *self {
@@ -388,37 +268,6 @@ impl SnapshotValue for SpotPick {
             0 => SpotPick::Spot(get_usize(r, "knorke.ai: spot index")?),
             1 => SpotPick::Unchecked(r.get()?),
             _ => return Err(bad("knorke.ai: spot pick")),
-        })
-    }
-}
-
-impl SnapshotValue for Goal {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.kind);
-        w.put(&self.pos);
-        w.put(&self.unchecked);
-        w.put(&self.then_pos);
-        w.put(&self.then_unchecked);
-        w.put(&self.target);
-        w.put(&self.start);
-        w.put(&self.slot);
-        w.put(&self.plan);
-        w.put(&self.issued_at);
-        w.put(&self.start_delay);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Goal {
-            kind: r.get()?,
-            pos: r.get()?,
-            unchecked: r.get()?,
-            then_pos: r.get()?,
-            then_unchecked: r.get()?,
-            target: r.get()?,
-            start: r.get()?,
-            slot: r.get()?,
-            plan: r.get()?,
-            issued_at: r.get()?,
-            start_delay: r.get()?,
         })
     }
 }
@@ -454,108 +303,6 @@ impl SnapshotValue for Plan {
         self.made_at = r.get()?;
         self.active_at = r.get()?;
         Ok(())
-    }
-}
-
-impl SnapshotValue for Order {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.member);
-        w.put(&self.goal);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Order {
-            member: r.get()?,
-            goal: r.get()?,
-        })
-    }
-}
-
-impl SnapshotValue for Channel {
-    fn put(&self, w: &mut Writer<'_>) {
-        match *self {
-            Channel::Shout { range } => {
-                w.put(&0u8);
-                w.put(&range);
-            }
-            Channel::Radio { base, per_unit } => {
-                w.put(&1u8);
-                w.put(&base);
-                w.put(&per_unit);
-            }
-            Channel::None => w.put(&2u8),
-            Channel::Custom(id) => {
-                w.put(&3u8);
-                w.put(&id);
-            }
-        }
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Channel::Shout { range: r.get()? },
-            1 => Channel::Radio {
-                base: r.get()?,
-                per_unit: r.get()?,
-            },
-            2 => Channel::None,
-            3 => Channel::Custom(r.get()?),
-            _ => return Err(bad("knorke.ai: squad channel")),
-        })
-    }
-}
-
-impl SnapshotValue for Status {
-    fn put(&self, w: &mut Writer<'_>) {
-        match *self {
-            Status::Keep => w.put(&0u8),
-            Status::Replan(id) => {
-                w.put(&1u8);
-                w.put(&id);
-            }
-            Status::Signal => w.put(&2u8),
-            Status::NoPlan => w.put(&3u8),
-        }
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Status::Keep,
-            1 => Status::Replan(r.get()?),
-            2 => Status::Signal,
-            3 => Status::NoPlan,
-            _ => return Err(bad("knorke.ai: squad status")),
-        })
-    }
-}
-
-impl SnapshotValue for MemberState {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&(*self as u8));
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => MemberState::Active,
-            1 => MemberState::Suspended,
-            2 => MemberState::Gone,
-            _ => return Err(bad("knorke.ai: squad member state")),
-        })
-    }
-}
-
-impl SnapshotValue for Member {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.id);
-        w.put(&self.pos);
-        w.put(&self.roles);
-        w.put(&self.skill);
-        w.put(&self.state);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Member {
-            id: r.get()?,
-            pos: r.get()?,
-            roles: r.get()?,
-            skill: r.get()?,
-            state: r.get()?,
-        })
     }
 }
 
@@ -621,23 +368,6 @@ impl SnapshotValue for Active {
         self.signal_at = r.get()?;
         self.arrived.get_into(r)?;
         self.broken.get_into(r)
-    }
-}
-
-impl SnapshotValue for DangerReport {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.sender);
-        w.put(&self.centre);
-        w.put(&self.shooter);
-        w.put(&self.arrive_at);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(DangerReport {
-            sender: r.get()?,
-            centre: r.get()?,
-            shooter: r.get()?,
-            arrive_at: r.get()?,
-        })
     }
 }
 

@@ -825,27 +825,15 @@ impl Mission {
 
 // --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
 
-impl SnapshotValue for Activity {
-    fn put(&self, w: &mut Writer<'_>) {
-        let tag: u8 = match self {
-            Self::Idle => 0,
-            Self::Plan => 1,
-            Self::Wander => 2,
-            Self::Detour => 3,
-            Self::Returning => 4,
-        };
-        w.put(&tag);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Self::Idle,
-            1 => Self::Plan,
-            2 => Self::Wander,
-            3 => Self::Detour,
-            4 => Self::Returning,
-            _ => return Err(SnapshotError::Invalid("knorke.ai: mission tag")),
-        })
-    }
+// Tags pinned by `snapshot_tests::value_bytes_are_pinned`.
+knorke_types::by_tag! {
+    Activity, SnapshotError::Invalid("knorke.ai: mission tag") => {
+        0 => Idle,
+        1 => Plan,
+        2 => Wander,
+        3 => Detour,
+        4 => Returning,
+    };
 }
 
 impl SnapshotValue for StepState {

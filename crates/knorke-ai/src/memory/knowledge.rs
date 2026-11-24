@@ -447,27 +447,9 @@ impl Knowledge {
 
 // --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
 
-impl SnapshotValue for Fact {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.subject);
-        w.put(&self.kind);
-        w.put(&self.pos);
-        w.put(&self.seen_at);
-        w.put(&self.strength);
-        w.put(&self.data);
-        w.put(&self.source);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Fact {
-            subject: r.get()?,
-            kind: r.get()?,
-            pos: r.get()?,
-            seen_at: r.get()?,
-            strength: r.get()?,
-            data: r.get()?,
-            source: r.get()?,
-        })
-    }
+// Field order pinned by `snapshot_tests::value_bytes_are_pinned`.
+knorke_types::by_fields! {
+    Fact { subject, kind, pos, seen_at, strength, data, source };
 }
 
 /// One character's memory with its capacity and eviction rule. Restore reuses the fact

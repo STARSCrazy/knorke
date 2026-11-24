@@ -56,6 +56,8 @@ mod rules_tests;
 #[cfg(test)]
 mod snapshot_tests;
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod walk_tests;

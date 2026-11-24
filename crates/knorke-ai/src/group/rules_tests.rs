@@ -2,6 +2,7 @@
 //! The rules object: built-in rules change nothing, and each plan-side slot
 //! does what it says, in the documented order.
 
+use super::test_support::*;
 use super::*;
 use crate::memory::{Area, Fact, Message, Metric, Pos, ZeroCapacity};
 use crate::{Consideration, Curve, DecideTrace, ONE};
@@ -25,65 +26,6 @@ fn decides(c: &Collector<SquadTrace>) -> Vec<(usize, Option<u32>, DecideTrace)> 
             _ => None,
         })
         .collect()
-}
-
-/// Fact kind of the enemies in these tests.
-const ENEMY: u32 = 1;
-
-fn squad_with(config: SquadConfig, members: &[(u32, i32, i32, u32)]) -> Squad {
-    let mut sq = Squad::new(config).unwrap();
-    for &(id, x, y, roles) in members {
-        sq.group_mut().add(Member {
-            id,
-            pos: [x, y, 0],
-            roles,
-            skill: 0,
-            state: MemberState::Active,
-        });
-    }
-    sq.set_target_kind(ENEMY);
-    if let Some(&(id, ..)) = members.first() {
-        assert!(sq.set_leader(id));
-    }
-    sq
-}
-
-fn squad_of(metric: Metric, members: &[(u32, i32, i32, u32)]) -> Squad {
-    squad_with(
-        SquadConfig {
-            members: 8,
-            memory: 8,
-            areas: 4,
-            inbox: 8,
-            metric,
-            ..SquadConfig::default()
-        },
-        members,
-    )
-}
-
-fn see(sq: &mut Squad, id: u32, x: i32, y: i32, now: u32) {
-    sq.knowledge_mut().learn(
-        now,
-        Fact {
-            subject: id,
-            kind: ENEMY,
-            pos: [x, y, 0],
-            seen_at: now,
-            ..Fact::default()
-        },
-    );
-}
-
-fn four() -> [(u32, i32, i32, u32); 4] {
-    [(1, 0, 0, 0), (2, 1, 0, 0), (3, 0, 1, 0), (4, 1, 1, 0)]
-}
-
-fn spot(x: i32, y: i32, tags: u32) -> Spot {
-    Spot {
-        pos: [x, y, 0],
-        tags,
-    }
 }
 
 /// Counts every slot call and returns every default.

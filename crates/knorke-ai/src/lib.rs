@@ -25,6 +25,10 @@
 //! What happened can be followed factor by factor through a
 //! [`knorke_observe::Sink`] of [`DecideTrace`] records.
 
+#[cfg(test)]
+#[macro_use]
+mod pinned_bytes;
+
 mod diagnostics;
 pub mod group;
 pub mod memory;

@@ -9,11 +9,9 @@
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
 #![cfg(feature = "gpu")]
-#![allow(unsafe_code)] // counting allocator
 
-use std::alloc::{GlobalAlloc, Layout, System};
+use knorke_contract_tests::counting_alloc::{Counting, allocations};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use knorke_gpu::sys::gpu::{
     SDL_GPU_SHADERFORMAT_SPIRV, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER,
@@ -31,25 +29,6 @@ use knorke_light2d::settings::LightSettings;
 use knorke_light2d::{LightStore, NoResources, ObstacleStore, Projection};
 use knorke_math::{At, Vec2, Vec3};
 
-struct Counting;
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-// SAFETY: forwards to the system allocator unchanged; only counts calls.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: same contract as the caller's.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
@@ -156,10 +135,10 @@ fn steady_state_pass_plan_allocates_nothing() {
         let mut counted = 0;
         for _ in 0..n {
             let mut cmd = CommandBuffer::acquire(&device).unwrap();
-            let before = ALLOCATIONS.load(Ordering::Relaxed);
+            let before = allocations();
             plan.prepare(&frame, &stores, &settings).unwrap();
             plan.record(&mut cmd, &frame, &settings).unwrap();
-            counted += ALLOCATIONS.load(Ordering::Relaxed) - before;
+            counted += allocations() - before;
             cmd.submit_and_wait().unwrap();
         }
         counted

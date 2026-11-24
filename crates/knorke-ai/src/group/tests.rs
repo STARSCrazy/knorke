@@ -1,6 +1,7 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax-decide/src/group/tests.rs.
 #![allow(deprecated)]
 
+use super::test_support::*;
 use super::*;
 use crate::memory::{Metric, Pos, ZeroCapacity};
 
@@ -118,13 +119,6 @@ fn gather_hex_metric() {
 
 /// A spot radius that takes every spot of the tests.
 const FAR: i64 = 1000;
-
-fn spot(x: i32, y: i32, tags: u32) -> Spot {
-    Spot {
-        pos: [x, y, 0],
-        tags,
-    }
-}
 
 #[test]
 fn heading_square_8_steps() {
@@ -385,52 +379,6 @@ fn shipped_tactics_valid() {
 
 use crate::memory::{Area, Fact};
 use crate::{Candidate, Combine, Consideration, Curve, DecideTrace, ONE};
-
-/// Fact kind the squad tests use for enemies.
-const ENEMY: u32 = 1;
-
-fn squad_of(metric: Metric, members: &[(u32, i32, i32, u32)]) -> Squad {
-    let mut sq = Squad::new(SquadConfig {
-        members: 8,
-        memory: 8,
-        areas: 4,
-        inbox: 8,
-        metric,
-        ..SquadConfig::default()
-    })
-    .unwrap();
-    for &(id, x, y, roles) in members {
-        sq.group_mut().add(Member {
-            id,
-            pos: [x, y, 0],
-            roles,
-            skill: 0,
-            state: MemberState::Active,
-        });
-    }
-    sq.set_target_kind(ENEMY);
-    if let Some(&(id, ..)) = members.first() {
-        assert!(sq.set_leader(id));
-    }
-    sq
-}
-
-fn see(sq: &mut Squad, id: u32, x: i32, y: i32, now: u32) {
-    sq.knowledge_mut().learn(
-        now,
-        Fact {
-            subject: id,
-            kind: ENEMY,
-            pos: [x, y, 0],
-            seen_at: now,
-            ..Fact::default()
-        },
-    );
-}
-
-fn four() -> [(u32, i32, i32, u32); 4] {
-    [(1, 0, 0, 0), (2, 1, 0, 0), (3, 0, 1, 0), (4, 1, 1, 0)]
-}
 
 /// `(member, slot, kind)` of every goal of the pending plan, in order.
 fn slots_of(sq: &Squad) -> Vec<(u32, u8, GoalKind)> {
@@ -1706,19 +1654,10 @@ use crate::memory::distance;
 
 /// Ticks per cell of the scripted walk.
 const STEP: u32 = 2;
-/// Channel of every member but the leader: 2 ticks plus 1 per cell.
-const RADIO: Channel = Channel::Radio {
-    base: 2,
-    per_unit: 1,
-};
-const SEED: u64 = 7;
 /// Enemy the leader sees at (20, 0) in the flank scenes.
 const E1: u32 = 10;
 /// Enemy member 2 reports in the flank scenes.
 const E2: u32 = 11;
-/// Members of the square scenes: 1 leads.
-const SQUARE_FOUR: [(u32, i32, i32); 4] = [(1, 0, 0), (2, 0, 2), (3, 0, -2), (4, -3, 0)];
-
 /// What happened, for the scene asserts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Ev {
@@ -1834,7 +1773,7 @@ impl Scene {
         self.sq.add_tactic(tactics::flank(3, 4));
     }
 
-    /// The square flank scene on Chebyshev: [`SQUARE_FOUR`], the three
+    /// The square flank scene on Chebyshev: [`MEMBERS`], the three
     /// tactics, E1 at (20, 0) and E2 at (24, 10).
     fn square(skill: u8) -> Self {
         let spots = vec![
@@ -1844,7 +1783,7 @@ impl Scene {
             spot(20, -4, 0),
             spot(12, 8, TAG_COVER),
         ];
-        let mut s = Self::new(Metric::Chebyshev, skill, &SQUARE_FOUR, spots);
+        let mut s = Self::new(Metric::Chebyshev, skill, &MEMBERS, spots);
         s.three_tactics();
         s.enemies_at_start([24, 10, 0]);
         s
@@ -2202,7 +2141,7 @@ fn ambush_on_target_in_radius() {
         spot(-3, -3, TAG_HIDDEN),
         spot(-1, 0, 0),
     ];
-    let mut s = Scene::new(Metric::Chebyshev, 192, &SQUARE_FOUR, hidden.to_vec());
+    let mut s = Scene::new(Metric::Chebyshev, 192, &MEMBERS, hidden.to_vec());
     let ambush = s.sq.add_tactic(tactics::ambush());
     let x_at = |start: i32, t: u32| start - (t / STEP) as i32;
     // Well past the attack: E2 walks through the group and E1 would then
@@ -2325,7 +2264,7 @@ fn no_tags_scene() {
         tactics::focus(),
         tactics::isolate(),
     ] {
-        let mut one = Scene::new(Metric::Chebyshev, 255, &SQUARE_FOUR, grid.clone());
+        let mut one = Scene::new(Metric::Chebyshev, 255, &MEMBERS, grid.clone());
         one.sq.add_tactic(tactic);
         one.enemies_at_start([24, 10, 0]);
         one.run(0..=5);
@@ -2347,7 +2286,7 @@ fn no_cheat() {
         (E3, [2, 1, 0], false),
     ];
     let run = |see_hidden: bool| {
-        let mut s = Scene::new(Metric::Chebyshev, 192, &SQUARE_FOUR, Vec::new());
+        let mut s = Scene::new(Metric::Chebyshev, 192, &MEMBERS, Vec::new());
         s.sq.add_tactic(tactics::focus());
         let mut targets = Vec::new();
         for t in 0..=150 {
