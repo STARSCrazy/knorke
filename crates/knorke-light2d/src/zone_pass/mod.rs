@@ -33,6 +33,7 @@ use crate::ambient_zone::GPU_ZONE_BYTES;
 use crate::ambient_zone_culling::AmbientZoneList;
 use crate::ambient_zone_store::AmbientZoneStore;
 use crate::projection::Projection;
+use knorke_math::uniform_block;
 
 #[cfg(feature = "gpu")]
 mod gpu;
@@ -117,51 +118,35 @@ pub fn write_zones(list: &AmbientZoneList, out: &mut [u8]) -> usize {
     at
 }
 
-/// `cbuffer ZonePassParams` of `ambient_zone.vert` (16 bytes).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct ZonePassParams {
-    /// Scene size in pixels.
-    pub scene_size: [f32; 2],
-    /// Index of this draw's first zone in the zone buffer.
-    pub instance_offset: u32,
-    /// Padding.
-    pub pad: u32,
-}
-
-impl ZonePassParams {
-    /// Size in bytes.
-    pub const SIZE: usize = 16;
-
-    /// The bytes as the shader reads them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        let mut out = [0u8; Self::SIZE];
-        out[0..4].copy_from_slice(&self.scene_size[0].to_le_bytes());
-        out[4..8].copy_from_slice(&self.scene_size[1].to_le_bytes());
-        out[8..12].copy_from_slice(&self.instance_offset.to_le_bytes());
-        out[12..16].copy_from_slice(&self.pad.to_le_bytes());
-        out
+uniform_block! {
+    /// `cbuffer ZonePassParams` of `ambient_zone.vert` (16 bytes).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct ZonePassParams[16] {
+        /// Scene size in pixels.
+        pub scene_size: [f32; 2],
+        /// Index of this draw's first zone in the zone buffer.
+        pub instance_offset: u32,
+        /// Padding.
+        pub pad: u32,
     }
 }
 
-/// `cbuffer ZoneFragParams` of `ambient_zone.frag` (64 bytes).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct ZoneFragParams {
-    /// Rows of the inverse of `[x_axis y_axis]`.
-    pub inv_axes: [f32; 4],
-    /// xy projection origin, zw z axis (scene pixels per unit of height).
-    pub origin_z_axis: [f32; 4],
-    /// xy scene size in pixels, z surface height step, w 1 = surface buffer present.
-    pub scene_step: [f32; 4],
-    /// xy `1 / (width, rows)` of the vertex texture.
-    pub vertex_size: [f32; 4],
+uniform_block! {
+    /// `cbuffer ZoneFragParams` of `ambient_zone.frag` (64 bytes).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct ZoneFragParams[64] {
+        /// Rows of the inverse of `[x_axis y_axis]`.
+        pub inv_axes: [f32; 4],
+        /// xy projection origin, zw z axis (scene pixels per unit of height).
+        pub origin_z_axis: [f32; 4],
+        /// xy scene size in pixels, z surface height step, w 1 = surface buffer present.
+        pub scene_step: [f32; 4],
+        /// xy `1 / (width, rows)` of the vertex texture.
+        pub vertex_size: [f32; 4],
+    }
 }
 
 impl ZoneFragParams {
-    /// Size in bytes.
-    pub const SIZE: usize = 64;
-
     /// The block of a frame; `vertex_rows` is 0 without a vertex texture. The inverse is the
     /// one of the light programs (`SurfaceParams`), so the world points agree.
     pub fn new(
@@ -200,26 +185,6 @@ impl ZoneFragParams {
                 0.0,
             ],
         }
-    }
-
-    /// The bytes as the shader reads them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        let mut out = [0u8; Self::SIZE];
-        let rows = [
-            &self.inv_axes,
-            &self.origin_z_axis,
-            &self.scene_step,
-            &self.vertex_size,
-        ];
-        for (d, v) in out
-            .as_chunks_mut::<4>()
-            .0
-            .iter_mut()
-            .zip(rows.iter().flat_map(|r| r.iter()))
-        {
-            d.copy_from_slice(&v.to_le_bytes());
-        }
-        out
     }
 }
 

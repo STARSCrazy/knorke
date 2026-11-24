@@ -35,12 +35,13 @@ use crate::mask::{MASK_BYTES, MASK_SIZE, mask_atlas_blocks};
 use crate::mask_store::MaskStore;
 use crate::profile::{PROFILE_AZIMUTH, PROFILE_POLAR, PROFILE_VALUES, profile_atlas_blocks};
 use crate::profile_store::ProfileStore;
+use knorke_math::uniform::write_f32s;
 
 #[cfg(feature = "gpu")]
 mod gpu;
 
 #[cfg(feature = "gpu")]
-pub use gpu::{LightAtlases, MaskAtlasTexture, ProfileAtlasTexture};
+pub use gpu::{AtlasSource, AtlasTexture, LightAtlases, MaskAtlasTexture, ProfileAtlasTexture};
 
 /// Rows of the profile atlas for `block_count` profile blocks; 0 for none.
 pub fn profile_atlas_rows(block_count: u32) -> u32 {
@@ -74,9 +75,7 @@ pub fn fill_profile_atlas(profiles: &ProfileStore, rows: u32, out: &mut [u8]) {
         let Some(dst) = out[..total].get_mut(start..start + block_bytes) else {
             continue;
         };
-        for (d, v) in dst.as_chunks_mut::<4>().0.iter_mut().zip(values) {
-            d.copy_from_slice(&v.to_le_bytes());
-        }
+        write_f32s(dst, values);
     }
 }
 

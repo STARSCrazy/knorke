@@ -29,6 +29,7 @@ use knorke_gpu::{
     ProgramDesc, ProgramIndex, RenderTarget, SamplerBinding, SamplerRef, SecondTarget,
     ShaderLibrary, StageBindings, TextureRef,
 };
+use knorke_math::uniform::write_f32s;
 use knorke_types::{Diagnostic, DiagnosticCode};
 
 /// Recording without a successful [`OcclusionMask::prepare`] since the last commit.
@@ -110,9 +111,7 @@ fn sprite_params(d: &OcclusionDomain, remainder: [f32; 2]) -> ([u8; SPRITE_PARAM
         0.0,
     ];
     let mut bytes = [0u8; SPRITE_PARAMS_SIZE];
-    for (chunk, v) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(values) {
-        *chunk = v.to_le_bytes();
-    }
+    write_f32s(&mut bytes, &values);
     let lo = |v: f32, size: u32| v.floor().clamp(0.0, size as f32) as i32;
     let hi = |v: f32, size: u32| v.ceil().clamp(0.0, size as f32) as i32;
     let (x0, y0) = (lo(rect[0], d.width), lo(rect[1], d.height));

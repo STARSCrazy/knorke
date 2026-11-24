@@ -10,6 +10,8 @@
 //! device, the upload is recorded into the host's command buffer, nothing is submitted or read
 //! back.
 
+use core::marker::PhantomData;
+
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB, SDL_GPU_TEXTUREFORMAT_R32_FLOAT,
     SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUBufferUsageFlags, SDL_GPUTextureFormat,
@@ -30,49 +32,111 @@ use crate::profile_store::ProfileStore;
 /// Version before the first fill (no store has it).
 const NO_VERSION: u64 = u64::MAX;
 
-/// One atlas: texture, upload buffer, size and the store version it holds.
+/// A store whose contents become one atlas texture (rows of `WIDTH` texels).
+pub trait AtlasSource {
+    /// Texel format of the texture.
+    const FORMAT: SDL_GPUTextureFormat;
+    /// Width of the texture in texels.
+    const WIDTH: u32;
+    /// Bytes of one block, the unit the upload buffer grows by.
+    const BLOCK_BYTES: u32;
+    /// Debug name of the upload buffer.
+    const NAME: &'static str;
+
+    /// Rows the texture needs for the current contents; 0 without any.
+    fn rows(&self) -> u32;
+    /// Changes whenever the contents change.
+    fn version(&self) -> u64;
+    /// Bytes of an atlas of `rows` rows.
+    fn bytes(rows: u32) -> u64;
+    /// Writes the atlas into `out` (the first [`bytes`](Self::bytes) bytes).
+    fn fill(&self, rows: u32, out: &mut [u8]);
+}
+
+impl AtlasSource for ProfileStore {
+    const FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R32_FLOAT;
+    const WIDTH: u32 = PROFILE_POLAR as u32;
+    const BLOCK_BYTES: u32 = (PROFILE_VALUES * 4) as u32;
+    const NAME: &'static str = "profile atlas";
+
+    fn rows(&self) -> u32 {
+        profile_atlas_rows(self.block_count())
+    }
+    fn version(&self) -> u64 {
+        ProfileStore::version(self)
+    }
+    fn bytes(rows: u32) -> u64 {
+        profile_atlas_bytes(rows)
+    }
+    fn fill(&self, rows: u32, out: &mut [u8]) {
+        fill_profile_atlas(self, rows, out);
+    }
+}
+
+impl AtlasSource for MaskStore {
+    const FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB;
+    const WIDTH: u32 = MASK_SIZE as u32;
+    const BLOCK_BYTES: u32 = MASK_BYTES as u32;
+    const NAME: &'static str = "mask atlas";
+
+    fn rows(&self) -> u32 {
+        mask_atlas_rows(self.block_count())
+    }
+    fn version(&self) -> u64 {
+        MaskStore::version(self)
+    }
+    fn bytes(rows: u32) -> u64 {
+        mask_atlas_bytes(rows)
+    }
+    fn fill(&self, rows: u32, out: &mut [u8]) {
+        fill_mask_atlas(self, rows, out);
+    }
+}
+
+/// The contents of a store in one atlas texture: texture, upload buffer, size and the store
+/// version it holds. Without contents there is no texture.
 #[derive(Debug)]
-struct Atlas<'d> {
+pub struct AtlasTexture<'d, S: AtlasSource> {
     gpu: Gpu<'d>,
-    format: SDL_GPUTextureFormat,
-    width: u32,
     texture: Option<Texture<'d>>,
     upload: UploadBuffer<'d>,
     rows: u32,
     version: u64,
     pending: bool,
+    source: PhantomData<fn(&S)>,
 }
 
-impl<'d> Atlas<'d> {
-    fn new(
-        gpu: Gpu<'d>,
-        format: SDL_GPUTextureFormat,
-        width: u32,
-        block_bytes: u32,
-        name: &'static str,
-    ) -> Self {
+/// The profiles of a [`ProfileStore`] in one `R32_FLOAT` texture, `PROFILE_POLAR` wide and
+/// [`profile_atlas_rows`] rows high (Chiaro `ProfileAtlas`).
+pub type ProfileAtlasTexture<'d> = AtlasTexture<'d, ProfileStore>;
+
+/// The masks of a [`MaskStore`] in one `R8G8B8A8_UNORM_SRGB` texture, `MASK_SIZE` wide and
+/// [`mask_atlas_rows`] rows high (Chiaro `MaskAtlas`).
+pub type MaskAtlasTexture<'d> = AtlasTexture<'d, MaskStore>;
+
+impl<'d, S: AtlasSource> AtlasTexture<'d, S> {
+    /// An atlas without a texture.
+    pub fn new(gpu: Gpu<'d>) -> Self {
         Self {
             gpu,
-            format,
-            width,
             texture: None,
-            upload: UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), block_bytes, name),
+            upload: UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), S::BLOCK_BYTES, S::NAME),
             rows: 0,
             version: NO_VERSION,
             pending: false,
+            source: PhantomData,
         }
     }
 
-    /// Matches the texture to `rows` and `version`: no rows release it, a new size creates
-    /// it, a new version fills the upload buffer with `fill` (given the first `bytes` bytes).
-    /// Returns the number of textures created.
-    fn prepare(
-        &mut self,
-        rows: u32,
-        version: u64,
-        bytes: u64,
-        fill: impl FnOnce(&mut [u8]),
-    ) -> Result<u32, Diagnostic> {
+    /// Matches the texture to the store: no contents release it, a new size creates it, a new
+    /// version fills the upload buffer. Returns the number of textures created.
+    ///
+    /// # Errors
+    /// The texture or the upload buffer could not be created or mapped; the atlas keeps its
+    /// old contents then.
+    pub fn prepare(&mut self, store: &S) -> Result<u32, Diagnostic> {
+        let rows = store.rows();
+        let version = store.version();
         if rows == 0 {
             self.release();
             self.version = version;
@@ -80,8 +144,7 @@ impl<'d> Atlas<'d> {
         }
         let mut created = 0;
         if self.texture.is_none() || rows != self.rows {
-            let desc =
-                TextureDesc::new(self.width, rows, self.format, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+            let desc = TextureDesc::new(S::WIDTH, rows, S::FORMAT, SDL_GPU_TEXTUREUSAGE_SAMPLER);
             self.texture = Some(Texture::new(self.gpu, desc)?);
             self.rows = rows;
             self.version = NO_VERSION;
@@ -90,16 +153,18 @@ impl<'d> Atlas<'d> {
         if self.version == version {
             return Ok(created);
         }
+        let bytes = S::bytes(rows);
         self.upload.reserve(bytes)?;
         let mut mapped = self.upload.map()?;
-        fill(&mut mapped.bytes()[..bytes as usize]);
+        store.fill(rows, &mut mapped.bytes()[..bytes as usize]);
         drop(mapped);
         self.version = version;
         self.pending = true;
         Ok(created)
     }
 
-    fn release(&mut self) {
+    /// Drops the texture (the next [`prepare`](Self::prepare) creates it again).
+    pub fn release(&mut self) {
         self.texture = None;
         self.upload.reset();
         self.rows = 0;
@@ -107,11 +172,11 @@ impl<'d> Atlas<'d> {
         self.version = NO_VERSION;
     }
 
-    fn texture(&self) -> Option<TextureRef<'_>> {
-        self.texture.as_ref().map(Texture::texture_ref)
-    }
-
-    fn record(&mut self, cmd: &mut CommandBuffer<'_>) -> Result<(), Diagnostic> {
+    /// Records the pending upload, if any, as a copy pass.
+    ///
+    /// # Errors
+    /// A copy pass could not be opened.
+    pub fn record(&mut self, cmd: &mut CommandBuffer<'_>) -> Result<(), Diagnostic> {
         let (true, Some(texture)) = (self.pending, self.texture.as_ref()) else {
             return Ok(());
         };
@@ -120,132 +185,20 @@ impl<'d> Atlas<'d> {
         self.pending = false;
         Ok(())
     }
-}
-
-/// The profiles of a [`ProfileStore`] in one `R32_FLOAT` texture, `PROFILE_POLAR` wide and
-/// [`profile_atlas_rows`] rows high (Chiaro `ProfileAtlas`). Without profiles there is no
-/// texture.
-#[derive(Debug)]
-pub struct ProfileAtlasTexture<'d> {
-    atlas: Atlas<'d>,
-}
-
-impl<'d> ProfileAtlasTexture<'d> {
-    /// An atlas without a texture.
-    pub fn new(gpu: Gpu<'d>) -> Self {
-        Self {
-            atlas: Atlas::new(
-                gpu,
-                SDL_GPU_TEXTUREFORMAT_R32_FLOAT,
-                PROFILE_POLAR as u32,
-                (PROFILE_VALUES * 4) as u32,
-                "profile atlas",
-            ),
-        }
-    }
-
-    /// Matches the texture to the store: creates or resizes it, fills the upload buffer when
-    /// the store changed. Returns the number of textures created.
-    ///
-    /// # Errors
-    /// The texture or the upload buffer could not be created or mapped; the atlas keeps its
-    /// old contents then.
-    pub fn prepare(&mut self, profiles: &ProfileStore) -> Result<u32, Diagnostic> {
-        let rows = profile_atlas_rows(profiles.block_count());
-        self.atlas
-            .prepare(rows, profiles.version(), profile_atlas_bytes(rows), |out| {
-                fill_profile_atlas(profiles, rows, out);
-            })
-    }
-
-    /// Drops the texture (the next [`prepare`](Self::prepare) creates it again).
-    pub fn release(&mut self) {
-        self.atlas.release();
-    }
-
-    /// Records the pending upload, if any, as a copy pass.
-    ///
-    /// # Errors
-    /// A copy pass could not be opened.
-    pub fn record(&mut self, cmd: &mut CommandBuffer<'_>) -> Result<(), Diagnostic> {
-        self.atlas.record(cmd)
-    }
 
     /// An upload is waiting for [`record`](Self::record).
     pub fn upload_pending(&self) -> bool {
-        self.atlas.pending
+        self.pending
     }
 
-    /// The texture; `None` without profiles.
+    /// The texture; `None` without contents.
     pub fn texture(&self) -> Option<TextureRef<'_>> {
-        self.atlas.texture()
+        self.texture.as_ref().map(Texture::texture_ref)
     }
 
     /// Rows of the texture (0 without one).
     pub fn height(&self) -> u32 {
-        self.atlas.rows
-    }
-}
-
-/// The masks of a [`MaskStore`] in one `R8G8B8A8_UNORM_SRGB` texture, `MASK_SIZE` wide and
-/// [`mask_atlas_rows`] rows high (Chiaro `MaskAtlas`).
-#[derive(Debug)]
-pub struct MaskAtlasTexture<'d> {
-    atlas: Atlas<'d>,
-}
-
-impl<'d> MaskAtlasTexture<'d> {
-    /// An atlas without a texture.
-    pub fn new(gpu: Gpu<'d>) -> Self {
-        Self {
-            atlas: Atlas::new(
-                gpu,
-                SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB,
-                MASK_SIZE as u32,
-                MASK_BYTES as u32,
-                "mask atlas",
-            ),
-        }
-    }
-
-    /// Matches the texture to the store; see [`ProfileAtlasTexture::prepare`].
-    ///
-    /// # Errors
-    /// The texture or the upload buffer could not be created or mapped.
-    pub fn prepare(&mut self, masks: &MaskStore) -> Result<u32, Diagnostic> {
-        let rows = mask_atlas_rows(masks.block_count());
-        self.atlas
-            .prepare(rows, masks.version(), mask_atlas_bytes(rows), |out| {
-                fill_mask_atlas(masks, rows, out);
-            })
-    }
-
-    /// Drops the texture (the next [`prepare`](Self::prepare) creates it again).
-    pub fn release(&mut self) {
-        self.atlas.release();
-    }
-
-    /// Records the pending upload, if any, as a copy pass.
-    ///
-    /// # Errors
-    /// A copy pass could not be opened.
-    pub fn record(&mut self, cmd: &mut CommandBuffer<'_>) -> Result<(), Diagnostic> {
-        self.atlas.record(cmd)
-    }
-
-    /// An upload is waiting for [`record`](Self::record).
-    pub fn upload_pending(&self) -> bool {
-        self.atlas.pending
-    }
-
-    /// The texture; `None` without masks.
-    pub fn texture(&self) -> Option<TextureRef<'_>> {
-        self.atlas.texture()
-    }
-
-    /// Rows of the texture (0 without one).
-    pub fn height(&self) -> u32 {
-        self.atlas.rows
+        self.rows
     }
 }
 

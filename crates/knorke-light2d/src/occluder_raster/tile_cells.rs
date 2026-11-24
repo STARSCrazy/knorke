@@ -14,6 +14,7 @@ use super::params::{DomainParams, TileParams, obstacle_interval};
 use crate::obstacle::{ObstacleId, ObstacleStore, PatternSource, StoredObstacle};
 use crate::shadow::CellRect;
 use knorke_math::det;
+use knorke_math::uniform::write_f32s;
 
 /// Bytes of one cell in the cell texture (`R8G8B8A8_UNORM`): r the raw solid value (non-zero is
 /// solid), g the bottom level, b the cell opacity times the obstacle's, a the edge bits (255
@@ -98,9 +99,7 @@ impl TileUniforms {
     /// The fragment block of `tile.frag` (little endian).
     pub fn heights_bytes(&self) -> [u8; 32] {
         let mut out = [0; 32];
-        for (i, v) in self.heights.iter().enumerate() {
-            out[4 * i..4 * i + 4].copy_from_slice(&v.to_le_bytes());
-        }
+        write_f32s(&mut out, &self.heights);
         out
     }
 }

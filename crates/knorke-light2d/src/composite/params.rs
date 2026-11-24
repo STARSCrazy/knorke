@@ -15,6 +15,7 @@
 //! (`tests/composite_uniform_layouts.rs`).
 
 use knorke_math::Vec3;
+use knorke_math::uniform_block;
 
 use crate::light_program::{LayoutBuilder, LightLayout, LightSampler as S, LightUniform as U};
 use crate::material::{screen_right, view_direction};
@@ -147,41 +148,6 @@ pub const fn composite_layout_of(program: CompositeProgram) -> LightLayout {
     b.finish()
 }
 
-/// Writes `f32`/`u32` values in order into a fixed byte array (little endian).
-struct Writer<const N: usize> {
-    bytes: [u8; N],
-    at: usize,
-}
-
-impl<const N: usize> Writer<N> {
-    fn new() -> Self {
-        Self {
-            bytes: [0; N],
-            at: 0,
-        }
-    }
-    fn f(&mut self, v: f32) -> &mut Self {
-        self.bytes[self.at..self.at + 4].copy_from_slice(&v.to_le_bytes());
-        self.at += 4;
-        self
-    }
-    fn u(&mut self, v: u32) -> &mut Self {
-        self.bytes[self.at..self.at + 4].copy_from_slice(&v.to_le_bytes());
-        self.at += 4;
-        self
-    }
-    fn fs(&mut self, v: &[f32]) -> &mut Self {
-        for &x in v {
-            self.f(x);
-        }
-        self
-    }
-    fn finish(&self) -> [u8; N] {
-        debug_assert_eq!(self.at, N, "uniform block not filled completely");
-        self.bytes
-    }
-}
-
 /// What the composite parameter block of a frame depends on (Chiaro `CompositeStage::Record`).
 #[derive(Clone, Copy, Debug)]
 pub struct CompositeParamsInput<'a> {
@@ -211,48 +177,46 @@ pub struct CompositeParamsInput<'a> {
     pub settings: &'a LightSettings,
 }
 
-/// `cbuffer CompositeParams` of `composite.frag` (160 bytes, Chiaro `CompositeParams`).
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct CompositeParams {
-    /// 1: decode the scene colour from sRGB.
-    pub decode_srgb: u32,
-    /// 1: light from the light buffer, 0: from `ambient`.
-    pub use_light_buffer: u32,
-    /// 1: add the glow buffer.
-    pub use_glow: u32,
-    /// 1: the glow colour is sRGB-encoded 8-bit UNORM.
-    pub decode_glow: u32,
-    /// rgb: light used without a light buffer (in direction mode the pure ambient), w 1.
-    pub ambient: [f32; 4],
-    /// 1: the glow colour is the scene pixel (`GlowColor::Scene`).
-    pub glow_from_scene: u32,
-    /// Glow HDR factor.
-    pub glow_scale: f32,
-    /// 1: add the specular buffer of the exact material mode.
-    pub use_specular: u32,
-    /// 1: apply the detail normals with the direction sums (direction material mode).
-    pub use_direction: u32,
-    /// xyz view direction, w specular scale (direction mode).
-    pub view_dir_spec: [f32; 4],
-    /// xyz screen right, w 1 = surface buffer in the surface slot (direction mode).
-    pub screen_right: [f32; 4],
-    /// xy x axis, zw y axis (direction mode).
-    pub xy_axes: [f32; 4],
-    /// xy z axis, zw scene size (direction mode).
-    pub z_axis_scene: [f32; 4],
-    /// Rows of the inverse of `[x_axis y_axis]` (direction mode, wet ground).
-    pub inv_axes: [f32; 4],
-    /// xy projection origin, z surface height step (direction mode, wet ground).
-    pub origin_step: [f32; 4],
-    /// Wet ground: x stretch (1 off), y breakup, z 1 / ripple size (direction mode).
-    pub wet: [f32; 4],
+uniform_block! {
+    /// `cbuffer CompositeParams` of `composite.frag` (160 bytes, Chiaro `CompositeParams`).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct CompositeParams[160] {
+        /// 1: decode the scene colour from sRGB.
+        pub decode_srgb: u32,
+        /// 1: light from the light buffer, 0: from `ambient`.
+        pub use_light_buffer: u32,
+        /// 1: add the glow buffer.
+        pub use_glow: u32,
+        /// 1: the glow colour is sRGB-encoded 8-bit UNORM.
+        pub decode_glow: u32,
+        /// rgb: light used without a light buffer (in direction mode the pure ambient), w 1.
+        pub ambient: [f32; 4],
+        /// 1: the glow colour is the scene pixel (`GlowColor::Scene`).
+        pub glow_from_scene: u32,
+        /// Glow HDR factor.
+        pub glow_scale: f32,
+        /// 1: add the specular buffer of the exact material mode.
+        pub use_specular: u32,
+        /// 1: apply the detail normals with the direction sums (direction material mode).
+        pub use_direction: u32,
+        /// xyz view direction, w specular scale (direction mode).
+        pub view_dir_spec: [f32; 4],
+        /// xyz screen right, w 1 = surface buffer in the surface slot (direction mode).
+        pub screen_right: [f32; 4],
+        /// xy x axis, zw y axis (direction mode).
+        pub xy_axes: [f32; 4],
+        /// xy z axis, zw scene size (direction mode).
+        pub z_axis_scene: [f32; 4],
+        /// Rows of the inverse of `[x_axis y_axis]` (direction mode, wet ground).
+        pub inv_axes: [f32; 4],
+        /// xy projection origin, z surface height step (direction mode, wet ground).
+        pub origin_step: [f32; 4],
+        /// Wet ground: x stretch (1 off), y breakup, z 1 / ripple size (direction mode).
+        pub wet: [f32; 4],
+    }
 }
 
 impl CompositeParams {
-    /// Size in bytes (Chiaro `static_assert(sizeof(CompositeParams) == 160)`).
-    pub const SIZE: usize = 160;
-
     /// The block of a frame (Chiaro `CompositeStage::Record`). The direction-mode rows stay zero
     /// in the other modes, as in Chiaro.
     pub fn new(i: &CompositeParamsInput<'_>) -> Self {
@@ -302,28 +266,6 @@ impl CompositeParams {
             ];
         }
         p
-    }
-
-    /// The bytes as the shader reads them.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        Writer::<{ Self::SIZE }>::new()
-            .u(self.decode_srgb)
-            .u(self.use_light_buffer)
-            .u(self.use_glow)
-            .u(self.decode_glow)
-            .fs(&self.ambient)
-            .u(self.glow_from_scene)
-            .f(self.glow_scale)
-            .u(self.use_specular)
-            .u(self.use_direction)
-            .fs(&self.view_dir_spec)
-            .fs(&self.screen_right)
-            .fs(&self.xy_axes)
-            .fs(&self.z_axis_scene)
-            .fs(&self.inv_axes)
-            .fs(&self.origin_step)
-            .fs(&self.wet)
-            .finish()
     }
 }
 

@@ -33,6 +33,7 @@ mod events;
 mod handle;
 mod hash;
 mod parallel;
+mod settings_error;
 mod slots;
 mod snapshot;
 mod time;
@@ -45,6 +46,8 @@ pub use events::{EventCursor, EventQueue, Events, Revision};
 pub use handle::{Generation, Handle};
 pub use hash::{StableHasher, StableState};
 pub use parallel::{Parallel, Serial, chunk_count};
+#[doc(hidden)]
+pub use settings_error::__private;
 pub use slots::{HandleMap, Slots};
 pub use snapshot::{
     Checksum, Reader, SectionInfo, Snapshot, SnapshotBuf, SnapshotError, SnapshotValue, Writer,

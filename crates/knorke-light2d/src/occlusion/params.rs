@@ -10,6 +10,7 @@
 //! the field and rectangle shaders and the copy of a camera pan.
 
 use crate::shadow::{DirtyRectList, FULL_REBUILD_RATIO, MaskUpdateLimits};
+use knorke_math::uniform_block;
 
 /// Largest stored distance in texels (E21): farther texels and texels without any obstacle hold
 /// this value.
@@ -54,19 +55,18 @@ fn put_f32(out: &mut [u8], at: usize, values: &[f32]) {
     }
 }
 
-/// `cbuffer JfaParams` of `jfa_seed.frag`, `jfa_step.frag` and `jfa_distance.frag`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct JfaParams {
-    /// xy size in texels, zw `1 / size`.
-    pub domain_size: [f32; 4],
-    /// x jump distance in texels (step pass), y field bound in texels (distance pass).
-    pub step: [f32; 4],
+uniform_block! {
+    /// `cbuffer JfaParams` of `jfa_seed.frag`, `jfa_step.frag` and `jfa_distance.frag`.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct JfaParams[32] {
+        /// xy size in texels, zw `1 / size`.
+        pub domain_size: [f32; 4],
+        /// x jump distance in texels (step pass), y field bound in texels (distance pass).
+        pub step: [f32; 4],
+    }
 }
 
 impl JfaParams {
-    /// Size of the block in bytes.
-    pub const SIZE: usize = 32;
-
     /// The block for a target of `width` x `height` texels, step 0.
     pub fn new(width: u32, height: u32) -> Self {
         let (w, h) = (width as f32, height as f32);
@@ -88,14 +88,6 @@ impl JfaParams {
     pub fn distance(mut self) -> Self {
         self.step = [0.0, FIELD_BOUND as f32, 0.0, 0.0];
         self
-    }
-
-    /// The bytes the shader reads.
-    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
-        let mut out = [0; Self::SIZE];
-        put_f32(&mut out, 0, &self.domain_size);
-        put_f32(&mut out, 16, &self.step);
-        out
     }
 }
 
