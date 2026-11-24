@@ -5,18 +5,7 @@ use crate::{
     Aabb2, Affine2, At, Capsule2, Circle, IVec2, IVec3, LinearRgba, Mat4, Ray2, Segment2, Space,
     Srgba8, Vec2, Vec3, Vec4,
 };
-use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
-
-macro_rules! by_fields {
-    ($($t:ty { $($f:ident),+ });+ $(;)?) => {$(
-        impl SnapshotValue for $t {
-            #[inline]
-            fn put(&self, w: &mut Writer<'_>) { $( w.put(&self.$f); )+ }
-            #[inline]
-            fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> { Ok(Self { $( $f: r.get()? ),+ }) }
-        }
-    )+};
-}
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer, by_fields};
 
 by_fields! {
     Vec2 { x, y };
