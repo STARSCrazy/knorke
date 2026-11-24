@@ -434,3 +434,82 @@ fn hex_crew_round_trip() {
     assert_eq!(b.hex, Some(HexLayout::OddR));
     assert_eq!(b.metric, Metric::Hex);
 }
+
+/// Exact bytes of every plain group value, each enum variant at least once (see
+/// `pinned_bytes`): a swapped tag or field order fails here even though it round-trips.
+#[test]
+fn value_bytes_are_pinned() {
+    let goal = Goal {
+        kind: GoalKind::Attack,
+        pos: Some([1, -2, 3]),
+        unchecked: true,
+        then_pos: None,
+        then_unchecked: false,
+        target: Some(9),
+        start: Start::AfterTicks(4),
+        slot: 2,
+        plan: 7,
+        issued_at: 5,
+        start_delay: 6,
+    };
+    let slot = Slot {
+        roles: 3,
+        min: 1,
+        max: 2,
+        gather: Some(Place::Here),
+        place: Place::Offset([1, 2, 3]),
+        kind: GoalKind::Hold,
+        start: Start::OnSignal,
+        want_tags: 5,
+        dist: -1,
+        gather_dist: 8,
+    };
+    assert_bytes!(
+        Side::Front => "00",
+        Side::Left => "01",
+        Side::Right => "02",
+        Side::Rear => "03",
+        Place::Offset([1, -2, 3]) => "0001000000feffffff03000000",
+        Place::Side(Side::Left) => "0101",
+        Place::Between => "02",
+        Place::Tagged(6) => "0306000000",
+        Place::Here => "04",
+        Place::Custom(7) => "0507000000",
+        GoalKind::Move => "00",
+        GoalKind::Hold => "01",
+        GoalKind::Attack => "02",
+        GoalKind::Wait => "03",
+        GoalKind::Retreat => "04",
+        GoalKind::Custom(8) => "0508000000",
+        Start::Now => "00",
+        Start::AfterTicks(3) => "0103000000",
+        Start::OnSignal => "02",
+        slot => "030000000102010400010000000200000003000000010205000000ffffffff08000000",
+        Trigger::None => "00",
+        Trigger::AllArrived { max_wait: 4 } => "0104000000",
+        Trigger::TargetInRadius(-5) => "02fbffffffffffffff",
+        Trigger::Manual => "03",
+        Trigger::Custom(6) => "0406000000",
+        Compare::AtLeast => "00",
+        Compare::AtMost => "01",
+        Compare::Equal => "02",
+        Compare::NotEqual => "03",
+        Spot { pos: [1, 2, 3], tags: 4 } => "01000000020000000300000004000000",
+        goal => "020101000000feffffff030000000100000109000000010400000002070000000500000006000000",
+        Order { member: 3, goal } => "03000000020101000000feffffff030000000100000109000000010400000002070000000500000006000000",
+        Channel::Shout { range: -9 } => "00f7ffffffffffffff",
+        Channel::Radio { base: 2, per_unit: 1 } => "010200000001000000",
+        Channel::None => "02",
+        Channel::Custom(5) => "0305000000",
+        Status::Keep => "00",
+        Status::Replan(4) => "0104000000",
+        Status::Signal => "02",
+        Status::NoPlan => "03",
+        MemberState::Active => "00",
+        MemberState::Suspended => "01",
+        MemberState::Gone => "02",
+        Member { id: 1, pos: [2, 3, 4], roles: 5, skill: 6, state: MemberState::Suspended } => "01000000020000000300000004000000050000000601",
+        DangerReport { sender: 1, centre: [2, 3, 4], shooter: Some([5, 6, 7]), arrive_at: 8 } => "010000000200000003000000040000000105000000060000000700000008000000",
+        DangerReport { sender: 1, centre: [2, 3, 4], shooter: None, arrive_at: 8 } => "010000000200000003000000040000000008000000",
+    );
+}
