@@ -156,10 +156,7 @@ fn steady_state_light2d_paths_allocate_nothing() {
             obstacles.dirty_static().count() + obstacles.dirty_dynamic().count(),
         );
         world_triangles.clear();
-        obstacles
-            .get(moving[0])
-            .unwrap()
-            .append_world_triangles(&mut world_triangles);
+        obstacles.append_world_triangles(moving[0], &mut world_triangles);
         obstacles.clear_dirty();
         obstacle_snap.clear();
         obstacle_snap.save(&obstacles);

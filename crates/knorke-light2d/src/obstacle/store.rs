@@ -18,8 +18,15 @@
 //! - The store owns its working memory (triangulator, scratch triangles). Moving, enabling and
 //!   re-describing obstacles allocates nothing once the buffers have grown to the sizes in use.
 //! - Persistent state is a [`Snapshot`] section `knorke.light2d.obstacles` (ADR 0010).
-//!   `restore` re-validates and re-triangulates every obstacle (`SnapshotError::Invalid`) and
-//!   therefore allocates; `save` does not.
+//!   `restore` re-validates every obstacle and re-triangulates it to compare with the saved
+//!   triangles (`SnapshotError::Invalid`). Neither `save` nor `restore` allocates once the
+//!   buffers have grown to the sizes in use (P13b); only the cell channels of tile grids are
+//!   still owned per obstacle until P14 and are allocated by a restore.
+//! - Triangles and outlines of all obstacles live in two arenas of the store ([`Span`]s in
+//!   [`StoredObstacle`]), not in a `Vec` per obstacle. Replacing an obstacle by a shape of the
+//!   same size writes in place; otherwise the new data is appended and the old span becomes
+//!   garbage, which the store compacts (into a spare buffer, so without allocation in steady
+//!   state) once it exceeds the live data. Batch replacements always append.
 //!
 //! # Dirty tracking (for the shadow cache, P16)
 //!
@@ -42,11 +49,11 @@
 //!
 //! Both are part of the snapshot, so a restored store reports exactly what the saved one did.
 
-use super::desc::{ObstaclePose, ShapeDesc, TileGridDesc};
+use super::desc::{ObstaclePose, Shape, ShapeDesc, TileGridDesc};
 use super::error::ObstacleError;
-use super::stored::{StoredObstacle, outline_of, prepare_shape};
+use super::stored::{ObstacleKind, Span, StoredObstacle, outline_of, prepare_shape};
 use crate::triangulate::Triangulator;
-use knorke_math::{At, Vec2, World2};
+use knorke_math::{At, Vec2, World2, det};
 use knorke_types::{
     BitSet, Column, Handle, Reader, Revision, Slots, Snapshot, SnapshotError, SnapshotValue, Writer,
 };
@@ -54,10 +61,99 @@ use knorke_types::{
 /// Generation-checked handle of an obstacle.
 pub type ObstacleId = Handle<StoredObstacle>;
 
+/// A growing array of vertices that obstacles own ranges of.
+#[derive(Clone, Debug, Default)]
+struct Arena {
+    data: Vec<Vec2>,
+    /// Target of a compaction, kept to reuse its capacity.
+    spare: Vec<Vec2>,
+    /// Elements of `data` no obstacle refers to any more.
+    garbage: usize,
+}
+
+impl Arena {
+    /// Smallest garbage worth compacting.
+    const MIN_GARBAGE: usize = 64;
+
+    fn get(&self, span: Span) -> Option<&[Vec2]> {
+        let start = span.start as usize;
+        self.data
+            .as_slice()
+            .get(start..start.checked_add(span.len as usize)?)
+    }
+
+    /// The span of an obstacle of the store (always inside the arena).
+    fn slice(&self, span: Span) -> &[Vec2] {
+        self.get(span).unwrap_or(&[])
+    }
+
+    fn push(&mut self, items: &[Vec2]) -> Span {
+        if items.is_empty() {
+            return Span::EMPTY;
+        }
+        let start = u32::try_from(self.data.len()).expect("obstacle arena exceeds u32 elements");
+        self.data.extend_from_slice(items);
+        Span {
+            start,
+            len: items.len() as u32,
+        }
+    }
+
+    fn release(&mut self, span: Span) {
+        self.garbage += span.len as usize;
+    }
+
+    /// Stores `items` in place of `old`: in place for the same length, else appended.
+    fn replace(&mut self, old: Span, items: &[Vec2]) -> Span {
+        if !old.is_empty() && old.len as usize == items.len() {
+            let start = old.start as usize;
+            self.data[start..start + items.len()].copy_from_slice(items);
+            return old;
+        }
+        self.release(old);
+        self.push(items)
+    }
+
+    fn needs_compaction(&self) -> bool {
+        self.garbage >= Self::MIN_GARBAGE && self.garbage * 2 > self.data.len()
+    }
+
+    fn begin_compaction(&mut self) {
+        self.spare.clear();
+    }
+
+    /// Copies a live span into the spare buffer and returns where it went.
+    fn relocate(&mut self, span: Span) -> Span {
+        if span.is_empty() {
+            return Span::EMPTY;
+        }
+        let start = span.start as usize;
+        let moved = Span {
+            start: self.spare.len() as u32,
+            len: span.len,
+        };
+        self.spare
+            .extend_from_slice(&self.data[start..start + span.len as usize]);
+        moved
+    }
+
+    fn finish_compaction(&mut self) {
+        core::mem::swap(&mut self.data, &mut self.spare);
+        self.spare.clear();
+        self.garbage = 0;
+    }
+}
+
 /// The obstacles of one scene.
 #[derive(Clone, Debug, Default)]
 pub struct ObstacleStore {
     obstacles: Slots<StoredObstacle>,
+    /// Local triangles of all polygons and circles.
+    triangles: Arena,
+    /// Local corners of all polygons.
+    outlines: Arena,
+    /// Batches: obstacles built but not yet inserted.
+    pending: Vec<StoredObstacle>,
     revision: Revision,
     static_version: Revision,
     dirty_static: BitSet,
@@ -138,10 +234,17 @@ impl ObstacleStore {
             return Err(invalid(id));
         }
         let box_corners = prepare_shape(&mut self.tri, &mut self.scratch, desc)?;
-        let (scratch, outline) = (&self.scratch, outline_of(desc, &box_corners));
-        let mut next = |s: &mut StoredObstacle| s.assign_shape(desc, scratch, outline);
-        Self::replace(&mut self.obstacles, &mut self.partial_active, id, &mut next)
-            .map(|dynamic| self.note_change(id.index(), dynamic))
+        let old = self.obstacles.get(id).ok_or_else(|| invalid(id))?;
+        let (old_triangles, old_outline) = (old.triangles, old.outline);
+        let triangles = self.triangles.replace(old_triangles, &self.scratch);
+        let outline = self
+            .outlines
+            .replace(old_outline, outline_of(desc, &box_corners));
+        let mut next = |s: &mut StoredObstacle| s.assign_shape(desc, triangles, outline);
+        let result = Self::replace(&mut self.obstacles, &mut self.partial_active, id, &mut next)
+            .map(|dynamic| self.note_change(id.index(), dynamic));
+        self.compact_if_needed();
+        result
     }
 
     /// Replaces an obstacle by a tile grid (the kind may change); its revision grows. Unchanged
@@ -158,9 +261,12 @@ impl ObstacleStore {
             return Err(invalid(id));
         }
         desc.validate()?;
+        self.release_geometry(id);
         let mut next = |s: &mut StoredObstacle| s.assign_tile_grid(desc);
-        Self::replace(&mut self.obstacles, &mut self.partial_active, id, &mut next)
-            .map(|dynamic| self.note_change(id.index(), dynamic))
+        let result = Self::replace(&mut self.obstacles, &mut self.partial_active, id, &mut next)
+            .map(|dynamic| self.note_change(id.index(), dynamic));
+        self.compact_if_needed();
+        result
     }
 
     /// Moves and turns an obstacle. A move does not change the obstacle's revision, but it is a
@@ -191,7 +297,10 @@ impl ObstacleStore {
     pub fn destroy(&mut self, id: ObstacleId) -> Result<(), ObstacleError> {
         let stored = self.obstacles.remove(id).ok_or_else(|| invalid(id))?;
         self.partial_active -= partial_active(&stored);
+        self.triangles.release(stored.triangles);
+        self.outlines.release(stored.outline);
         self.note_change(id.index(), stored.common.dynamic);
+        self.compact_if_needed();
         Ok(())
     }
 
@@ -206,14 +315,8 @@ impl ObstacleStore {
         descs: impl Column<ShapeDesc<'a>>,
         out: &mut Vec<ObstacleId>,
     ) -> Result<(), ObstacleError> {
-        let mut built = Vec::with_capacity(descs.len());
-        for (i, d) in descs.iter().enumerate() {
-            built.push(self.build_shape(d).map_err(|e| batch("descs", i, e))?);
-        }
-        out.reserve(built.len());
-        for stored in built {
-            out.push(self.insert(stored));
-        }
+        self.stage_shapes(&descs)?;
+        self.insert_pending(out);
         Ok(())
     }
 
@@ -226,14 +329,17 @@ impl ObstacleStore {
         descs: impl Column<TileGridDesc<'a>>,
         out: &mut Vec<ObstacleId>,
     ) -> Result<(), ObstacleError> {
-        let mut built = Vec::with_capacity(descs.len());
+        self.pending.clear();
         for (i, d) in descs.iter().enumerate() {
-            built.push(Self::build_grid(d).map_err(|e| batch("descs", i, e))?);
+            match Self::build_grid(d) {
+                Ok(stored) => self.pending.push(stored),
+                Err(e) => {
+                    self.pending.clear();
+                    return Err(batch("descs", i, e));
+                }
+            }
         }
-        out.reserve(built.len());
-        for stored in built {
-            out.push(self.insert(stored));
-        }
+        self.insert_pending(out);
         Ok(())
     }
 
@@ -249,11 +355,10 @@ impl ObstacleStore {
     ) -> Result<(), ObstacleError> {
         same_length("descs", ids.len(), descs.len())?;
         self.check_handles(&ids)?;
-        let mut built = Vec::with_capacity(descs.len());
-        for (i, d) in descs.iter().enumerate() {
-            built.push(self.build_shape(d).map_err(|e| batch("descs", i, e))?);
-        }
-        for (id, next) in ids.iter().zip(built) {
+        self.stage_shapes(&descs)?;
+        let mut pending = core::mem::take(&mut self.pending);
+        for (id, next) in ids.iter().zip(pending.drain(..)) {
+            self.release_geometry(*id);
             let mut next = Some(next);
             let mut apply = |s: &mut StoredObstacle| {
                 if let Some(n) = next.take() {
@@ -271,6 +376,8 @@ impl ObstacleStore {
                 self.note_change(id.index(), dynamic);
             }
         }
+        self.pending = pending;
+        self.compact_if_needed();
         Ok(())
     }
 
@@ -290,6 +397,7 @@ impl ObstacleStore {
             d.validate().map_err(|e| batch("descs", i, e))?;
         }
         for (id, d) in ids.iter().zip(descs.iter()) {
+            self.release_geometry(*id);
             let mut apply = |s: &mut StoredObstacle| s.assign_tile_grid(d);
             if let Ok(dynamic) = Self::replace(
                 &mut self.obstacles,
@@ -300,6 +408,7 @@ impl ObstacleStore {
                 self.note_change(id.index(), dynamic);
             }
         }
+        self.compact_if_needed();
         Ok(())
     }
 
@@ -370,6 +479,41 @@ impl ObstacleStore {
     /// The obstacle behind a handle, or `None` for a stale handle.
     pub fn get(&self, id: ObstacleId) -> Option<&StoredObstacle> {
         self.obstacles.get(id)
+    }
+
+    /// The local-space triangles (three vertices each) of a polygon or circle; empty for tile
+    /// grids and stale handles.
+    pub fn triangles(&self, id: ObstacleId) -> &[Vec2] {
+        self.obstacles
+            .get(id)
+            .map_or(&[], |s| self.triangles.slice(s.triangles))
+    }
+
+    /// The local corners of a polygon (a box has four); empty for circles, tile grids and stale
+    /// handles.
+    pub fn outline(&self, id: ObstacleId) -> &[Vec2] {
+        self.obstacles
+            .get(id)
+            .map_or(&[], |s| self.outlines.slice(s.outline))
+    }
+
+    /// The local triangles of an obstacle rotated by its rotation (degrees, counter-clockwise)
+    /// and moved by its position, appended to `out`. Nothing for a stale handle.
+    pub fn append_world_triangles(&self, id: ObstacleId, out: &mut Vec<At<World2, Vec2>>) {
+        let Some(s) = self.obstacles.get(id) else {
+            return;
+        };
+        let local = self.triangles.slice(s.triangles);
+        let rad = s.common.rotation * (core::f32::consts::PI / 180.0);
+        let (sin, cos) = det::sin_cos(rad);
+        let p = s.common.position.raw();
+        out.reserve(local.len());
+        out.extend(local.iter().map(|v| {
+            At::new(Vec2::new(
+                cos * v.x - sin * v.y + p.x,
+                sin * v.x + cos * v.y + p.y,
+            ))
+        }));
     }
 
     /// Every obstacle in slot order.
@@ -466,11 +610,71 @@ impl ObstacleStore {
         id
     }
 
+    /// Builds a shape obstacle, appending its geometry to the arenas.
     fn build_shape(&mut self, desc: &ShapeDesc<'_>) -> Result<StoredObstacle, ObstacleError> {
         let box_corners = prepare_shape(&mut self.tri, &mut self.scratch, desc)?;
+        let triangles = self.triangles.push(&self.scratch);
+        let outline = self.outlines.push(outline_of(desc, &box_corners));
         let mut s = StoredObstacle::empty();
-        s.assign_shape(desc, &self.scratch, outline_of(desc, &box_corners));
+        s.assign_shape(desc, triangles, outline);
         Ok(s)
+    }
+
+    /// Builds every shape into `pending`; on the first error the arenas and `pending` are as
+    /// before.
+    fn stage_shapes<'a>(
+        &mut self,
+        descs: &impl Column<ShapeDesc<'a>>,
+    ) -> Result<(), ObstacleError> {
+        let (triangles, outlines) = (self.triangles.data.len(), self.outlines.data.len());
+        self.pending.clear();
+        for (i, d) in descs.iter().enumerate() {
+            match self.build_shape(d) {
+                Ok(stored) => self.pending.push(stored),
+                Err(e) => {
+                    self.pending.clear();
+                    self.triangles.data.truncate(triangles);
+                    self.outlines.data.truncate(outlines);
+                    return Err(batch("descs", i, e));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn insert_pending(&mut self, out: &mut Vec<ObstacleId>) {
+        let mut pending = core::mem::take(&mut self.pending);
+        out.reserve(pending.len());
+        for stored in pending.drain(..) {
+            out.push(self.insert(stored));
+        }
+        self.pending = pending;
+    }
+
+    /// Marks the geometry of an obstacle as garbage (its handle is valid, else nothing).
+    fn release_geometry(&mut self, id: ObstacleId) {
+        if let Some(s) = self.obstacles.get(id) {
+            self.triangles.release(s.triangles);
+            self.outlines.release(s.outline);
+        }
+    }
+
+    /// Squeezes out the garbage of the arenas once it outweighs the live data.
+    fn compact_if_needed(&mut self) {
+        if self.triangles.needs_compaction() {
+            self.triangles.begin_compaction();
+            for (_, s) in self.obstacles.iter_mut() {
+                s.triangles = self.triangles.relocate(s.triangles);
+            }
+            self.triangles.finish_compaction();
+        }
+        if self.outlines.needs_compaction() {
+            self.outlines.begin_compaction();
+            for (_, s) in self.obstacles.iter_mut() {
+                s.outline = self.outlines.relocate(s.outline);
+            }
+            self.outlines.finish_compaction();
+        }
     }
 
     fn build_grid(desc: &TileGridDesc<'_>) -> Result<StoredObstacle, ObstacleError> {
@@ -506,15 +710,59 @@ impl ObstacleStore {
         Ok(was_dynamic && current.common.dynamic)
     }
 
-    /// Recomputes the counters after a restore.
-    fn recount(&mut self) {
+    /// Checks a restored store: every span lies inside its arena and the saved triangles are
+    /// those of the described shape. Recomputes the counters and the garbage of the arenas.
+    fn check_restored(&mut self) -> Result<(), SnapshotError> {
+        const BAD: SnapshotError = SnapshotError::Invalid("obstacle violates the obstacle rules");
+        const BAD_SPAN: SnapshotError =
+            SnapshotError::Invalid("obstacle geometry outside its arena");
+        let mut live = (0usize, 0usize);
+        for (_, s) in self.obstacles.iter() {
+            let (outline, shape) = match s.kind {
+                ObstacleKind::TileGrid => {
+                    if !s.triangles.is_empty() || !s.outline.is_empty() {
+                        return Err(BAD_SPAN);
+                    }
+                    continue;
+                }
+                ObstacleKind::Circle => {
+                    if !s.outline.is_empty() {
+                        return Err(BAD_SPAN);
+                    }
+                    (&[][..], Shape::Circle { radius: s.radius })
+                }
+                ObstacleKind::Polygon => {
+                    let outline = self.outlines.get(s.outline).ok_or(BAD_SPAN)?;
+                    if s.box_shape && outline.len() != 4 {
+                        return Err(BAD);
+                    }
+                    (outline, Shape::Polygon(outline))
+                }
+            };
+            let saved = self.triangles.get(s.triangles).ok_or(BAD_SPAN)?;
+            let desc = ShapeDesc {
+                common: s.common,
+                shape,
+            };
+            prepare_shape(&mut self.tri, &mut self.scratch, &desc).map_err(|_| BAD)?;
+            if self.scratch != saved {
+                return Err(SnapshotError::Invalid(
+                    "obstacle triangles do not match its shape",
+                ));
+            }
+            live.0 += s.triangles.len as usize;
+            live.1 += outline.len();
+        }
+        self.triangles.garbage = self.triangles.data.len().saturating_sub(live.0);
+        self.outlines.garbage = self.outlines.data.len().saturating_sub(live.1);
         self.partial_active = self.obstacles.iter().map(|(_, s)| partial_active(s)).sum();
+        Ok(())
     }
 }
 
 impl Snapshot for ObstacleStore {
     const ID: &'static str = "knorke.light2d.obstacles";
-    const VERSION: u16 = 1;
+    const VERSION: u16 = 2;
 
     fn save(&self, w: &mut Writer<'_>) {
         w.put(&self.obstacles);
@@ -522,6 +770,8 @@ impl Snapshot for ObstacleStore {
         w.put(&self.static_version);
         w.put(&self.dirty_static);
         w.put(&self.dirty_dynamic);
+        w.put(&self.triangles.data);
+        w.put(&self.outlines.data);
     }
 
     fn restore(&mut self, version: u16, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
@@ -536,7 +786,8 @@ impl Snapshot for ObstacleStore {
         self.static_version = r.get()?;
         self.dirty_static.get_into(r)?;
         self.dirty_dynamic.get_into(r)?;
-        self.recount();
-        Ok(())
+        self.triangles.data.get_into(r)?;
+        self.outlines.data.get_into(r)?;
+        self.check_restored()
     }
 }
