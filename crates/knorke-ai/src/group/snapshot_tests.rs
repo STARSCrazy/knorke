@@ -436,7 +436,7 @@ fn hex_crew_round_trip() {
 }
 
 /// Exact bytes of every plain group value, each enum variant at least once (see
-/// `pinned_bytes`): a swapped tag or field order fails here even though it round-trips.
+/// `knorke_types::assert_bytes!`): a swapped tag or field order fails here even though it round-trips.
 #[test]
 fn value_bytes_are_pinned() {
     let goal = Goal {
@@ -464,7 +464,7 @@ fn value_bytes_are_pinned() {
         dist: -1,
         gather_dist: 8,
     };
-    assert_bytes!(
+    knorke_types::assert_bytes!(
         Side::Front => "00",
         Side::Left => "01",
         Side::Right => "02",

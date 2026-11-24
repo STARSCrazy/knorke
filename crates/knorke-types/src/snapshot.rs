@@ -674,6 +674,48 @@ macro_rules! by_tag {
     )+};
 }
 
+/// Snapshot bytes of `value` as lowercase hex. Support for [`assert_bytes!`]; not public API.
+#[doc(hidden)]
+pub fn __bytes_hex<T: SnapshotValue>(value: &T) -> alloc::string::String {
+    use core::fmt::Write as _;
+    let mut bytes = Vec::new();
+    Writer::new(&mut bytes).put(value);
+    bytes.iter().fold(alloc::string::String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    })
+}
+
+/// For tests: `assert_bytes!(value => "hex", ...)` checks that every value writes exactly
+/// these snapshot bytes (ADR 0010).
+///
+/// A round trip cannot see a swapped tag number or field order, because writer and reader
+/// change together; this compares against bytes written down once. On a mismatch the
+/// message lists every changed case with its new bytes in the same `value => "hex"` form,
+/// ready to paste after a deliberate format change (which also invalidates saved
+/// snapshots). It lives here, next to [`by_fields!`] and [`by_tag!`], so every crate
+/// pins its values with the same helper; it is test support, not simulation API.
+///
+/// ```
+/// # use knorke_types::assert_bytes;
+/// assert_bytes!(1u16 => "0100", (2u8, -1i8) => "02ff");
+/// ```
+#[macro_export]
+macro_rules! assert_bytes {
+    ($($v:expr => $hex:literal),+ $(,)?) => {{
+        let mut changed = $crate::__private::String::new();
+        $(
+            let got = $crate::__bytes_hex(&$v);
+            if got != $hex {
+                changed += &$crate::__private::format!(
+                    "{} => \"{}\",\n", ::core::stringify!($v), got
+                );
+            }
+        )+
+        assert!(changed.is_empty(), "snapshot bytes changed:\n{changed}");
+    }};
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

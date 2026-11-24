@@ -226,7 +226,7 @@ fn truncated_input_is_refused_safely() {
 }
 
 /// Exact bytes of every plain mission value, each enum variant at least once (see
-/// `pinned_bytes`): a swapped tag or field order fails here even though it round-trips.
+/// `knorke_types::assert_bytes!`): a swapped tag or field order fails here even though it round-trips.
 #[test]
 fn value_bytes_are_pinned() {
     use crate::mission::types::{
@@ -252,7 +252,7 @@ fn value_bytes_are_pinned() {
             radius: 2,
         },
     };
-    assert_bytes!(
+    knorke_types::assert_bytes!(
         Where::Fixed([1, -2, 3]) => "0001000000feffffff03000000",
         Where::Subject(4) => "0104000000",
         Where::MotivePlace => "02",

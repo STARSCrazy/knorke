@@ -307,7 +307,7 @@ fn goal_guess_rejects_bad_chances() {
     assert!(load::<GoalGuess>(&b).is_ok());
 }
 
-/// Exact bytes of the plain memory values (see `pinned_bytes`).
+/// Exact bytes of the plain memory values (see `knorke_types::assert_bytes!`).
 #[test]
 fn value_bytes_are_pinned() {
     let fact = Fact {
@@ -341,7 +341,7 @@ fn value_bytes_are_pinned() {
         sender: 9,
         keep_if_sender_gone: 1,
     };
-    assert_bytes!(
+    knorke_types::assert_bytes!(
         fact => "010000000200000003000000fcffffff0500000006000000070000000800000009",
         area => "01000000020000000300000004000000fbffffff060000000700000008000000090000000a0000000b0000000c0000000101",
         message => "01000000020000000300000004000000050000000600000007000000080000000900000001",

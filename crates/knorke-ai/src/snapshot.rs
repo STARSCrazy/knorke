@@ -270,11 +270,11 @@ mod tests {
         assert!(Reader::new(&[3]).get::<Pick>().is_err());
     }
 
-    /// Exact bytes of the plain decision values (see `pinned_bytes`).
+    /// Exact bytes of the plain decision values (see `knorke_types::assert_bytes!`).
     #[test]
     fn value_bytes_are_pinned() {
         let c = Consideration::new(3, Curve::Linear, -1, 100);
-        assert_bytes!(
+        knorke_types::assert_bytes!(
             c => "0300000000ffffffff64000000",
             Candidate { option: 1, target: 2 } => "0100000002000000",
             Pick::Best => "00",
