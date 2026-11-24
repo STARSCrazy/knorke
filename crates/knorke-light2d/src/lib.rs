@@ -10,6 +10,7 @@
 //! | [`material`] | material shader math as CPU model (tangent frame, specular lobes) | P6 |
 //! | [`light_math`] | attenuation, spot cone, flicker, light-quad culling | P7 |
 //! | [`light`], [`light_store`] | light description, validation, handle-based store, snapshots | P7 |
+//! | [`obstacle`] | obstacle descriptions, handle-based store, dirty tracking for the shadow cache, snapshots | P13 |
 //!
 //! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
 //! dependency; today that is only the gate spike `gpu_spike` (to be replaced by P20–P27).
@@ -35,10 +36,12 @@ pub mod light;
 pub mod light_math;
 pub mod light_store;
 pub mod material;
+pub mod obstacle;
 pub mod projection;
 pub mod triangulate;
 
 pub use light::{LightError, LightResources, NoResources};
 pub use light_store::LightStore;
+pub use obstacle::{ObstacleError, ObstacleId, ObstacleStore};
 pub use projection::{Projection, ProjectionError};
 pub use triangulate::{TriangulateError, Triangulator, circle_triangles};
