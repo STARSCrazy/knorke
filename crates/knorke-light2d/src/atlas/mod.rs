@@ -41,7 +41,7 @@ use knorke_math::uniform::write_f32s;
 mod gpu;
 
 #[cfg(feature = "gpu")]
-pub use gpu::{LightAtlases, MaskAtlasTexture, ProfileAtlasTexture};
+pub use gpu::{AtlasSource, AtlasTexture, LightAtlases, MaskAtlasTexture, ProfileAtlasTexture};
 
 /// Rows of the profile atlas for `block_count` profile blocks; 0 for none.
 pub fn profile_atlas_rows(block_count: u32) -> u32 {
