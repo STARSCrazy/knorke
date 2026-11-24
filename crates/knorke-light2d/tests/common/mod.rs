@@ -16,6 +16,10 @@ use knorke_light2d::occlusion::MASK_PROGRAMS;
 use knorke_light2d::{ObstacleId, ObstacleStore};
 use knorke_math::{At, Vec2, World2};
 
+/// Size of the dumpers' golden scenes (`light_ref.cpp`, `composite_ref.cpp`, `atlas_ref.cpp`).
+pub(crate) const W: u32 = 96;
+pub(crate) const H: u32 = 48;
+
 pub(crate) fn at(x: f32, y: f32) -> At<World2, Vec2> {
     At::new(Vec2::new(x, y))
 }

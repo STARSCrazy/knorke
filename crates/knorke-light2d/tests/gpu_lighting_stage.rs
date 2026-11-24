@@ -11,11 +11,8 @@
 
 mod common;
 
-const W: u32 = 96;
-const H: u32 = 48;
-
-use common::at;
 use common::light_host::{L, L0, Scene, golden_programs, with_host};
+use common::{H, W, at};
 use knorke_gpu::CommandBuffer;
 use knorke_gpu::test_support::{golden_bytes, rgba16f_diff, sampled_rgba8};
 use knorke_light2d::light::{Height, LightType};

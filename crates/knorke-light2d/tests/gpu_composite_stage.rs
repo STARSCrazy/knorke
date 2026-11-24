@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{at, dome_material_pixels};
+use common::{H, W, at, dome_material_pixels};
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB,
     SDL_GPUTextureFormat,
@@ -32,9 +32,6 @@ use knorke_light2d::lighting::{DetailMode, LightingFrame, LightingResult, Lighti
 use knorke_light2d::settings::{GlowColor, LightSettings, Quality, Resolutions};
 use knorke_light2d::{LightStore, NoResources, Projection};
 use knorke_math::{Vec3, det};
-
-const W: u32 = 96;
-const H: u32 = 48;
 
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {

@@ -39,7 +39,7 @@ use knorke_light2d::{
 };
 use knorke_math::{Vec2, Vec3};
 
-use super::{at, dome_material_pixels, programs};
+use super::{H, W, at, dome_material_pixels, programs};
 
 /// A light of the dumper's `Light` struct (same defaults).
 #[derive(Clone, Copy)]
@@ -173,7 +173,7 @@ impl Scene {
     pub(crate) fn golden(name: &'static str, ambient: Vec3, light_resolution: f32) -> Self {
         let mut s = Self::new(name, 0.0, light_resolution);
         s.settings.ambient = ambient;
-        s.size = (96, 48);
+        s.size = (W, H);
         s
     }
 
