@@ -5,33 +5,11 @@
 //! Own test binary with a single test, so the process-wide allocation counter is not
 //! disturbed by other tests running concurrently.
 
-#![allow(unsafe_code)] // counting allocator
-
+use knorke_contract_tests::counting_alloc::{Counting, allocations};
 use knorke_integration::pixel::prelude::*;
 use knorke_render::grid::{NORTH, SOUTH};
 use knorke_render::particles::{EMIT_SPARKS, Emitter};
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-struct Counting;
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-// SAFETY: forwards to the system allocator unchanged; only counts calls.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: same contract as the caller's.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
@@ -145,10 +123,10 @@ fn steady_state_lit_frame_allocates_nothing() {
     for f in 0..10 {
         frame(f);
     }
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = allocations();
     for f in 10..40 {
         frame(f);
     }
-    let allocated = ALLOCATIONS.load(Ordering::Relaxed) - before;
+    let allocated = allocations() - before;
     assert_eq!(allocated, 0, "allocations in 30 steady-state frames");
 }

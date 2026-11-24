@@ -500,3 +500,54 @@ pub(crate) fn gable_house(roof: i32) -> GridMap {
     door.leaf_top = 0.7;
     g
 }
+
+// ---- Golden images (shared by images.rs and light_gaps.rs) ----
+
+/// Size of every golden image.
+pub(crate) const W: usize = 160;
+pub(crate) const H: usize = 100;
+
+fn golden_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("golden")
+}
+
+/// Compares a `W` x `H` RGBA image with `tests/golden/{name}.ppm` (binary PPM, RGB only).
+///
+/// Side effects: always writes a PNG preview to `CARGO_TARGET_TMPDIR/golden-out/{name}.png`
+/// (light_gaps.rs used to write `<crate>/target/golden-out` instead; one place for all now).
+/// With `PIXELRAUM_BLESS=1` it (re)writes the reference instead of comparing and creates
+/// `tests/golden` if missing (light_gaps.rs used to fail there).
+pub(crate) fn check(name: &str, rgba: &[u8]) {
+    let out = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("golden-out");
+    std::fs::create_dir_all(&out).unwrap();
+    let preview = out.join(format!("{name}.png"));
+    std::fs::write(&preview, png::encode_rgba(W, H, rgba, 4)).unwrap();
+    let path = golden_dir().join(format!("{name}.ppm"));
+    let mut actual = format!("P6\n{W} {H}\n255\n").into_bytes();
+    for p in rgba.as_chunks::<4>().0 {
+        actual.extend_from_slice(&p[..3]);
+    }
+    if std::env::var("PIXELRAUM_BLESS").is_ok() {
+        std::fs::create_dir_all(golden_dir()).unwrap();
+        std::fs::write(&path, &actual).unwrap();
+        return;
+    }
+    let expected = std::fs::read(&path)
+        .unwrap_or_else(|_| panic!("missing reference {path:?}; run with PIXELRAUM_BLESS=1"));
+    if expected != actual {
+        let diff = expected.iter().zip(&actual).filter(|(a, b)| a != b).count();
+        panic!("{name}: image differs from reference ({diff} bytes); see {preview:?}");
+    }
+}
+
+/// Shadow-casting sun of full strength.
+pub(crate) fn sun(dir: [f32; 3], color: u32) -> light::Sun {
+    light::Sun {
+        dir: Vec3::new(dir[0], dir[1], dir[2]),
+        color,
+        strength: 1.0,
+        shadows: true,
+    }
+}

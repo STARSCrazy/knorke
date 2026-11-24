@@ -392,29 +392,9 @@ impl Inbox {
     }
 }
 
-impl SnapshotValue for Message {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.kind);
-        w.put(&self.subject);
-        w.put(&self.pos);
-        w.put(&self.seen_at);
-        w.put(&self.strength);
-        w.put(&self.data);
-        w.put(&self.sender);
-        w.put(&self.keep_if_sender_gone);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Message {
-            kind: r.get()?,
-            subject: r.get()?,
-            pos: r.get()?,
-            seen_at: r.get()?,
-            strength: r.get()?,
-            data: r.get()?,
-            sender: r.get()?,
-            keep_if_sender_gone: r.get()?,
-        })
-    }
+// Field order pinned by `snapshot_tests::value_bytes_are_pinned`.
+knorke_types::by_fields! {
+    Message { kind, subject, pos, seen_at, strength, data, sender, keep_if_sender_gone };
 }
 
 impl SnapshotValue for Posted {

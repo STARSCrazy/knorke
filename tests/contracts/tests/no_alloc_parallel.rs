@@ -3,35 +3,13 @@
 //! Own test binary with a single test, so the process-wide allocation counter is not
 //! disturbed by other tests running concurrently.
 
-#![allow(unsafe_code)] // counting allocator
-
+use knorke_contract_tests::counting_alloc::{Counting, allocations};
 use knorke_contract_tests::steering::{Agent, Arrived, CHUNK, ChunkOut, agents, steer};
 use knorke_exec::Rayon;
 use knorke_math::Vec2;
 use knorke_observe::{Probe, Recorder, scope};
 use knorke_types::{EventQueue, Parallel, Serial, Tick, chunk_count};
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-struct Counting;
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-// SAFETY: forwards to the system allocator unchanged; only counts calls.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: same contract as the caller's.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
@@ -87,7 +65,7 @@ fn steady_state_parallel_frame_allocates_nothing_on_any_thread() {
             &mut recorder,
         );
     }
-    let before = ALLOCATIONS.load(Ordering::SeqCst);
+    let before = allocations();
     for t in 3..23 {
         spawned += frame(
             &Serial,
@@ -99,7 +77,7 @@ fn steady_state_parallel_frame_allocates_nothing_on_any_thread() {
             &mut recorder,
         );
     }
-    let serial_allocs = ALLOCATIONS.load(Ordering::SeqCst) - before;
+    let serial_allocs = allocations() - before;
     assert_eq!(
         serial_allocs, 0,
         "serial frames allocated {serial_allocs} times"
@@ -121,7 +99,7 @@ fn steady_state_parallel_frame_allocates_nothing_on_any_thread() {
         });
     }
     let frames = 200u64;
-    let before = ALLOCATIONS.load(Ordering::SeqCst);
+    let before = allocations();
     for t in 26..26 + frames {
         spawned += rayon.install(|| {
             frame(
@@ -135,7 +113,7 @@ fn steady_state_parallel_frame_allocates_nothing_on_any_thread() {
             )
         });
     }
-    let rayon_allocs = ALLOCATIONS.load(Ordering::SeqCst) - before;
+    let rayon_allocs = allocations() - before;
     let injector_bound = frames.div_ceil(63) + 1;
     assert!(spawned > 0);
     assert!(

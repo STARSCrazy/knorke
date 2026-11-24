@@ -4,8 +4,7 @@
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests.
 
-#![allow(unsafe_code)] // counting allocator
-
+use knorke_contract_tests::counting_alloc::{Counting, allocations};
 use knorke_math::Vec2;
 use knorke_post::bloom::plan_bloom;
 use knorke_post::output_flags::{crt_flags, grade_flags, shockwave_flags};
@@ -16,28 +15,7 @@ use knorke_post::settings::{CrtPreset, CrtSettings, Filter, PostSettings, Tonema
 use knorke_post::shockwave::{
     Projection, Shockwave, ShockwaveFrame, ShockwaveList, collect_shockwaves,
 };
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-struct Counting;
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-// SAFETY: forwards to the system allocator unchanged; only counts calls.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: same contract as the caller's.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
@@ -98,11 +76,11 @@ fn post_parameter_blocks_allocate_nothing() {
             + u64::from(flags);
     };
     step(0); // warm up
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = allocations();
     for i in 0..1000 {
         step(i);
     }
-    let after = ALLOCATIONS.load(Ordering::Relaxed);
+    let after = allocations();
     assert_eq!(after - before, 0, "the post parameter blocks allocated");
     assert!(sum > 0);
 }

@@ -268,36 +268,10 @@ impl StateMachine {
 
 // --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
 
-impl SnapshotValue for Transition {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.from);
-        w.put(&self.to);
-        w.put(&self.mask);
-        w.put(&self.value);
-        w.put(&self.after);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Transition {
-            from: r.get()?,
-            to: r.get()?,
-            mask: r.get()?,
-            value: r.get()?,
-            after: r.get()?,
-        })
-    }
-}
-
-impl SnapshotValue for StateDef {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.timeout);
-        w.put(&self.next);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(StateDef {
-            timeout: r.get()?,
-            next: r.get()?,
-        })
-    }
+// Field order pinned by `tests::value_bytes_are_pinned`.
+knorke_types::by_fields! {
+    Transition { from, to, mask, value, after };
+    StateDef { timeout, next };
 }
 
 /// The whole machine: its states and transitions (so a restored machine needs no setup
@@ -469,5 +443,14 @@ mod tests {
         assert!(m.add_transition(Transition::new(ANY, 9, 0)).is_err());
         assert!(m.set_timeout(0, 1, 9).is_err());
         assert!(m.set_state(4, 0).is_err());
+    }
+
+    /// Exact bytes of the plain machine values (see `pinned_bytes`).
+    #[test]
+    fn value_bytes_are_pinned() {
+        assert_bytes!(
+            Transition { from: 1, to: 2, mask: 3, value: 4, after: 5 } => "01000000020000000300000000000000040000000000000005000000",
+            StateDef { timeout: 6, next: 7 } => "0600000007000000",
+        );
     }
 }

@@ -3,8 +3,7 @@
 //!
 //! Own test binary with a single test because the allocation counter is process-wide.
 
-#![allow(unsafe_code)] // counting allocator
-
+use knorke_contract_tests::counting_alloc::{Counting, allocations};
 use knorke_math::{At, Vec2, World2};
 use knorke_observe::{Invariants, NoopSink};
 use knorke_replay::{RecordOptions, Recorder, ReplayHeader, Simulation, verify};
@@ -12,28 +11,7 @@ use knorke_types::{
     DiagnosticCode, Reader, Seed, Slots, Snapshot, SnapshotBuf, SnapshotError, SnapshotValue, Tick,
     Writer, restore,
 };
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicU64, Ordering};
 
-struct Counting;
-static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
-// SAFETY: forwards to the system allocator unchanged; only counts calls.
-unsafe impl GlobalAlloc for Counting {
-    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.alloc(layout) }
-    }
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        // SAFETY: same contract as the caller's.
-        unsafe { System.dealloc(ptr, layout) }
-    }
-    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
-        // SAFETY: same contract as the caller's.
-        unsafe { System.realloc(ptr, layout, new_size) }
-    }
-}
 #[global_allocator]
 static GLOBAL: Counting = Counting;
 
@@ -134,12 +112,12 @@ fn flight_recorder_and_invariants_allocate_nothing_in_steady_state() {
         rec.step(&mut world, Tick(t), &commands);
         found += inv.run(&world, Tick(t), &mut NoopSink);
     }
-    let before = ALLOCATIONS.load(Ordering::SeqCst);
+    let before = allocations();
     for t in 1000..2000u64 {
         rec.step(&mut world, Tick(t), &commands);
         found += inv.run(&world, Tick(t), &mut NoopSink);
     }
-    let allocs = ALLOCATIONS.load(Ordering::SeqCst) - before;
+    let allocs = allocations() - before;
     assert_eq!(found, 0);
     assert_eq!(allocs, 0, "1000 recorded ticks allocated {allocs} times");
     let log = rec.into_log();
