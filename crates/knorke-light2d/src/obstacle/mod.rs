@@ -19,14 +19,12 @@ mod store;
 mod store_edit;
 mod stored;
 
+pub use cells::{COMPARE_BLOCK, CellChange, CellChangeLog, CellRect, MAX_COMPARE_RECTS};
 pub use desc::{
     MAX_CELLS, MAX_VERTICES, ObstacleCommon, ObstaclePose, Shape, ShapeDesc, TileGridDesc,
 };
-pub use cells::{COMPARE_BLOCK, CellChange, CellLog, CellRect, MAX_COMPARE_RECTS};
 pub use error::ObstacleError;
-pub use patterns::{
-    MAX_PATTERN_TABLE, MAX_PATTERN_VERTICES, PatternAssignment, PatternSource,
-};
-pub use store_edit::TileView;
+pub use patterns::{MAX_PATTERN_TABLE, MAX_PATTERN_VERTICES, PatternAssignment, PatternSource};
 pub use store::{ObstacleId, ObstacleStore};
+pub use store_edit::TileView;
 pub use stored::{ObstacleKind, Span, StoredObstacle, TileCells};

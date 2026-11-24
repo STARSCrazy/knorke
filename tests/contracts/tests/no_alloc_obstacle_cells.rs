@@ -1,7 +1,7 @@
 //! Contract: editing the cells of a tile grid and the pattern assignments of obstacles allocate
 //! nothing once the grid has its channels and the working buffers have grown: cell edits, level
 //! edits, compared grid replacement, pattern changes, the destroy notification, the mask value,
-//! reading the cell log and saving the store (P14, ADR 0006).
+//! reading the cell log, saving and restoring the store (P14, ADR 0006, ADR 0010).
 //!
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
@@ -9,8 +9,8 @@
 #![allow(unsafe_code)] // counting allocator
 
 use knorke_light2d::ObstacleStore;
-use knorke_light2d::obstacle::{CellRect, TileGridDesc, mask_opacity};
-use knorke_types::SnapshotBuf;
+use knorke_light2d::obstacle::{CellRect, TileGridDesc};
+use knorke_types::{Reader, SnapshotBuf, restore};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -79,6 +79,8 @@ fn steady_state_cell_and_pattern_edits_allocate_nothing() {
     store.on_patterns_destroyed(&[9]);
     snap.clear();
     snap.save(&store);
+    let mut target = ObstacleStore::new();
+    restore(&mut Reader::new(snap.bytes()), &mut target).unwrap();
 
     let before = ALLOCATIONS.load(Ordering::Relaxed);
     let mut sum = 0.0f32;
@@ -114,7 +116,7 @@ fn steady_state_cell_and_pattern_edits_allocate_nothing() {
             .unwrap();
         store.on_patterns_destroyed(&[9]); // names nothing: the scan only
         for cell in [0usize, 7, 45, 600] {
-            sum += mask_opacity(store.get(grid).unwrap(), cell, &live);
+            sum += store.mask_opacity(grid, cell, &live).unwrap();
         }
         sum += f32::from(u8::from(store.any_pattern()));
         sum += store.count_destroyed_pattern_users(&live, true) as f32;
@@ -125,6 +127,8 @@ fn steady_state_cell_and_pattern_edits_allocate_nothing() {
         assert_eq!(seen, 3);
         snap.clear();
         snap.save(&store);
+        // Restoring a store with grids, patterns and a cell log allocates nothing either.
+        restore(&mut Reader::new(snap.bytes()), &mut target).unwrap();
     }
     let allocated = ALLOCATIONS.load(Ordering::Relaxed) - before;
     assert!(sum > 0.0);

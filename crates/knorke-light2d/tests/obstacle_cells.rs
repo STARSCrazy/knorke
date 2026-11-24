@@ -3,7 +3,7 @@
 //! tests for what the redesign adds: typed errors with stable codes, the cell log in snapshots.
 
 use knorke_light2d::obstacle::{
-    CellChange, CellLog, CellRect, ObstacleError, ShapeDesc, TileGridDesc,
+    CellChange, CellChangeLog, CellRect, ObstacleError, ShapeDesc, TileGridDesc, TileView,
 };
 use knorke_light2d::{ObstacleId, ObstacleStore};
 use knorke_types::{Reader, Snapshot, SnapshotBuf, SnapshotError, restore};
@@ -40,8 +40,8 @@ fn changes(store: &ObstacleStore, since: u64) -> Vec<CellChange> {
     out
 }
 
-fn grid(store: &ObstacleStore, id: ObstacleId) -> &knorke_light2d::obstacle::TileCells {
-    &store.get(id).unwrap().grid
+fn grid(store: &ObstacleStore, id: ObstacleId) -> TileView<'_> {
+    store.tile(id).unwrap()
 }
 
 #[test]
@@ -62,8 +62,8 @@ fn a_rectangle_of_cells_changes_only_the_given_channels() {
     assert_eq!(c.solid[4 + 2], 3);
     assert_eq!(c.solid[0], 2);
     assert_eq!(c.opacity[4 + 1], 200); // unchanged channel
-    assert_eq!(c.max_level, 3);
-    assert_eq!(c.partial_cells, 11); // the empty cell no longer counts
+    assert_eq!(c.grid.max_level, 3);
+    assert_eq!(c.grid.partial_cells, 11); // the empty cell no longer counts
     assert_eq!(store.max_finite_top(), 30.0);
     // No full replacement: the static version and revision stay, the cell log grows.
     assert_eq!(store.static_version(), static_version);
@@ -86,7 +86,7 @@ fn a_rectangle_of_cells_changes_only_the_given_channels() {
     store
         .set_tile_cells(t, CellRect::new(2, 1, 1, 1), Some(&[2]), None, None)
         .unwrap();
-    assert_eq!(grid(&store, t).max_level, 2);
+    assert_eq!(grid(&store, t).grid.max_level, 2);
 
     // Opacity and edges alone; the edges channel is created with 0 = whole cell elsewhere.
     store
@@ -99,8 +99,8 @@ fn a_rectangle_of_cells_changes_only_the_given_channels() {
         )
         .unwrap();
     let c = grid(&store, t);
-    assert_eq!(c.partial_cells, 8);
-    assert_eq!(c.edge_cells, 2);
+    assert_eq!(c.grid.partial_cells, 8);
+    assert_eq!(c.grid.edge_cells, 2);
     assert_eq!(c.edges.len(), 12);
     assert_eq!(c.edges[2 * 4 + 2], 15);
     assert_eq!(c.edges[0], 0);
@@ -227,7 +227,7 @@ fn the_change_log_reports_what_it_lost() {
     let mut store = ObstacleStore::new();
     let g = CellGrid::new();
     let t = store.create_tile_grid(&g.desc()).unwrap();
-    for _ in 0..=CellLog::SIZE {
+    for _ in 0..=CellChangeLog::SIZE {
         store
             .set_tile_cells(t, CellRect::new(0, 0, 1, 1), Some(&[2]), None, None)
             .unwrap();
@@ -235,7 +235,7 @@ fn the_change_log_reports_what_it_lost() {
     let mut count = 0u64;
     assert!(!store.cell_log().for_each(0, |_| count += 1));
     assert!(store.cell_log().for_each(1, |_| count += 1));
-    assert_eq!(count, CellLog::SIZE);
+    assert_eq!(count, CellChangeLog::SIZE);
     count = 0;
     assert!(
         store
@@ -268,7 +268,7 @@ fn levels_change_top_and_base_together_through_the_cell_log() {
     assert_eq!((c.solid[1], c.base_levels[1]), (1, 0));
     assert_eq!((c.solid[2], c.base_levels[2]), (5, 3));
     assert_eq!((c.solid[0], c.base_levels[0]), (2, 1));
-    assert_eq!(c.max_level, 5);
+    assert_eq!(c.grid.max_level, 5);
     assert_eq!(store.max_finite_top(), 50.0);
     assert_eq!(store.static_version(), static_version);
     assert_eq!(store.get(t).unwrap().revision, revision);
@@ -295,11 +295,11 @@ fn levels_change_top_and_base_together_through_the_cell_log() {
             .set_tile_cell_levels(t, top, Some(&[2]), None)
             .is_err()
     );
-    assert_eq!(grid(&store, t).max_level, 5);
+    assert_eq!(grid(&store, t).grid.max_level, 5);
     store
         .set_tile_cell_levels(t, top, Some(&[2]), Some(&[0]))
         .unwrap();
-    assert_eq!(grid(&store, t).max_level, 2);
+    assert_eq!(grid(&store, t).grid.max_level, 2);
     assert_eq!(store.max_finite_top(), 20.0);
     // Nothing to change is a valid no-op.
     store
@@ -412,9 +412,9 @@ fn compare_logs_only_the_changed_cells() {
     assert_eq!(log[0].cells, CellRect::new(9, 5, 1, 1));
     assert_eq!(log[1].cells, CellRect::new(50, 33, 1, 1));
     let c = grid(&store, t);
-    assert_eq!((&c.solid, &c.base_levels), (&g.solid, &g.base));
-    assert_eq!((&c.opacity, &c.edges), (&g.opacity, &g.edges));
-    assert_eq!(c.max_level, 6);
+    assert_eq!((c.solid, c.base_levels), (&g.solid[..], &g.base[..]));
+    assert_eq!((c.opacity, c.edges), (&g.opacity[..], &g.edges[..]));
+    assert_eq!(c.grid.max_level, 6);
 
     // The stored grid equals one built from the same desc (derived counts included).
     let mut fresh = ObstacleStore::new();
@@ -539,4 +539,57 @@ fn the_cell_log_is_part_of_the_snapshot() {
     // Version 1 of the section (before cell logs) is refused, not misread.
     let r = Snapshot::restore(&mut other, 1, &mut Reader::new(&[]));
     assert!(matches!(r, Err(SnapshotError::UnsupportedVersion { .. })));
+}
+
+#[test]
+fn the_store_is_the_cell_log_of_the_shadow_plan() {
+    use knorke_light2d::shadow::CellLog as PlanLog;
+    let mut store = ObstacleStore::new();
+    let g = CellGrid::new();
+    let t = store.create_tile_grid(&g.desc()).unwrap();
+    store
+        .set_tile_cells(t, CellRect::new(1, 1, 2, 1), Some(&[3, 3]), None, None)
+        .unwrap();
+    assert_eq!(PlanLog::cell_version(&store), 1);
+    let mut seen = Vec::new();
+    assert!(PlanLog::for_each_change_since(&store, 0, &mut |id, r| seen.push((id, r))));
+    assert_eq!(seen, vec![(t, CellRect::new(1, 1, 2, 1))]);
+}
+
+#[test]
+fn grids_survive_arena_compaction_and_replacement_by_other_sizes() {
+    let mut store = ObstacleStore::new();
+    let g = CellGrid::new();
+    let keep = store.create_tile_grid(&g.desc()).unwrap();
+    store
+        .set_tile_cells(
+            keep,
+            CellRect::new(0, 0, 1, 1),
+            Some(&[7]),
+            Some(&[9]),
+            None,
+        )
+        .unwrap();
+    // Churn: grids of growing size are created and destroyed, which leaves garbage in the byte
+    // arena until it compacts.
+    for n in 1..60u32 {
+        let solid = vec![1u8; (n * n) as usize];
+        let id = store
+            .create_tile_grid(&TileGridDesc::new(n, n, &solid))
+            .unwrap();
+        let bigger = vec![2u8; ((n + 1) * (n + 1)) as usize];
+        store
+            .set_tile_grid(id, &TileGridDesc::new(n + 1, n + 1, &bigger))
+            .unwrap();
+        store.destroy(id).unwrap();
+    }
+    let c = grid(&store, keep);
+    assert_eq!((c.solid[0], c.opacity[0], c.solid[1]), (7, 9, 2));
+    assert_eq!(c.grid.max_level, 7);
+    // The state still round-trips (the restore check recomputes counts and garbage).
+    let mut buf = SnapshotBuf::new();
+    buf.save(&store);
+    let mut other = ObstacleStore::new();
+    restore(&mut Reader::new(buf.bytes()), &mut other).unwrap();
+    assert_eq!(grid(&other, keep), grid(&store, keep));
 }

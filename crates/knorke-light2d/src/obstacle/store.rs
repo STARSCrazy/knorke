@@ -272,7 +272,8 @@ impl ObstacleStore {
         let old = self.obstacles.get(id).ok_or_else(|| invalid(id))?;
         check_fits_shape(old, desc)?;
         let box_corners = prepare_shape(&mut self.tri, &mut self.scratch, desc)?;
-        let (old_triangles, old_outline, was_grid) = (old.triangles, old.outline, old.is_tile_grid());
+        let (old_triangles, old_outline, was_grid) =
+            (old.triangles, old.outline, old.is_tile_grid());
         if was_grid {
             self.release_grid_data(id);
         }
@@ -865,7 +866,8 @@ impl ObstacleStore {
     /// Recomputes the garbage of the byte and word arenas.
     fn check_restored_grids(&mut self) -> Result<(), SnapshotError> {
         const BAD: SnapshotError = SnapshotError::Invalid("obstacle violates the obstacle rules");
-        const BAD_SPAN: SnapshotError = SnapshotError::Invalid("obstacle cells outside their arena");
+        const BAD_SPAN: SnapshotError =
+            SnapshotError::Invalid("obstacle cells outside their arena");
         const BAD_PATTERN: SnapshotError = SnapshotError::Invalid("obstacle pattern assignment");
         let (mut live_bytes, mut live_words) = (0usize, 0usize);
         for (_, s) in self.obstacles.iter_mut() {

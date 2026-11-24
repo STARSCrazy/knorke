@@ -10,10 +10,10 @@
 //! Redesign against the C++ version: `SDL_Rect` (signed, checked at run time) becomes the
 //! half-open [`CellRect`]; "channel pointer or null" becomes `Option<&[u8]>` with a checked
 //! length; errors are typed ([`ObstacleError`]) instead of SDL error strings. The cell log is a
-//! fixed ring of [`CellLog::SIZE`] entries and never allocates; it is part of the store snapshot.
+//! fixed ring of [`CellChangeLog::SIZE`] entries and never allocates; it is part of the store snapshot.
 //!
 //! A cell edit is *not* a store change in the sense of `revision`/`dirty_*`: like in Chiaro, a
-//! consumer (the shadow cache, P16) follows the grid through [`CellLog`] and redraws only the
+//! consumer (the shadow cache, P16) follows the grid through [`CellChangeLog`] and redraws only the
 //! rectangle. Replacing the whole grid (`set_tile_grid`) is a normal change.
 
 use super::desc::{ObstacleCommon, TileGridDesc};
@@ -22,19 +22,9 @@ use super::store::{Arena, ObstacleId};
 use super::stored::TileCells;
 use knorke_types::{Reader, SnapshotError, Writer};
 
-/// A rectangle of cells of a tile grid, half-open: `[x0, x1) x [y0, y1)`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct CellRect {
-    /// First column.
-    pub x0: u32,
-    /// First row.
-    pub y0: u32,
-    /// One past the last column.
-    pub x1: u32,
-    /// One past the last row.
-    pub y1: u32,
-}
+pub use crate::shadow::CellRect;
 
+/// Constructors and cell arithmetic for the rectangle the shadow plan also uses.
 impl CellRect {
     /// A rectangle from its corner and size.
     pub const fn new(x: u32, y: u32, width: u32, height: u32) -> Self {
@@ -77,25 +67,25 @@ pub struct CellChange {
     pub cells: CellRect,
 }
 
-/// The last [`CellLog::SIZE`] cell changes of a store, numbered by a version that rises with every
+/// The last [`CellChangeLog::SIZE`] cell changes of a store, numbered by a version that rises with every
 /// one. A consumer remembers the version it has seen and asks for everything after it.
 #[derive(Clone, Debug)]
-pub struct CellLog {
+pub struct CellChangeLog {
     /// Change `v` is at `v % SIZE`.
-    log: [Option<CellChange>; CellLog::SIZE as usize],
+    log: [Option<CellChange>; CellChangeLog::SIZE as usize],
     version: u64,
 }
 
-impl Default for CellLog {
+impl Default for CellChangeLog {
     fn default() -> Self {
         Self {
-            log: [None; CellLog::SIZE as usize],
+            log: [None; CellChangeLog::SIZE as usize],
             version: 0,
         }
     }
 }
 
-impl CellLog {
+impl CellChangeLog {
     /// Changes the log keeps.
     pub const SIZE: u64 = 64;
 
@@ -363,8 +353,10 @@ impl TileCells {
         let columns = self.columns as usize;
         let (mut partial, mut edge) = (0u32, 0u32);
         for y in r.y0 as usize..r.y1 as usize {
-            for cell in y * columns + r.x0 as usize..y * columns + r.x1 as usize {
-                if solid[cell] != 0 {
+            let row = y * columns;
+            let cells = row + r.x0 as usize..row + r.x1 as usize;
+            for (cell, &top) in (cells.clone()).zip(&solid[cells]) {
+                if top != 0 {
                     partial += u32::from(opacity.get(cell).is_some_and(|&o| o < 255));
                     edge += u32::from(edges.get(cell).is_some_and(|&e| e != 0));
                 }

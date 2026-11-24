@@ -4,9 +4,7 @@
 //! the snapshot and the replay of assignments.
 
 use knorke_light2d::ObstacleStore;
-use knorke_light2d::obstacle::{
-    CellRect, ObstacleError, PatternSource, ShapeDesc, TileGridDesc, mask_opacity,
-};
+use knorke_light2d::obstacle::{CellRect, ObstacleError, PatternSource, ShapeDesc, TileGridDesc};
 use knorke_types::{Reader, SnapshotBuf, SnapshotError, restore};
 use std::cell::RefCell;
 
@@ -87,9 +85,9 @@ fn a_grid_of_another_size_drops_the_cell_indices_but_keeps_table_and_pattern() {
     store
         .set_tile_grid(grid, &TileGridDesc::new(2, 2, &four))
         .unwrap(); // another size: the indices go
-    let p = &store.get(grid).unwrap().patterns;
-    assert!(p.cells.is_empty());
-    assert_eq!((p.pattern, p.table.len()), (pat, 1));
+    let t = store.tile(grid).unwrap();
+    assert!(t.pattern_cells.is_empty());
+    assert_eq!((t.pattern, t.pattern_table.len()), (pat, 1));
 }
 
 #[test]
@@ -124,7 +122,7 @@ fn set_pattern_on_box_circle_and_polygon_with_64_corners_but_not_65() {
         store.set_shape(boxed, &ShapeDesc::polygon(&v65)),
         Err(ObstacleError::PatternVertices { corners: 65 })
     ));
-    assert_eq!(store.get(boxed).unwrap().outline.len(), 4);
+    assert_eq!(store.outline(boxed).len(), 4);
     // The same check in the batch, which then changes nothing.
     let e = store
         .set_shapes(&[boxed][..], &[ShapeDesc::polygon(&v65)][..])
@@ -137,7 +135,7 @@ fn set_pattern_on_box_circle_and_polygon_with_64_corners_but_not_65() {
             ..
         }
     ));
-    assert_eq!(store.get(boxed).unwrap().outline.len(), 4);
+    assert_eq!(store.outline(boxed).len(), 4);
 }
 
 #[test]
@@ -223,7 +221,7 @@ fn table_limit_cell_indices_and_what_an_error_changes() {
         .set_tile_pattern_table(grid, &[p1; 256], &pats)
         .unwrap_err();
     assert_eq!(e, ObstacleError::PatternTable { count: 256 });
-    assert_eq!(store.get(grid).unwrap().patterns.table.len(), 255);
+    assert_eq!(store.tile(grid).unwrap().pattern_table.len(), 255);
 
     store
         .set_tile_pattern_table(grid, &[p1, p2], &pats)
@@ -231,7 +229,7 @@ fn table_limit_cell_indices_and_what_an_error_changes() {
     store
         .set_tile_pattern_cells(grid, CellRect::new(1, 1, 2, 1), &[1, 2])
         .unwrap();
-    let c = &store.get(grid).unwrap().patterns.cells;
+    let c = store.tile(grid).unwrap().pattern_cells;
     assert_eq!((c[4 + 1], c[4 + 2]), (1, 2));
     let version = store.cell_version();
     let revision = store.get(grid).unwrap().revision;
@@ -247,7 +245,7 @@ fn table_limit_cell_indices_and_what_an_error_changes() {
             table: 2
         }
     );
-    assert_eq!(store.get(grid).unwrap().patterns.cells[0], 0);
+    assert_eq!(store.tile(grid).unwrap().pattern_cells[0], 0);
     assert!(matches!(
         store.set_tile_pattern_cells(grid, CellRect::new(3, 0, 2, 1), &[1, 2]),
         Err(ObstacleError::CellRect { .. })
@@ -272,7 +270,7 @@ fn table_limit_cell_indices_and_what_an_error_changes() {
         store.set_tile_pattern_table(grid, &[p1, 77], &pats),
         Err(ObstacleError::PatternNotLive { pattern: 77 })
     );
-    assert_eq!(store.get(grid).unwrap().patterns.table[1], p2);
+    assert_eq!(store.tile(grid).unwrap().pattern_table[1], p2);
 
     // A shape is no grid.
     let boxed = store.create_shape(&square()).unwrap();
@@ -373,12 +371,12 @@ fn opacity_zero_stays_zero_with_a_live_pattern() {
     d.common.opacity = 0.0;
     let boxed = store.create_shape(&d).unwrap();
     store.set_pattern(boxed, half, &pats).unwrap();
-    assert_eq!(mask_opacity(store.get(boxed).unwrap(), 0, &pats), 0.0);
+    assert_eq!(store.mask_opacity(boxed, 0, &pats).unwrap(), 0.0);
 
     let zero = [0u8; 12];
     let grid = store.create_tile_grid(&cells(Some(&zero))).unwrap();
     store.set_pattern(grid, half, &pats).unwrap();
-    assert_eq!(mask_opacity(store.get(grid).unwrap(), 3, &pats), 0.0);
+    assert_eq!(store.mask_opacity(grid, 3, &pats).unwrap(), 0.0);
 }
 
 #[test]

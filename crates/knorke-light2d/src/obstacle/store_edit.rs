@@ -9,7 +9,7 @@
 //! Cell and pattern operations of the [`ObstacleStore`] (P14).
 //!
 //! - Cell edits (`set_tile_cells`, `set_tile_cell_levels`, a compared `set_tile_grid_compare`)
-//!   change bytes in place and go into the [`CellLog`], not into the revision or the dirty sets
+//!   change bytes in place and go into the [`CellChangeLog`], not into the revision or the dirty sets
 //!   (see the cell module docs).
 //! - A pattern assignment (`set_pattern`, `set_tile_pattern_table`) is a change of the obstacle
 //!   like `set_shape`: revision and dirty tracking. `set_tile_pattern_cells` only logs the cells.
@@ -22,7 +22,8 @@
 //! it does not have yet appends it to the arena).
 
 use super::cells::{
-    CellChannels, CellLog, CellRect, MAX_COMPARE_RECTS, changed_cell_rects, same_grid_but_cells,
+    CellChangeLog, CellChannels, CellRect, MAX_COMPARE_RECTS, changed_cell_rects,
+    same_grid_but_cells,
 };
 use super::desc::TileGridDesc;
 use super::error::ObstacleError;
@@ -36,7 +37,7 @@ use knorke_types::{Column, Slots};
 /// The cell log and the working memory of cell and pattern operations.
 #[derive(Clone, Debug, Default)]
 pub(super) struct EditState {
-    pub log: CellLog,
+    pub log: CellChangeLog,
     /// Compared grid: the blocks of one block row.
     pub row: Vec<CellRect>,
     /// `on_patterns_destroyed`: the obstacles that name a destroyed pattern.
@@ -67,6 +68,26 @@ pub struct TileView<'a> {
     pub pattern_cells: &'a [u8],
 }
 
+/// Views are equal when the cells, counts and patterns they show are (not where the store keeps
+/// them).
+impl PartialEq for TileView<'_> {
+    fn eq(&self, o: &Self) -> bool {
+        (self.grid.columns, self.grid.rows) == (o.grid.columns, o.grid.rows)
+            && (
+                self.grid.max_level,
+                self.grid.partial_cells,
+                self.grid.edge_cells,
+            ) == (o.grid.max_level, o.grid.partial_cells, o.grid.edge_cells)
+            && self.solid == o.solid
+            && self.base_levels == o.base_levels
+            && self.opacity == o.opacity
+            && self.edges == o.edges
+            && self.pattern == o.pattern
+            && self.pattern_table == o.pattern_table
+            && self.pattern_cells == o.pattern_cells
+    }
+}
+
 /// The tile grid behind a handle: an error for a stale handle or another kind.
 fn grid_of(
     obstacles: &mut Slots<StoredObstacle>,
@@ -80,9 +101,19 @@ fn grid_of(
     }
 }
 
+impl crate::shadow::CellLog for ObstacleStore {
+    fn cell_version(&self) -> u64 {
+        self.edit.log.version()
+    }
+
+    fn for_each_change_since(&self, version: u64, f: &mut dyn FnMut(ObstacleId, CellRect)) -> bool {
+        self.edit.log.for_each(version, |c| f(c.grid, c.cells))
+    }
+}
+
 impl ObstacleStore {
     /// The log of cell changes, for consumers that follow single grids (the shadow cache).
-    pub fn cell_log(&self) -> &CellLog {
+    pub fn cell_log(&self) -> &CellChangeLog {
         &self.edit.log
     }
 
