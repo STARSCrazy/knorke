@@ -257,654 +257,115 @@ pub const LIGHT_PROGRAM_COUNT: usize = 92;
 
 use LightFeature as F;
 
+/// One program per line: `Base [features] "vertex" "fragment" SecondTarget;`.
+macro_rules! light_programs {
+    ($($base:ident [$($feature:ident),*] $vertex:literal $fragment:literal $second:ident;)*) => {
+        [$(info(
+            LightBase::$base,
+            &[$(LightFeature::$feature),*],
+            $vertex,
+            $fragment,
+            LightSecondTarget::$second,
+        )),*]
+    };
+}
+
 /// Every valid light program, in Chiaro's table order (base, then feature bits ascending).
 /// All of them blend ONE + ONE into the light buffer.
-pub const LIGHT_PROGRAMS: [LightProgramInfo; LIGHT_PROGRAM_COUNT] = [
-    info(
-        LightBase::Light,
-        &[],
-        "light.vert",
-        "light.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface],
-        "light_surface.vert",
-        "light_surface.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Exact],
-        "light_surface.vert",
-        "light_surface_exact.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Direction],
-        "light_surface.vert",
-        "light_surface_direction.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Mask],
-        "light_mask.vert",
-        "light_mask.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Mask],
-        "light_surface_mask.vert",
-        "light_surface_mask.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Exact, F::Mask],
-        "light_surface_mask.vert",
-        "light_surface_exact_mask.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Direction, F::Mask],
-        "light_surface_mask.vert",
-        "light_surface_direction_mask.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Medium],
-        "light.vert",
-        "light_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Medium],
-        "light_surface.vert",
-        "light_surface_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Exact, F::Medium],
-        "light_surface.vert",
-        "light_surface_exact_medium.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Direction, F::Medium],
-        "light_surface.vert",
-        "light_surface_direction_medium.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Mask, F::Medium],
-        "light_mask.vert",
-        "light_mask_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Mask, F::Medium],
-        "light_surface_mask.vert",
-        "light_surface_mask_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Exact, F::Mask, F::Medium],
-        "light_surface_mask.vert",
-        "light_surface_exact_mask_medium.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::Light,
-        &[F::Surface, F::Direction, F::Mask, F::Medium],
-        "light_surface_mask.vert",
-        "light_surface_direction_mask_medium.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[],
-        "light_point.vert",
-        "light_sdf.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height],
-        "light_point.vert",
-        "light_sdf_height.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface],
-        "light_surface_point.vert",
-        "light_sdf_surface.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact],
-        "light_surface_point.vert",
-        "light_sdf_surface_exact.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction],
-        "light_surface_point.vert",
-        "light_sdf_surface_direction.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Area],
-        "light.vert",
-        "light_sdf_area.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Area],
-        "light.vert",
-        "light_sdf_height_area.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Area],
-        "light_surface.vert",
-        "light_sdf_surface_area.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Area],
-        "light_surface.vert",
-        "light_sdf_surface_exact_area.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Area],
-        "light_surface.vert",
-        "light_sdf_surface_direction_area.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Mask],
-        "light_mask.vert",
-        "light_sdf_mask.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Mask],
-        "light_mask.vert",
-        "light_sdf_height_mask.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Mask],
-        "light_surface_mask.vert",
-        "light_sdf_surface_mask.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Mask],
-        "light_surface_mask.vert",
-        "light_sdf_surface_exact_mask.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Mask],
-        "light_surface_mask.vert",
-        "light_sdf_surface_direction_mask.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Pattern],
-        "light_point.vert",
-        "light_sdf_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Pattern],
-        "light_point.vert",
-        "light_sdf_height_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Pattern],
-        "light_surface_point.vert",
-        "light_sdf_surface_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Pattern],
-        "light_surface_point.vert",
-        "light_sdf_surface_exact_pattern.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Pattern],
-        "light_surface_point.vert",
-        "light_sdf_surface_direction_pattern.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Area, F::Pattern],
-        "light.vert",
-        "light_sdf_area_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Area, F::Pattern],
-        "light.vert",
-        "light_sdf_height_area_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Area, F::Pattern],
-        "light_surface.vert",
-        "light_sdf_surface_area_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Area, F::Pattern],
-        "light_surface.vert",
-        "light_sdf_surface_exact_area_pattern.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Area, F::Pattern],
-        "light_surface.vert",
-        "light_sdf_surface_direction_area_pattern.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Mask, F::Pattern],
-        "light_mask.vert",
-        "light_sdf_mask_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Mask, F::Pattern],
-        "light_mask.vert",
-        "light_sdf_height_mask_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Mask, F::Pattern],
-        "light_surface_mask.vert",
-        "light_sdf_surface_mask_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Mask, F::Pattern],
-        "light_surface_mask.vert",
-        "light_sdf_surface_exact_mask_pattern.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Mask, F::Pattern],
-        "light_surface_mask.vert",
-        "light_sdf_surface_direction_mask_pattern.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Medium],
-        "light_point.vert",
-        "light_sdf_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Medium],
-        "light_point.vert",
-        "light_sdf_height_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Medium],
-        "light_surface_point.vert",
-        "light_sdf_surface_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Medium],
-        "light_surface_point.vert",
-        "light_sdf_surface_exact_medium.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Medium],
-        "light_surface_point.vert",
-        "light_sdf_surface_direction_medium.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Area, F::Medium],
-        "light.vert",
-        "light_sdf_area_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Area, F::Medium],
-        "light.vert",
-        "light_sdf_height_area_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Area, F::Medium],
-        "light_surface.vert",
-        "light_sdf_surface_area_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Area, F::Medium],
-        "light_surface.vert",
-        "light_sdf_surface_exact_area_medium.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Area, F::Medium],
-        "light_surface.vert",
-        "light_sdf_surface_direction_area_medium.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Mask, F::Medium],
-        "light_mask.vert",
-        "light_sdf_mask_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Mask, F::Medium],
-        "light_mask.vert",
-        "light_sdf_height_mask_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Mask, F::Medium],
-        "light_surface_mask.vert",
-        "light_sdf_surface_mask_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Mask, F::Medium],
-        "light_surface_mask.vert",
-        "light_sdf_surface_exact_mask_medium.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Mask, F::Medium],
-        "light_surface_mask.vert",
-        "light_sdf_surface_direction_mask_medium.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Pattern, F::Medium],
-        "light_point.vert",
-        "light_sdf_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Pattern, F::Medium],
-        "light_point.vert",
-        "light_sdf_height_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Pattern, F::Medium],
-        "light_surface_point.vert",
-        "light_sdf_surface_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Pattern, F::Medium],
-        "light_surface_point.vert",
-        "light_sdf_surface_exact_pattern_medium.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Pattern, F::Medium],
-        "light_surface_point.vert",
-        "light_sdf_surface_direction_pattern_medium.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Area, F::Pattern, F::Medium],
-        "light.vert",
-        "light_sdf_area_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Area, F::Pattern, F::Medium],
-        "light.vert",
-        "light_sdf_height_area_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Area, F::Pattern, F::Medium],
-        "light_surface.vert",
-        "light_sdf_surface_area_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Area, F::Pattern, F::Medium],
-        "light_surface.vert",
-        "light_sdf_surface_exact_area_pattern_medium.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Area, F::Pattern, F::Medium],
-        "light_surface.vert",
-        "light_sdf_surface_direction_area_pattern_medium.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Mask, F::Pattern, F::Medium],
-        "light_mask.vert",
-        "light_sdf_mask_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Height, F::Mask, F::Pattern, F::Medium],
-        "light_mask.vert",
-        "light_sdf_height_mask_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Mask, F::Pattern, F::Medium],
-        "light_surface_mask.vert",
-        "light_sdf_surface_mask_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Exact, F::Mask, F::Pattern, F::Medium],
-        "light_surface_mask.vert",
-        "light_sdf_surface_exact_mask_pattern_medium.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::LightSdf,
-        &[F::Surface, F::Direction, F::Mask, F::Pattern, F::Medium],
-        "light_surface_mask.vert",
-        "light_sdf_surface_direction_mask_pattern_medium.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::Directional,
-        &[],
-        "fullscreen.vert",
-        "directional.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface],
-        "fullscreen.vert",
-        "directional_surface.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Exact],
-        "fullscreen.vert",
-        "directional_surface_exact.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Direction],
-        "fullscreen.vert",
-        "directional_surface_direction.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Pattern],
-        "fullscreen.vert",
-        "directional_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Pattern],
-        "fullscreen.vert",
-        "directional_surface_pattern.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Exact, F::Pattern],
-        "fullscreen.vert",
-        "directional_surface_exact_pattern.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Direction, F::Pattern],
-        "fullscreen.vert",
-        "directional_surface_direction_pattern.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Medium],
-        "fullscreen.vert",
-        "directional_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Medium],
-        "fullscreen.vert",
-        "directional_surface_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Exact, F::Medium],
-        "fullscreen.vert",
-        "directional_surface_exact_medium.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Direction, F::Medium],
-        "fullscreen.vert",
-        "directional_surface_direction_medium.frag",
-        LightSecondTarget::Direction,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Pattern, F::Medium],
-        "fullscreen.vert",
-        "directional_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Pattern, F::Medium],
-        "fullscreen.vert",
-        "directional_surface_pattern_medium.frag",
-        LightSecondTarget::None,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Exact, F::Pattern, F::Medium],
-        "fullscreen.vert",
-        "directional_surface_exact_pattern_medium.frag",
-        LightSecondTarget::Specular,
-    ),
-    info(
-        LightBase::Directional,
-        &[F::Surface, F::Direction, F::Pattern, F::Medium],
-        "fullscreen.vert",
-        "directional_surface_direction_pattern_medium.frag",
-        LightSecondTarget::Direction,
-    ),
-];
+pub const LIGHT_PROGRAMS: [LightProgramInfo; LIGHT_PROGRAM_COUNT] = light_programs! {
+    Light [] "light.vert" "light.frag" None;
+    Light [Surface] "light_surface.vert" "light_surface.frag" None;
+    Light [Surface, Exact] "light_surface.vert" "light_surface_exact.frag" Specular;
+    Light [Surface, Direction] "light_surface.vert" "light_surface_direction.frag" Direction;
+    Light [Mask] "light_mask.vert" "light_mask.frag" None;
+    Light [Surface, Mask] "light_surface_mask.vert" "light_surface_mask.frag" None;
+    Light [Surface, Exact, Mask] "light_surface_mask.vert" "light_surface_exact_mask.frag" Specular;
+    Light [Surface, Direction, Mask] "light_surface_mask.vert" "light_surface_direction_mask.frag" Direction;
+    Light [Medium] "light.vert" "light_medium.frag" None;
+    Light [Surface, Medium] "light_surface.vert" "light_surface_medium.frag" None;
+    Light [Surface, Exact, Medium] "light_surface.vert" "light_surface_exact_medium.frag" Specular;
+    Light [Surface, Direction, Medium] "light_surface.vert" "light_surface_direction_medium.frag" Direction;
+    Light [Mask, Medium] "light_mask.vert" "light_mask_medium.frag" None;
+    Light [Surface, Mask, Medium] "light_surface_mask.vert" "light_surface_mask_medium.frag" None;
+    Light [Surface, Exact, Mask, Medium] "light_surface_mask.vert" "light_surface_exact_mask_medium.frag" Specular;
+    Light [Surface, Direction, Mask, Medium] "light_surface_mask.vert" "light_surface_direction_mask_medium.frag" Direction;
+    LightSdf [] "light_point.vert" "light_sdf.frag" None;
+    LightSdf [Height] "light_point.vert" "light_sdf_height.frag" None;
+    LightSdf [Surface] "light_surface_point.vert" "light_sdf_surface.frag" None;
+    LightSdf [Surface, Exact] "light_surface_point.vert" "light_sdf_surface_exact.frag" Specular;
+    LightSdf [Surface, Direction] "light_surface_point.vert" "light_sdf_surface_direction.frag" Direction;
+    LightSdf [Area] "light.vert" "light_sdf_area.frag" None;
+    LightSdf [Height, Area] "light.vert" "light_sdf_height_area.frag" None;
+    LightSdf [Surface, Area] "light_surface.vert" "light_sdf_surface_area.frag" None;
+    LightSdf [Surface, Exact, Area] "light_surface.vert" "light_sdf_surface_exact_area.frag" Specular;
+    LightSdf [Surface, Direction, Area] "light_surface.vert" "light_sdf_surface_direction_area.frag" Direction;
+    LightSdf [Mask] "light_mask.vert" "light_sdf_mask.frag" None;
+    LightSdf [Height, Mask] "light_mask.vert" "light_sdf_height_mask.frag" None;
+    LightSdf [Surface, Mask] "light_surface_mask.vert" "light_sdf_surface_mask.frag" None;
+    LightSdf [Surface, Exact, Mask] "light_surface_mask.vert" "light_sdf_surface_exact_mask.frag" Specular;
+    LightSdf [Surface, Direction, Mask] "light_surface_mask.vert" "light_sdf_surface_direction_mask.frag" Direction;
+    LightSdf [Pattern] "light_point.vert" "light_sdf_pattern.frag" None;
+    LightSdf [Height, Pattern] "light_point.vert" "light_sdf_height_pattern.frag" None;
+    LightSdf [Surface, Pattern] "light_surface_point.vert" "light_sdf_surface_pattern.frag" None;
+    LightSdf [Surface, Exact, Pattern] "light_surface_point.vert" "light_sdf_surface_exact_pattern.frag" Specular;
+    LightSdf [Surface, Direction, Pattern] "light_surface_point.vert" "light_sdf_surface_direction_pattern.frag" Direction;
+    LightSdf [Area, Pattern] "light.vert" "light_sdf_area_pattern.frag" None;
+    LightSdf [Height, Area, Pattern] "light.vert" "light_sdf_height_area_pattern.frag" None;
+    LightSdf [Surface, Area, Pattern] "light_surface.vert" "light_sdf_surface_area_pattern.frag" None;
+    LightSdf [Surface, Exact, Area, Pattern] "light_surface.vert" "light_sdf_surface_exact_area_pattern.frag" Specular;
+    LightSdf [Surface, Direction, Area, Pattern] "light_surface.vert" "light_sdf_surface_direction_area_pattern.frag" Direction;
+    LightSdf [Mask, Pattern] "light_mask.vert" "light_sdf_mask_pattern.frag" None;
+    LightSdf [Height, Mask, Pattern] "light_mask.vert" "light_sdf_height_mask_pattern.frag" None;
+    LightSdf [Surface, Mask, Pattern] "light_surface_mask.vert" "light_sdf_surface_mask_pattern.frag" None;
+    LightSdf [Surface, Exact, Mask, Pattern] "light_surface_mask.vert" "light_sdf_surface_exact_mask_pattern.frag" Specular;
+    LightSdf [Surface, Direction, Mask, Pattern] "light_surface_mask.vert" "light_sdf_surface_direction_mask_pattern.frag" Direction;
+    LightSdf [Medium] "light_point.vert" "light_sdf_medium.frag" None;
+    LightSdf [Height, Medium] "light_point.vert" "light_sdf_height_medium.frag" None;
+    LightSdf [Surface, Medium] "light_surface_point.vert" "light_sdf_surface_medium.frag" None;
+    LightSdf [Surface, Exact, Medium] "light_surface_point.vert" "light_sdf_surface_exact_medium.frag" Specular;
+    LightSdf [Surface, Direction, Medium] "light_surface_point.vert" "light_sdf_surface_direction_medium.frag" Direction;
+    LightSdf [Area, Medium] "light.vert" "light_sdf_area_medium.frag" None;
+    LightSdf [Height, Area, Medium] "light.vert" "light_sdf_height_area_medium.frag" None;
+    LightSdf [Surface, Area, Medium] "light_surface.vert" "light_sdf_surface_area_medium.frag" None;
+    LightSdf [Surface, Exact, Area, Medium] "light_surface.vert" "light_sdf_surface_exact_area_medium.frag" Specular;
+    LightSdf [Surface, Direction, Area, Medium] "light_surface.vert" "light_sdf_surface_direction_area_medium.frag" Direction;
+    LightSdf [Mask, Medium] "light_mask.vert" "light_sdf_mask_medium.frag" None;
+    LightSdf [Height, Mask, Medium] "light_mask.vert" "light_sdf_height_mask_medium.frag" None;
+    LightSdf [Surface, Mask, Medium] "light_surface_mask.vert" "light_sdf_surface_mask_medium.frag" None;
+    LightSdf [Surface, Exact, Mask, Medium] "light_surface_mask.vert" "light_sdf_surface_exact_mask_medium.frag" Specular;
+    LightSdf [Surface, Direction, Mask, Medium] "light_surface_mask.vert" "light_sdf_surface_direction_mask_medium.frag" Direction;
+    LightSdf [Pattern, Medium] "light_point.vert" "light_sdf_pattern_medium.frag" None;
+    LightSdf [Height, Pattern, Medium] "light_point.vert" "light_sdf_height_pattern_medium.frag" None;
+    LightSdf [Surface, Pattern, Medium] "light_surface_point.vert" "light_sdf_surface_pattern_medium.frag" None;
+    LightSdf [Surface, Exact, Pattern, Medium] "light_surface_point.vert" "light_sdf_surface_exact_pattern_medium.frag" Specular;
+    LightSdf [Surface, Direction, Pattern, Medium] "light_surface_point.vert" "light_sdf_surface_direction_pattern_medium.frag" Direction;
+    LightSdf [Area, Pattern, Medium] "light.vert" "light_sdf_area_pattern_medium.frag" None;
+    LightSdf [Height, Area, Pattern, Medium] "light.vert" "light_sdf_height_area_pattern_medium.frag" None;
+    LightSdf [Surface, Area, Pattern, Medium] "light_surface.vert" "light_sdf_surface_area_pattern_medium.frag" None;
+    LightSdf [Surface, Exact, Area, Pattern, Medium] "light_surface.vert" "light_sdf_surface_exact_area_pattern_medium.frag" Specular;
+    LightSdf [Surface, Direction, Area, Pattern, Medium] "light_surface.vert" "light_sdf_surface_direction_area_pattern_medium.frag" Direction;
+    LightSdf [Mask, Pattern, Medium] "light_mask.vert" "light_sdf_mask_pattern_medium.frag" None;
+    LightSdf [Height, Mask, Pattern, Medium] "light_mask.vert" "light_sdf_height_mask_pattern_medium.frag" None;
+    LightSdf [Surface, Mask, Pattern, Medium] "light_surface_mask.vert" "light_sdf_surface_mask_pattern_medium.frag" None;
+    LightSdf [Surface, Exact, Mask, Pattern, Medium] "light_surface_mask.vert" "light_sdf_surface_exact_mask_pattern_medium.frag" Specular;
+    LightSdf [Surface, Direction, Mask, Pattern, Medium] "light_surface_mask.vert" "light_sdf_surface_direction_mask_pattern_medium.frag" Direction;
+    Directional [] "fullscreen.vert" "directional.frag" None;
+    Directional [Surface] "fullscreen.vert" "directional_surface.frag" None;
+    Directional [Surface, Exact] "fullscreen.vert" "directional_surface_exact.frag" Specular;
+    Directional [Surface, Direction] "fullscreen.vert" "directional_surface_direction.frag" Direction;
+    Directional [Pattern] "fullscreen.vert" "directional_pattern.frag" None;
+    Directional [Surface, Pattern] "fullscreen.vert" "directional_surface_pattern.frag" None;
+    Directional [Surface, Exact, Pattern] "fullscreen.vert" "directional_surface_exact_pattern.frag" Specular;
+    Directional [Surface, Direction, Pattern] "fullscreen.vert" "directional_surface_direction_pattern.frag" Direction;
+    Directional [Medium] "fullscreen.vert" "directional_medium.frag" None;
+    Directional [Surface, Medium] "fullscreen.vert" "directional_surface_medium.frag" None;
+    Directional [Surface, Exact, Medium] "fullscreen.vert" "directional_surface_exact_medium.frag" Specular;
+    Directional [Surface, Direction, Medium] "fullscreen.vert" "directional_surface_direction_medium.frag" Direction;
+    Directional [Pattern, Medium] "fullscreen.vert" "directional_pattern_medium.frag" None;
+    Directional [Surface, Pattern, Medium] "fullscreen.vert" "directional_surface_pattern_medium.frag" None;
+    Directional [Surface, Exact, Pattern, Medium] "fullscreen.vert" "directional_surface_exact_pattern_medium.frag" Specular;
+    Directional [Surface, Direction, Pattern, Medium] "fullscreen.vert" "directional_surface_direction_pattern_medium.frag" Direction;
+};
 
 /// The entry of `program`, `None` if that combination has no shaders.
 pub const fn find_light_program(program: LightProgram) -> Option<&'static LightProgramInfo> {
