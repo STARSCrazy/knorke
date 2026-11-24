@@ -171,15 +171,20 @@ name = "knorke-integration"
 version = "0.0.1"
 dependencies = [
  "knorke-ai",
+ "knorke-contract-tests",
  "knorke-exec",
+ "knorke-gpu",
  "knorke-grid",
+ "knorke-light2d",
  "knorke-lighting",
  "knorke-math",
  "knorke-navigation",
  "knorke-observe",
  "knorke-perception",
+ "knorke-post",
  "knorke-render",
  "knorke-types",
+ "png",
 ]
 
 [[package]]
@@ -189,6 +194,7 @@ dependencies = [
  "knorke-contract-tests",
  "knorke-gpu",
  "knorke-math",
+ "knorke-observe",
  "knorke-types",
  "png",
 ]

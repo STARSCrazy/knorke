@@ -53,6 +53,9 @@ use knorke_light2d::occluder_raster::{
     thin_circle_radius,
 };
 use knorke_light2d::occlusion::{MASK_PROGRAMS, MaskPrograms, OcclusionMask};
+use knorke_light2d::pass_plan::{
+    PassFrame, PassPlan, PassPrepared, PassRecord, PassStages, SceneStores,
+};
 use knorke_light2d::profile::{
     PROFILE_VALUES, ProfilePreset, ProfileShape, build_shape_profile, profile_factor,
 };
@@ -2333,5 +2336,301 @@ fn lights_and_zones_repeat_bit_identically() {
         assert_eq!(b.result.allocations, 0);
         assert_eq!(a.record, b.record);
         assert_eq!(a.record.zones_drawn, 5);
+    });
+}
+
+// ---- the pass plan (P31) --------------------------------------------------------------------
+//
+// The same golden scenes through `PassPlan`, the fixed stage order: occlusion, atlases, zones and
+// lights, composite. Chiaro's HDR buffer (`<scene>.hdr.bin`, `atlas_ref.cpp` since P31) checks the
+// composite with ambient zones, the pure ambient of the direction mode included.
+
+/// The scene and material textures of a golden scene (white scene, empty material buffer).
+struct PlanTextures<'d> {
+    scene: Texture<'d>,
+    material: Option<Texture<'d>>,
+}
+
+impl<'d> PlanTextures<'d> {
+    fn new(gpu: Gpu<'d>, s: &Scene) -> Self {
+        let (w, h) = s.size;
+        assert!(!s.surface, "the plan scenes have no surface buffer");
+        Self {
+            scene: texture(gpu, w, h, &vec![255u8; (w * h * 4) as usize]),
+            material: s
+                .material
+                .then(|| texture(gpu, w, h, &vec![0u8; (w * h * 4) as usize])),
+        }
+    }
+
+    fn frame<'a>(&'a self, s: &'a Scene) -> PassFrame<'a> {
+        PassFrame {
+            material: self.material.as_ref().map(Texture::texture_ref),
+            ..PassFrame::new(self.scene.texture_ref(), &s.projection)
+        }
+    }
+}
+
+fn plan_stores(s: &Scene) -> SceneStores<'_> {
+    SceneStores {
+        zones: Some(&s.zones),
+        profiles: Some(&s.profiles),
+        masks: Some(&s.masks),
+        animations: Some(&s.animations),
+        ..SceneStores::new(&s.lights, &s.obstacles)
+    }
+}
+
+/// What one frame of the plan left: the HDR and light buffer bytes and the decision.
+struct PlanOut {
+    prepared: PassPrepared,
+    record: PassRecord,
+    hdr: Vec<u8>,
+    light: Vec<u8>,
+}
+
+fn plan_frame(
+    gpu: Gpu<'_>,
+    plan: &mut PassPlan<'_>,
+    s: &Scene,
+    stores: &SceneStores<'_>,
+    tex: &PlanTextures<'_>,
+) -> PlanOut {
+    let frame = tex.frame(s);
+    let prepared = plan.prepare(&frame, stores, &s.settings).unwrap();
+    let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+    let record = plan.record(&mut cmd, &frame, &s.settings).unwrap();
+    let download = |cmd: &mut CommandBuffer<'_>, t: TextureRef<'_>| {
+        let down = DownloadBuffer::new(gpu, t.desc().bytes() as u32).unwrap();
+        cmd.copy_pass().unwrap().download_texture(t, &down).unwrap();
+        down
+    };
+    let hdr = download(&mut cmd, plan.hdr().unwrap());
+    let light = plan
+        .lighting()
+        .light_buffer()
+        .map(|t| download(&mut cmd, t));
+    cmd.submit_and_wait().unwrap();
+    let read = |mut d: DownloadBuffer<'_>| {
+        let mut v = vec![0; d.size() as usize];
+        d.read(&mut v).unwrap();
+        v
+    };
+    PlanOut {
+        prepared,
+        record,
+        hdr: read(hdr),
+        light: light.map(read).unwrap_or_default(),
+    }
+}
+
+/// The device, the pack and a counter for one test of the plan.
+fn with_plan(body: impl for<'d> FnOnce(Gpu<'d>, &'d LiveCounter, &dyn Fn() -> PassPlan<'d>)) {
+    let Some((_guard, device, pack)) = device() else {
+        return;
+    };
+    let counter = LiveCounter::new();
+    {
+        let gpu = Gpu::new(&device, &counter);
+        let fresh = || PassPlan::new(gpu, pack.clone()).unwrap();
+        body(gpu, &counter, &fresh);
+    }
+    assert_eq!(counter.live(), 0, "GPU objects leaked");
+}
+
+#[test]
+fn pass_plan_matches_chiaro_up_to_the_hdr_buffer() {
+    with_plan(|gpu, _, fresh| {
+        let mut failures = Vec::new();
+        for s in [
+            scene_profile(),
+            scene_mask(),
+            scene_zones(),
+            scene_zones_only(),
+            scene_zones_direction(),
+        ] {
+            let mut plan = fresh();
+            let tex = PlanTextures::new(gpu, &s);
+            let out = plan_frame(gpu, &mut plan, &s, &plan_stores(&s), &tex);
+            let name = s.name;
+            for (what, got) in [("light", &out.light), ("hdr", &out.hdr)] {
+                let (n, max) = diff(got, &golden(&format!("{name}.{what}.bin")));
+                eprintln!("{name}: {what} buffer {n} differing texels (max {max})");
+                if n > 0 {
+                    failures.push(format!("{name}.{what}: {n} texels, max {max}"));
+                }
+            }
+            let stages = out.prepared.stages;
+            assert!(stages.contains(PassStages::COMPOSITE), "{name}");
+            assert_eq!(
+                stages.contains(PassStages::ZONES),
+                name.starts_with("zones"),
+                "{name}: zone pass"
+            );
+            assert_eq!(
+                stages.contains(PassStages::LIGHTS),
+                name != "zones_only",
+                "{name}: light pass"
+            );
+            assert_eq!(
+                stages.contains(PassStages::OCCLUSION),
+                out.prepared.mask_update.is_some(),
+                "{name}"
+            );
+            if name == "zones_direction" {
+                assert_eq!(out.prepared.lighting.pure_ambient, PureAmbient::Separate);
+            }
+            let mut sink = Diagnostics::default();
+            assert_eq!(plan.check_invariants(&mut sink), 0, "{name}: {:?}", sink.0);
+        }
+        assert!(failures.is_empty(), "not bit identical: {failures:#?}");
+    });
+}
+
+#[derive(Default)]
+struct Diagnostics(Vec<knorke_types::Diagnostic>);
+
+impl knorke_observe::Sink<knorke_types::Diagnostic> for Diagnostics {
+    fn emit(&mut self, d: knorke_types::Diagnostic) {
+        self.0.push(d);
+    }
+}
+
+#[test]
+fn pass_plan_steady_state_reuses_the_mask_and_allocates_nothing() {
+    with_plan(|gpu, counter, fresh| {
+        let mut plan = fresh();
+        let s = scene_zones();
+        let tex = PlanTextures::new(gpu, &s);
+        let stores = plan_stores(&s);
+        let first = plan_frame(gpu, &mut plan, &s, &stores, &tex);
+        assert_eq!(first.prepared.mask_update, Some(MaskUpdate::Full));
+        assert!(first.prepared.allocations > 0);
+        let live = counter.live();
+        for _ in 0..3 {
+            let again = plan_frame(gpu, &mut plan, &s, &stores, &tex);
+            assert_eq!(again.prepared.mask_update, Some(MaskUpdate::Reused));
+            assert_eq!(again.prepared.allocations, 0);
+            assert_eq!(again.hdr, first.hdr, "bit identical frame to frame");
+            assert_eq!(again.record.lighting, first.record.lighting);
+            assert_eq!(counter.live(), live, "no GPU object per frame");
+        }
+        let stats = plan.stats();
+        assert_eq!(
+            (stats.frames, stats.mask_full, stats.mask_reused),
+            (4, 1, 3)
+        );
+        // After invalidate the mask is rebuilt, and the image stays the same.
+        plan.invalidate();
+        let rebuilt = plan_frame(gpu, &mut plan, &s, &stores, &tex);
+        assert_eq!(rebuilt.prepared.mask_update, Some(MaskUpdate::Full));
+        assert_eq!(rebuilt.hdr, first.hdr);
+    });
+}
+
+/// GPU resources are no simulation state (ADR 0010): stores saved and restored into fresh
+/// stores, drawn by a new plan, give the same image.
+#[test]
+fn pass_plan_rebuilds_the_same_image_from_restored_stores() {
+    use knorke_types::{Reader, SnapshotBuf, restore};
+    with_plan(|gpu, _, fresh| {
+        let s = scene_mask();
+        let tex = PlanTextures::new(gpu, &s);
+        let mut plan = fresh();
+        let before = plan_frame(gpu, &mut plan, &s, &plan_stores(&s), &tex);
+        drop(plan);
+
+        let mut buf = SnapshotBuf::new();
+        buf.save(&s.lights);
+        buf.save(&s.obstacles);
+        buf.save(&s.masks);
+        buf.save(&s.animations);
+        let mut t = Scene::golden("mask", s.settings.ambient, 1.0);
+        let mut r = Reader::new(buf.bytes());
+        restore(&mut r, &mut t.lights).unwrap();
+        restore(&mut r, &mut t.obstacles).unwrap();
+        restore(&mut r, &mut t.masks).unwrap();
+        restore(&mut r, &mut t.animations).unwrap();
+        assert_eq!(r.remaining(), 0);
+
+        let mut plan = fresh();
+        let after = plan_frame(gpu, &mut plan, &t, &plan_stores(&t), &tex);
+        assert_eq!(after.prepared.mask_update, Some(MaskUpdate::Full));
+        assert_eq!(after.hdr, before.hdr, "same image from the restored stores");
+        assert_eq!(after.light, before.light);
+    });
+}
+
+/// A visitor that keeps `path.name = value` lines.
+#[derive(Default)]
+struct Lines {
+    path: Vec<String>,
+    lines: Vec<String>,
+}
+
+impl knorke_observe::Visitor for Lines {
+    fn value(&mut self, name: &str, value: knorke_observe::Value<'_>) {
+        let mut p = self.path.join(".");
+        if !p.is_empty() {
+            p.push('.');
+        }
+        self.lines.push(format!("{p}{name} = {value:?}"));
+    }
+    fn begin_object(&mut self, name: &str) {
+        self.path.push(name.to_owned());
+    }
+    fn begin_list(&mut self, name: &str) {
+        self.path.push(name.to_owned());
+    }
+    fn end(&mut self) {
+        self.path.pop();
+    }
+}
+
+#[test]
+fn pass_plan_inspects_its_stages_and_rejects_bad_frames() {
+    use knorke_observe::Inspect;
+    with_plan(|gpu, _, fresh| {
+        let mut plan = fresh();
+        let s = scene_zones_direction();
+        let tex = PlanTextures::new(gpu, &s);
+        let stores = plan_stores(&s);
+        // Record without prepare.
+        let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+        let e = plan
+            .record(&mut cmd, &tex.frame(&s), &s.settings)
+            .unwrap_err();
+        assert_eq!(e.code, knorke_light2d::pass_plan::NOT_PREPARED);
+        cmd.submit_and_wait().unwrap();
+        // A buffer of the wrong size.
+        let small = texture(gpu, 8, 8, &[0u8; 8 * 8 * 4]);
+        let bad = PassFrame {
+            glow: Some(small.texture_ref()),
+            ..tex.frame(&s)
+        };
+        let e = plan.prepare(&bad, &stores, &s.settings).unwrap_err();
+        assert_eq!(e.code, knorke_light2d::pass_plan::INVALID_FRAME);
+        assert_eq!(plan.stats().failed, 1);
+
+        plan_frame(gpu, &mut plan, &s, &stores, &tex);
+        let mut v = Lines::default();
+        plan.inspect(&mut v);
+        let text = v.lines.join("\n");
+        for line in [
+            "frames = U64(1)",
+            "failed = U64(1)",
+            "last.zones = Bool(true)",
+            "last.lights = Bool(true)",
+            "last.occlusion = Bool(false)",
+            "last.mask_update = Str(\"none\")",
+            "last.detail_mode = Str(\"direction\")",
+            "buffers.hdr.width = U64(96)",
+            "buffers.light.width = U64(48)",
+            "buffers.pure_ambient.height = U64(24)",
+            "buffers.mask.width = U64(0)",
+        ] {
+            assert!(text.contains(line), "missing `{line}` in\n{text}");
+        }
+        assert!(plan.pipeline_count() > 0);
     });
 }

@@ -9,8 +9,8 @@ publish.workspace = true
 
 [features]
 default = []
-# GPU stages on knorke-gpu (SDL3 GPU). Today only the gate spike (`gpu_spike`), see its docs.
-gpu = ["dep:knorke-gpu", "knorke-gpu/sdl"]
+# GPU stages on knorke-gpu (SDL3 GPU) and the pass plan (with `Inspect` from knorke-observe, no_std).
+gpu = ["dep:knorke-gpu", "knorke-gpu/sdl", "dep:knorke-observe"]
 # `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.
 sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
 
@@ -18,6 +18,7 @@ sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
 knorke-types = { workspace = true }
 knorke-math = { workspace = true }
 knorke-gpu = { workspace = true, optional = true }
+knorke-observe = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Gate spike test: golden PNGs and the parity metric of the Chiaro port (P3).

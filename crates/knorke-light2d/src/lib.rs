@@ -21,11 +21,13 @@
 //! | [`light_program`] (+ `light_pipelines` with `gpu`) | light program family: table of the 92 programs, rules, binding layouts, lazy pipelines | P24 |
 //! | [`lighting`] | light pass: uniform blocks, program choice, draw plan; `LightingStage` with `gpu` | P25 |
 //! | [`composite`] | composite pass: programs, binding layouts, uniform block; `CompositeStage` with `gpu` | P27 |
+//! | [`pass_plan`] | the fixed stage order of a frame; `PassPlan` with `gpu` | P31 |
 //!
 //! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
 //! dependency: the occluder raster (P22), the occlusion mask (P23), the light pipelines (P24),
-//! the light pass (P25), the composite pass (P27) and the rest of the gate spike `gpu_spike`
-//! (sprite mask, distance field and output, to be replaced by P31).
+//! the atlases and the zone pass (P26), the light pass (P25), the composite pass (P27) and the
+//! pass plan that runs them in order (P31). The output (tonemap, bloom, target) is
+//! `knorke-post`; `knorke-integration` joins both.
 //! This crate does not know `knorke-post`, `knorke-lighting`, `knorke-render` or
 //! the AI crates (`cargo xtask deps`).
 //!
@@ -51,8 +53,6 @@ pub mod codec;
 pub mod composite;
 pub mod frame_warnings;
 pub mod gpu_light;
-#[cfg(feature = "gpu")]
-pub mod gpu_spike;
 pub mod light;
 pub mod light_culling;
 pub mod light_mask;
@@ -68,6 +68,7 @@ pub mod material;
 pub mod obstacle;
 pub mod occluder_raster;
 pub mod occlusion;
+pub mod pass_plan;
 pub mod profile;
 pub mod profile_import;
 pub mod profile_store;
