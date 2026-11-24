@@ -24,30 +24,31 @@
 //    misrepresented as being the original software.
 // 3. This notice may not be removed or altered from any source distribution.
 //
-// Altered: rewritten in Rust for the Knorke Engine as a throw-away gate spike.
+// Altered: rewritten in Rust for the Knorke Engine as a throw-away gate spike. Since P25 the
+// light pass is the real `lighting::LightingStage`; what is left here (sprite mask, field,
+// composite, output) goes with P27 and P31.
 
 //! **SPIKE – not an API.** Gate spike of the Chiaro port (plan §5.1, §17.12 step 2,
 //! ADR 0014): proves that a native Rust path on `knorke-gpu` reproduces Chiaro's image with
 //! Chiaro's own compiled shaders (`.kpak`, `cargo xtask shaders`).
 //!
-//! Scope is deliberately narrow, one point light in one of two modes:
+//! Scope is deliberately narrow, the lights of a [`LightList`] in one of two modes:
 //!
-//! - **exact material mode** (material buffer, no shadows): `light_surface` +
-//!   `light_surface_exact` into light and specular buffer (golden scene `minimal_normal_map`);
-//! - **flat shadow mode** (occlusion sprite buffer, no material): occlusion mask, jump-flooding
-//!   distance field (seed, 6 steps, distance) and `light_point` + `light_sdf`.
+//! - **exact material mode** (material buffer, no shadows; golden scene `minimal_normal_map`);
+//! - **flat shadow mode** (occlusion sprite buffer, no material): occlusion mask from the
+//!   sprite, jump-flooding distance field (seed, 6 steps, distance).
 //!
-//! Then composite and output, with Chiaro's default settings. No culling, no obstacle store
-//! (only the sprite mask), no heights, profiles, masks, zones, medium, bloom or incremental
-//! mask updates. The output pass belongs to `knorke-post` (P20) after the port; it sits here
-//! only because the spike needs a finished image.
+//! The light pass itself is the real [`LightingStage`] (P25). Then composite and output, with
+//! Chiaro's default settings. No obstacle store (only the sprite mask), no heights, zones,
+//! medium, bloom or incremental mask updates. The output pass belongs to `knorke-post` (P20)
+//! after the port; it sits here only because the spike needs a finished image.
 //!
 //! Ownership follows ADR 0002: the host lends the command buffer, the input textures and the
 //! target; this module records copy and render passes into the borrowed command buffer and
 //! never submits, presents or reads back.
 //!
-//! The real port replaces this module with P22–P25 (occlusion, distance field, light program
-//! table, lighting stage), P27 (composite) and P20 (output). Remove it then.
+//! The rest of the port replaces this module: the sprite mask goes into the occlusion stage
+//! (P23 follow-up), composite is P27, the frame plan P31. Remove it then.
 
 //! It records through the safe recording API of `knorke-gpu` (P1b, ADR 0015): borrowed
 //! [`CommandBuffer`], [`TextureRef`] views of the host's textures, no `unsafe`.
@@ -55,7 +56,6 @@
 use std::borrow::Cow;
 
 use knorke_gpu::sys::gpu::{
-    SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
     SDL_GPU_TEXTUREFORMAT_R8G8_UNORM, SDL_GPU_TEXTUREFORMAT_R16_FLOAT,
     SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, SDL_GPU_TEXTUREFORMAT_R32G32_FLOAT,
     SDL_GPUTextureFormat,
@@ -63,16 +63,19 @@ use knorke_gpu::sys::gpu::{
 use knorke_gpu::sys::rect::SDL_Rect;
 use knorke_gpu::{
     Bindings, Blend, ColorTarget, CommandBuffer, Filter, Gpu, Load, PipelineCache, ProgramDesc,
-    ProgramIndex, RenderTarget, SamplerBinding, Samplers, SecondTarget, ShaderLibrary,
-    StageBindings, TextureRef, UploadBuffer,
+    ProgramIndex, RenderTarget, SamplerBinding, Samplers, ShaderLibrary, StageBindings, TextureRef,
 };
 use knorke_math::{Vec3, det};
 use knorke_types::{Diagnostic, DiagnosticCode};
 
-use crate::light::{Height, LightType, StoredLight};
-use crate::light_math::{ground_radius, scaled_buffer_size};
-use crate::material::{screen_right, view_direction};
+use crate::light_culling::LightList;
+use crate::light_math::scaled_buffer_size;
+use crate::light_pipelines::LightPipelines;
+use crate::lighting::{DetailMode, LightingFrame, LightingStage, ShadowMaps};
+use crate::occluder_raster::INFINITE_TOP;
 use crate::projection::Projection;
+use crate::settings::LightSettings;
+use crate::shadow::{MaskAnchor, OcclusionDomain};
 
 /// Format of the light, specular and HDR buffers (Chiaro `kLightFormat`, `kHdrFormat`).
 pub const HDR_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
@@ -84,36 +87,19 @@ const FIELD_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R16_FLOAT;
 pub const SPIKE_UNSUPPORTED: DiagnosticCode =
     DiagnosticCode::new("knorke.light2d.spike.unsupported");
 
-const AUTO_HEIGHT_SCALE: f32 = 0.4; // LightCulling.hpp kAutoHeightScale
-const DEFAULT_WET_RIPPLE_PIXELS: f32 = 8.0; // Settings.hpp
 const MAX_SHOCKWAVES: usize = 16; // CHI_MAX_SHOCKWAVES
 const FIELD_BOUND: u32 = 32; // SdfShadows::kFieldBound (power of two: JfaSpan() == 32)
 /// Jump distances: JfaSpan() / 2 … 1, plus one extra 1 (SdfShadows::RecordPasses).
 const JFA_STEPS: [u32; 6] = [16, 8, 4, 2, 1, 1];
 
-const LIGHT_EXACT: ProgramIndex = 0;
-const LIGHT_SDF: ProgramIndex = 1;
-const COMPOSITE: ProgramIndex = 2;
-const OUTPUT: ProgramIndex = 3;
-const OCCLUSION_MASK: ProgramIndex = 4;
-const JFA_SEED: ProgramIndex = 5;
-const JFA_STEP: ProgramIndex = 6;
-const JFA_DISTANCE: ProgramIndex = 7;
+const COMPOSITE: ProgramIndex = 0;
+const OUTPUT: ProgramIndex = 1;
+const OCCLUSION_MASK: ProgramIndex = 2;
+const JFA_SEED: ProgramIndex = 3;
+const JFA_STEP: ProgramIndex = 4;
+const JFA_DISTANCE: ProgramIndex = 5;
 
-const PROGRAMS: [ProgramDesc; 8] = [
-    // Light + Surface + Exact (cmake/ChiaroLightPrograms.cmake): ONE + ONE into both targets.
-    ProgramDesc {
-        vertex: "light_surface.vert",
-        fragment: "light_surface_exact.frag",
-        blend: Blend::Additive,
-        second: Some(SecondTarget {
-            format: HDR_FORMAT,
-            blend: Blend::Additive,
-        }),
-        primitive: SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
-    },
-    // LightSdf without features: point lights (CHI_POINT_LIGHTS) on the flat ground.
-    ProgramDesc::new("light_point.vert", "light_sdf.frag", Blend::Additive),
+const PROGRAMS: [ProgramDesc; 6] = [
     ProgramDesc::new("fullscreen.vert", "composite.frag", Blend::Opaque),
     ProgramDesc::new("fullscreen.vert", "output.frag", Blend::Opaque),
     ProgramDesc::new("fullscreen.vert", "occlusion_mask.frag", Blend::Max),
@@ -225,68 +211,76 @@ fn domain(frame: &SpikeFrame<'_>) -> Domain {
     }
 }
 
-/// `GpuLight` (light_common.hlsli), 128 bytes, as CollectLights builds it.
-fn gpu_light(light: &StoredLight, frame: &SpikeFrame<'_>, d: &Domain) -> [u8; 128] {
-    let desc = &light.desc;
-    let normal_mode = frame.material.is_some();
-    let z = match desc.height {
-        Height::Auto if normal_mode => AUTO_HEIGHT_SCALE * desc.radius,
-        Height::Auto => 0.0,
-        Height::At(h) => h,
-    };
-    // Normal mode: the quad reaches the radius when the light reaches the lowest surface
-    // (maxHeight 0 without a surface buffer); flat mode: the ground disc.
-    let ground = if normal_mode {
-        if z < desc.radius { desc.radius } else { 0.0 }
-    } else {
-        ground_radius(z, desc.radius)
-    };
-    let p = &frame.projection;
-    let at = desc.position.raw();
-    let scene = p.project(desc.position, 0.0).raw();
-    let axis_scale = ((p.x_axis.x * p.x_axis.x + p.x_axis.y * p.x_axis.y).sqrt()
-        + (p.y_axis.x * p.y_axis.x + p.y_axis.y * p.y_axis.y).sqrt())
-        * 0.5;
-    let mut b = Block::<128>::new();
-    b.f4([at.x, at.y, z, desc.radius]);
-    let c = desc.color * desc.intensity;
-    b.f4([c.x, c.y, c.z, desc.falloff]);
-    b.f4([light.direction.x, light.direction.y, light.direction.z, 0.0]);
-    b.f4([light.cos_inner, light.cos_outer, ground, 0.0]);
-    let m = d.margin as f32;
-    b.f4([
-        if desc.cast_shadows {
-            desc.source_radius * axis_scale
-        } else {
-            0.0
-        },
-        desc.specular,
-        (scene.x + m) * d.texels[0] - d.remainder[0],
-        (scene.y + m) * d.texels[1] - d.remainder[1],
-    ]);
-    b.f4([-1.0, 0.0, 0.0, 0.0]); // no profile
-    b.bytes
-}
-
 /// The spike renderer: shaders, pipelines, samplers and its own buffers.
 #[derive(Debug)]
 pub struct SpikeRenderer<'d> {
     shaders: ShaderLibrary<'d>,
     pipelines: PipelineCache<'d>,
+    light_pipelines: LightPipelines<'d>,
     samplers: Samplers<'d>,
-    light: RenderTarget<'d>,
-    specular: RenderTarget<'d>,
+    lighting: LightingStage<'d>,
     hdr: RenderTarget<'d>,
     mask: RenderTarget<'d>,
     seeds: [RenderTarget<'d>; 2],
     field: RenderTarget<'d>,
-    lights: UploadBuffer<'d>,
 }
 
 /// Result of [`SpikeRenderer::prepare`]: which mode the frame is drawn in.
 #[derive(Clone, Copy, Debug)]
 pub struct Prepared {
     shadows: bool,
+    ambient: Vec3,
+    detail: DetailMode,
+}
+
+/// The settings of the spike: Chiaro's defaults with the frame's ambient.
+fn settings(frame: &SpikeFrame<'_>) -> LightSettings {
+    LightSettings {
+        ambient: frame.ambient,
+        ..LightSettings::default()
+    }
+}
+
+/// The light pass inputs of the frame; `maps` are the sprite mask and its field.
+fn lighting_frame<'a>(
+    frame: &'a SpikeFrame<'a>,
+    settings: &'a LightSettings,
+    lights: &'a LightList,
+    maps: Option<&'a ShadowMaps<'a>>,
+) -> LightingFrame<'a> {
+    LightingFrame {
+        scene: frame.scene,
+        surface: None,
+        material: frame.material,
+        projection: &frame.projection,
+        settings,
+        max_height: 0.0, // no surface buffer
+        lights,
+        shadows: maps,
+        profile_atlas: None,
+        mask_atlas: None,
+    }
+}
+
+/// The sprite mask and its field as the light pass reads them (infinitely tall, flat mode).
+fn shadow_maps_of<'a>(
+    frame: &SpikeFrame<'_>,
+    mask: TextureRef<'a>,
+    field: TextureRef<'a>,
+) -> ShadowMaps<'a> {
+    let domain = OcclusionDomain::new(frame.width(), frame.height(), 1.0);
+    ShadowMaps {
+        domain,
+        remainder: MaskAnchor::compute(&frame.projection, &domain).remainder,
+        mask,
+        field,
+        height: None,
+        height_mode: false,
+        any_partial: false,
+        shadow_top: INFINITE_TOP,
+        scene_max_top: 0.0,
+        casters: [None, None],
+    }
 }
 
 fn missing(what: &str) -> Diagnostic {
@@ -312,45 +306,40 @@ impl<'d> SpikeRenderer<'d> {
     pub fn new(gpu: Gpu<'d>, pack: impl Into<Cow<'static, [u8]>>) -> Result<Self, Diagnostic> {
         let shaders = ShaderLibrary::new(gpu, pack)?;
         let pipelines = PipelineCache::new(&shaders, &PROGRAMS)?;
+        let light_pipelines = LightPipelines::new(&shaders)?;
         Ok(Self {
             shaders,
             pipelines,
+            light_pipelines,
             samplers: Samplers::new(gpu)?,
-            light: RenderTarget::new(gpu),
-            specular: RenderTarget::new(gpu),
+            lighting: LightingStage::new(gpu),
             hdr: RenderTarget::new(gpu),
             mask: RenderTarget::new(gpu),
             seeds: [RenderTarget::new(gpu), RenderTarget::new(gpu)],
             field: RenderTarget::new(gpu),
-            lights: UploadBuffer::new(gpu, SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, 128, "light"),
         })
     }
 
-    /// Everything that can fail: targets, pipelines and the light buffer contents.
+    /// Everything that can fail: targets, pipelines and the light pass (`lights` from
+    /// `collect_lights` for the same frame; shadowed lights need the occlusion buffer).
     pub fn prepare(
         &mut self,
         frame: &SpikeFrame<'_>,
-        light: &StoredLight,
+        lights: &LightList,
     ) -> Result<Prepared, Diagnostic> {
-        let shadows = frame.occlusion.is_some() && light.desc.cast_shadows;
-        if light.desc.kind != LightType::Point
-            || frame.material.is_some() == frame.occlusion.is_some()
+        let shadows = frame.occlusion.is_some()
+            && !(lights.shadowed.is_empty() && lights.shadowed_area.is_empty());
+        if frame.material.is_some() == frame.occlusion.is_some()
             || (frame.occlusion.is_some() && !shadows)
         {
             return Err(Diagnostic::error(
                 SPIKE_UNSUPPORTED,
-                "the spike draws one point light with either a material buffer or a shadow-casting occlusion buffer",
+                "the spike draws lights with either a material buffer or a shadow-casting occlusion buffer",
             ));
         }
         let (w, h) = (frame.width(), frame.height());
         let d = domain(frame);
-        self.light.ensure(w, h, HDR_FORMAT)?;
         self.hdr.ensure(w, h, HDR_FORMAT)?;
-        if frame.material.is_some() {
-            self.specular.ensure(w, h, HDR_FORMAT)?;
-        } else {
-            self.specular.release();
-        }
         if shadows {
             self.mask.ensure(d.width, d.height, MASK_FORMAT)?;
             self.field.ensure(d.width, d.height, FIELD_FORMAT)?;
@@ -358,9 +347,6 @@ impl<'d> SpikeRenderer<'d> {
                 s.ensure(d.width, d.height, SEED_FORMAT)?;
             }
         }
-        self.lights.reserve(128)?;
-        let bytes = gpu_light(light, frame, &d);
-        self.lights.map()?.bytes()[..128].copy_from_slice(&bytes);
         let mut get =
             |p: ProgramIndex, format| self.pipelines.get(&mut self.shaders, p, format).map(|_| ());
         if shadows {
@@ -369,45 +355,48 @@ impl<'d> SpikeRenderer<'d> {
             get(JFA_STEP, SEED_FORMAT)?;
             get(JFA_DISTANCE, FIELD_FORMAT)?;
         }
-        get(if shadows { LIGHT_SDF } else { LIGHT_EXACT }, HDR_FORMAT)?;
         get(COMPOSITE, HDR_FORMAT)?;
         get(OUTPUT, frame.target.format())?;
-        Ok(Prepared { shadows })
+        let settings = settings(frame);
+        let maps = match (shadows, self.mask.texture_ref(), self.field.texture_ref()) {
+            (true, Some(mask), Some(field)) => Some(shadow_maps_of(frame, mask, field)),
+            (true, _, _) => return Err(missing("occlusion mask")),
+            _ => None,
+        };
+        let lit = self.lighting.prepare(
+            &mut self.shaders,
+            &mut self.light_pipelines,
+            &lighting_frame(frame, &settings, lights, maps.as_ref()),
+        )?;
+        Ok(Prepared {
+            shadows,
+            ambient: lit.ambient,
+            detail: lit.detail_mode,
+        })
     }
 
     /// Records upload, occlusion and distance field (shadow mode), light pass, composite and
     /// output into the host's command buffer. `prepared` must come from
-    /// [`prepare`](Self::prepare) with the same frame; otherwise recording fails with a
-    /// diagnostic.
+    /// [`prepare`](Self::prepare) with the same frame and lights; otherwise recording fails
+    /// with a diagnostic.
     pub fn record(
         &self,
         cmd: &mut CommandBuffer<'_>,
         frame: &SpikeFrame<'_>,
+        lights: &LightList,
         prepared: Prepared,
     ) -> Result<(), Diagnostic> {
-        let light_tex = self
-            .light
-            .texture_ref()
-            .ok_or_else(|| missing("light buffer"))?;
         let hdr_tex = self
             .hdr
             .texture_ref()
             .ok_or_else(|| missing("hdr buffer"))?;
-        let storage = self
-            .lights
-            .buffer_ref()
-            .ok_or_else(|| missing("light storage buffer"))?;
         let nearest = self.samplers.sampler(Filter::Nearest);
         let linear = self.samplers.sampler(Filter::Linear);
         let pair = SamplerBinding::new;
         let d = domain(frame);
-        let p = &frame.projection;
-        let (o, x, y, z) = (p.origin.raw(), p.x_axis, p.y_axis, p.z_axis);
         let (w, h) = (frame.width() as f32, frame.height() as f32);
-        let a = frame.ambient;
+        let a = prepared.ambient;
         let zero = [0.0; 4];
-
-        cmd.copy_pass()?.upload_to_buffer(&self.lights, 128)?;
 
         // Shadow mode: occlusion mask from the sprite buffer, then the distance field.
         let mut shadow_maps = None;
@@ -498,107 +487,23 @@ impl<'d> SpikeRenderer<'d> {
             shadow_maps = Some((mask, field));
         }
 
-        // Light pass: light buffer cleared to the ambient (specular buffer to zero).
-        let ambient = [a.x, a.y, a.z, 0.0];
-        let buffers = [storage];
-        let specular = self.specular.texture_ref();
-        if let Some((mask, field)) = shadow_maps {
-            // LightPassParams (light.vert family), 64 bytes.
-            let mut pass_params = Block::<64>::new();
-            pass_params
-                .f4([o.x, o.y, x.x, x.y])
-                .f4([y.x, y.y, w, h])
-                .f(d.texels[0])
-                .f(d.texels[1])
-                .f(d.margin as f32)
-                .u(0) // instance offset
-                .f(d.remainder[0])
-                .f(d.remainder[1])
-                .u(1); // mask base = light count
-            // ShadowParams, first row only (flat program): domain size, field bound, no partial.
-            let mut shadow = Block::<16>::new();
-            shadow.f4([d.width as f32, d.height as f32, FIELD_BOUND as f32, 0.0]);
-            let samplers = [
-                pair(mask, nearest),
-                pair(field, linear),
-                pair(frame.scene, nearest), // Profile: no profiles, the scene stands in
-            ];
-            let b = Bindings {
-                vertex: StageBindings {
-                    storage_buffers: &buffers,
-                    uniforms: &[&pass_params.bytes],
-                    ..Default::default()
-                },
-                fragment: StageBindings {
-                    samplers: &samplers,
-                    uniforms: &[&shadow.bytes],
-                    ..Default::default()
-                },
-            };
-            let t = [ColorTarget::new(light_tex, Load::Clear(ambient)).cycled(true)];
-            self.pass(cmd, &t, LIGHT_SDF, &b, 6, None)?;
-        } else {
-            let material = frame.material.ok_or_else(|| {
-                Diagnostic::error(SPIKE_UNSUPPORTED, "exact mode without material")
-            })?;
-            let specular = specular.ok_or_else(|| missing("specular buffer"))?;
-            let det_xy = f64::from(x.x) * f64::from(y.y) - f64::from(x.y) * f64::from(y.x);
-            let inv = [
-                (f64::from(y.y) / det_xy) as f32,
-                (-f64::from(y.x) / det_xy) as f32,
-                (-f64::from(x.y) / det_xy) as f32,
-                (f64::from(x.x) / det_xy) as f32,
-            ];
-            let view = view_direction(p);
-            let right = screen_right(p);
-            let ripple = DEFAULT_WET_RIPPLE_PIXELS / det_xy.abs().sqrt() as f32;
-            // LightSurfacePassParams (light_surface.vert), 64 bytes.
-            let mut pass_params = Block::<64>::new();
-            pass_params
-                .f4([o.x, o.y, x.x, x.y])
-                .f4([y.x, y.y, w, h])
-                .f4([z.x, z.y, 0.0, 0.0]) // maxHeight 0: no surface buffer
-                .u(0) // instance offset
-                .u(1); // mask base = light count
-            // SurfaceParams (surface.hlsli CHI_SURFACE_PARAMS), 160 bytes.
-            let mut surface = Block::<160>::new();
-            surface
-                .f4(inv)
-                .f4([o.x, o.y, z.x, z.y])
-                .f4([w, h, 1.0, 0.0]) // height step 1, no surface buffer
-                .f4([0.0; 4]) // mask map: no shadows
-                .f4([0.0; 4])
-                .f4([x.x, x.y, y.x, y.y])
-                .f4([view.x, view.y, view.z, 0.0])
-                .f4([right.x, right.y, right.z, 0.0])
-                .f4([z.x, z.y, 1.0, 0.0]) // specular scale 1
-                .f4([1.0, 0.0, 1.0 / ripple, 0.0]); // wetness 0: stretch 1, breakup 0
-            let samplers = [
-                pair(material, nearest),    // Surface: the material stands in
-                pair(material, nearest),    // Material
-                pair(frame.scene, nearest), // Profile: no profiles, the scene stands in
-            ];
-            let b = Bindings {
-                vertex: StageBindings {
-                    storage_buffers: &buffers,
-                    uniforms: &[&pass_params.bytes],
-                    ..Default::default()
-                },
-                fragment: StageBindings {
-                    samplers: &samplers,
-                    uniforms: &[&surface.bytes],
-                    ..Default::default()
-                },
-            };
-            let t = [
-                ColorTarget::new(light_tex, Load::Clear(ambient)).cycled(true),
-                ColorTarget::new(specular, Load::Clear(zero)).cycled(true),
-            ];
-            self.pass(cmd, &t, LIGHT_EXACT, &b, 6, None)?;
-        }
+        // Light pass (P25).
+        let settings = settings(frame);
+        let maps = shadow_maps.map(|(mask, field)| shadow_maps_of(frame, mask, field));
+        self.lighting.record(
+            cmd,
+            &self.light_pipelines,
+            &self.samplers,
+            &lighting_frame(frame, &settings, lights, maps.as_ref()),
+        )?;
+        let light_tex = self
+            .lighting
+            .light_buffer()
+            .ok_or_else(|| missing("light buffer"))?;
+        let specular = self.lighting.specular_buffer();
 
         // Composite into the HDR buffer.
-        let exact = frame.material.is_some();
+        let exact = prepared.detail == DetailMode::Exact;
         let mut composite = Block::<160>::new();
         composite
             .u(1) // decode sRGB: sRGB scene colour in an UNORM texture

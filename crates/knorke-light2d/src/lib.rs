@@ -19,9 +19,12 @@
 //! | [`settings`] | settings and quality presets of the light (replace `CullSettings`) | P19 |
 //! | [`frame_warnings`] | debug-check findings of a frame as stable diagnostics | P18 |
 //! | [`light_program`] (+ `light_pipelines` with `gpu`) | light program family: table of the 92 programs, rules, binding layouts, lazy pipelines | P24 |
+//! | [`lighting`] | light pass: uniform blocks, program choice, draw plan; `LightingStage` with `gpu` | P25 |
 //!
 //! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
-//! dependency; today that is only the gate spike `gpu_spike` (to be replaced by P20–P27).
+//! dependency: the occluder raster (P22), the occlusion mask (P23), the light pipelines (P24),
+//! the light pass (P25) and the rest of the gate spike `gpu_spike` (composite and output, to be
+//! replaced by P27 and P31).
 //! This crate does not know `knorke-post`, `knorke-lighting`, `knorke-render` or
 //! the AI crates (`cargo xtask deps`).
 //!
@@ -55,6 +58,7 @@ pub mod light_math;
 pub mod light_pipelines;
 pub mod light_program;
 pub mod light_store;
+pub mod lighting;
 pub mod mask;
 pub mod mask_store;
 pub mod material;

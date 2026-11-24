@@ -5,7 +5,8 @@
 //! animations, masks, flicker and caster filters) into a reused list, and snapshot round trips
 //! of the animation and mask stores, the shadow cache plan deciding incremental mask updates, and
 //! the obstacle raster collecting triangles, laying out the buffer and staging tile cells
-//! (ADR 0006, ADR 0010).
+//! and the light pass splitting the list into its draws, writing the light and mask buffer
+//! bytes and its uniform blocks (ADR 0006, ADR 0010).
 //!
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
@@ -19,6 +20,10 @@ use knorke_light2d::codec::{
 };
 use knorke_light2d::light::{Height, LightDesc, LightType, ShadowFilter};
 use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
+use knorke_light2d::lighting::{
+    DetailMode, DirectionalParams, LightDraws, LightPass, LightPassParams, LightSurfacePassParams,
+    ProgramModes, ShadowDomain, SurfaceParams, SurfaceShadowParams, program_for,
+};
 use knorke_light2d::mask::{MaskPreset, MaskShape};
 use knorke_light2d::obstacle::{ShapeDesc, TileGridDesc};
 use knorke_light2d::occluder_raster::{
@@ -142,6 +147,8 @@ fn steady_state_light2d_paths_allocate_nothing() {
     let mut static_set = TriangleSet::new();
     let mut dynamic_set = TriangleSet::new();
     let mut raster_bytes = vec![0u8; 1 << 14];
+    let mut light_bytes = vec![0u8; 1 << 16];
+    let mut mask_bytes = vec![0u8; 1 << 14];
     let mut tile_set: TileSet<()> = TileSet::new();
     let mut texels = vec![0u8; 16];
     // Shadow cache plan: a static wall, dynamic obstacles that move and a panning camera.
@@ -233,6 +240,27 @@ fn steady_state_light2d_paths_allocate_nothing() {
             64,
             &modes,
             &mut list,
+        );
+        // The light pass: split, buffer bytes, programs and uniform blocks of the frame.
+        let draws = LightDraws::new(&list, i.is_multiple_of(3), true);
+        draws.write_lights(&list, &mut light_bytes);
+        draws.write_masks(&list, &mut mask_bytes);
+        let program_modes = ProgramModes {
+            detail: DetailMode::Exact,
+            normal_mode: true,
+            ..ProgramModes::default()
+        };
+        let domain = ShadowDomain::default();
+        let settings = LightSettings::default();
+        let _ = (
+            draws.draws(),
+            program_for(LightPass::Shadowed, true, &program_modes),
+            LightPassParams::new(&Projection::IDENTITY, 128, 64, &domain, draws.mask_base)
+                .to_bytes(),
+            LightSurfacePassParams::new(&Projection::IDENTITY, 128, 64, 4.0, 0).to_bytes(),
+            SurfaceParams::new(&Projection::IDENTITY, 128, 64, &settings, &domain, true).to_bytes(),
+            SurfaceShadowParams::new(&domain, true, 3.0, 0.01).to_bytes(),
+            DirectionalParams::new(128, 64, &domain, false, 3.0, 0.01).to_bytes(),
         );
         // Snapshot round trips of the animation and mask stores.
         anim_snap.clear();
