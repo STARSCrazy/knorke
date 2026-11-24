@@ -20,10 +20,10 @@
 //! - Persistent state is a [`Snapshot`] section `knorke.light2d.obstacles` (ADR 0010).
 //!   `restore` re-validates every obstacle and re-triangulates it to compare with the saved
 //!   triangles (`SnapshotError::Invalid`). Neither `save` nor `restore` allocates once the
-//!   buffers have grown to the sizes in use (P13b); only the cell channels of tile grids are
-//!   still owned per obstacle until P14 and are allocated by a restore.
+//!   buffers have grown to the sizes in use (P13b, P14).
 //! - Triangles and outlines of all obstacles live in two arenas of the store ([`Span`]s in
-//!   [`StoredObstacle`]), not in a `Vec` per obstacle. Replacing an obstacle by a shape of the
+//!   [`StoredObstacle`]), not in a `Vec` per obstacle; the cell channels and pattern cell
+//!   indices of tile grids live in a byte arena and the pattern tables in a word arena (P14). Replacing an obstacle by a shape of the
 //!   same size writes in place; otherwise the new data is appended and the old span becomes
 //!   garbage, which the store compacts (into a spare buffer, so without allocation in steady
 //!   state) once it exceeds the live data. Batch replacements always append.
@@ -51,6 +51,8 @@
 
 use super::desc::{ObstaclePose, Shape, ShapeDesc, TileGridDesc};
 use super::error::ObstacleError;
+use super::patterns::{MAX_PATTERN_TABLE, MAX_PATTERN_VERTICES, check_fits_shape};
+use super::store_edit::EditState;
 use super::stored::{ObstacleKind, Span, StoredObstacle, outline_of, prepare_shape};
 use crate::triangulate::Triangulator;
 use knorke_math::{At, Vec2, World2, det};
@@ -61,33 +63,51 @@ use knorke_types::{
 /// Generation-checked handle of an obstacle.
 pub type ObstacleId = Handle<StoredObstacle>;
 
-/// A growing array of vertices that obstacles own ranges of.
-#[derive(Clone, Debug, Default)]
-struct Arena {
-    data: Vec<Vec2>,
+/// A growing array that obstacles own ranges of.
+#[derive(Clone, Debug)]
+pub(super) struct Arena<T> {
+    pub(super) data: Vec<T>,
     /// Target of a compaction, kept to reuse its capacity.
-    spare: Vec<Vec2>,
+    spare: Vec<T>,
     /// Elements of `data` no obstacle refers to any more.
-    garbage: usize,
+    pub(super) garbage: usize,
 }
 
-impl Arena {
+impl<T> Default for Arena<T> {
+    fn default() -> Self {
+        Self {
+            data: Vec::new(),
+            spare: Vec::new(),
+            garbage: 0,
+        }
+    }
+}
+
+impl<T: Copy> Arena<T> {
     /// Smallest garbage worth compacting.
     const MIN_GARBAGE: usize = 64;
 
-    fn get(&self, span: Span) -> Option<&[Vec2]> {
+    pub(super) fn get(&self, span: Span) -> Option<&[T]> {
         let start = span.start as usize;
         self.data
             .as_slice()
             .get(start..start.checked_add(span.len as usize)?)
     }
 
+    /// The span as a mutable slice (empty if it lies outside, which a checked store never has).
+    pub(super) fn slice_mut(&mut self, span: Span) -> &mut [T] {
+        let start = span.start as usize;
+        self.data
+            .get_mut(start..start + span.len as usize)
+            .unwrap_or(&mut [])
+    }
+
     /// The span of an obstacle of the store (always inside the arena).
-    fn slice(&self, span: Span) -> &[Vec2] {
+    pub(super) fn slice(&self, span: Span) -> &[T] {
         self.get(span).unwrap_or(&[])
     }
 
-    fn push(&mut self, items: &[Vec2]) -> Span {
+    pub(super) fn push(&mut self, items: &[T]) -> Span {
         if items.is_empty() {
             return Span::EMPTY;
         }
@@ -99,12 +119,25 @@ impl Arena {
         }
     }
 
-    fn release(&mut self, span: Span) {
+    /// Appends `n` copies of `value`.
+    pub(super) fn push_fill(&mut self, n: usize, value: T) -> Span {
+        if n == 0 {
+            return Span::EMPTY;
+        }
+        let start = u32::try_from(self.data.len()).expect("obstacle arena exceeds u32 elements");
+        self.data.resize(self.data.len() + n, value);
+        Span {
+            start,
+            len: n as u32,
+        }
+    }
+
+    pub(super) fn release(&mut self, span: Span) {
         self.garbage += span.len as usize;
     }
 
     /// Stores `items` in place of `old`: in place for the same length, else appended.
-    fn replace(&mut self, old: Span, items: &[Vec2]) -> Span {
+    pub(super) fn replace(&mut self, old: Span, items: &[T]) -> Span {
         if !old.is_empty() && old.len as usize == items.len() {
             let start = old.start as usize;
             self.data[start..start + items.len()].copy_from_slice(items);
@@ -114,16 +147,16 @@ impl Arena {
         self.push(items)
     }
 
-    fn needs_compaction(&self) -> bool {
+    pub(super) fn needs_compaction(&self) -> bool {
         self.garbage >= Self::MIN_GARBAGE && self.garbage * 2 > self.data.len()
     }
 
-    fn begin_compaction(&mut self) {
+    pub(super) fn begin_compaction(&mut self) {
         self.spare.clear();
     }
 
     /// Copies a live span into the spare buffer and returns where it went.
-    fn relocate(&mut self, span: Span) -> Span {
+    pub(super) fn relocate(&mut self, span: Span) -> Span {
         if span.is_empty() {
             return Span::EMPTY;
         }
@@ -137,7 +170,7 @@ impl Arena {
         moved
     }
 
-    fn finish_compaction(&mut self) {
+    pub(super) fn finish_compaction(&mut self) {
         core::mem::swap(&mut self.data, &mut self.spare);
         self.spare.clear();
         self.garbage = 0;
@@ -147,11 +180,17 @@ impl Arena {
 /// The obstacles of one scene.
 #[derive(Clone, Debug, Default)]
 pub struct ObstacleStore {
-    obstacles: Slots<StoredObstacle>,
+    pub(super) obstacles: Slots<StoredObstacle>,
     /// Local triangles of all polygons and circles.
-    triangles: Arena,
+    triangles: Arena<Vec2>,
     /// Local corners of all polygons.
-    outlines: Arena,
+    outlines: Arena<Vec2>,
+    /// Cell channels of tile grids and pattern cell indices (P14).
+    pub(super) bytes: Arena<u8>,
+    /// Pattern tables of tile grids (P14).
+    pub(super) words: Arena<u32>,
+    /// Cell log and working memory of cell and pattern edits (P14).
+    pub(super) edit: EditState,
     /// Batches: obstacles built but not yet inserted.
     pending: Vec<StoredObstacle>,
     revision: Revision,
@@ -159,14 +198,14 @@ pub struct ObstacleStore {
     dirty_static: BitSet,
     dirty_dynamic: BitSet,
     /// Active partial obstacles, kept up to date by every mutation.
-    partial_active: u32,
+    pub(super) partial_active: u32,
     tri: Triangulator,
     scratch: Vec<Vec2>,
     /// `destroy_many`: sorted handle bits for the duplicate check.
     sorted: Vec<u64>,
 }
 
-fn batch(field: &'static str, index: usize, source: ObstacleError) -> ObstacleError {
+pub(super) fn batch(field: &'static str, index: usize, source: ObstacleError) -> ObstacleError {
     ObstacleError::Batch {
         field,
         index,
@@ -174,7 +213,7 @@ fn batch(field: &'static str, index: usize, source: ObstacleError) -> ObstacleEr
     }
 }
 
-fn invalid(id: ObstacleId) -> ObstacleError {
+pub(super) fn invalid(id: ObstacleId) -> ObstacleError {
     ObstacleError::InvalidHandle(id.to_bits())
 }
 
@@ -191,7 +230,7 @@ fn same_length(what: &'static str, expected: usize, got: usize) -> Result<(), Ob
 }
 
 /// 1 if the obstacle counts for [`ObstacleStore::any_partial`].
-fn partial_active(s: &StoredObstacle) -> u32 {
+pub(super) fn partial_active(s: &StoredObstacle) -> u32 {
     u32::from(s.is_partial() && s.is_active())
 }
 
@@ -220,7 +259,7 @@ impl ObstacleStore {
         &mut self,
         desc: &TileGridDesc<'_>,
     ) -> Result<ObstacleId, ObstacleError> {
-        let stored = Self::build_grid(desc)?;
+        let stored = self.build_grid(desc)?;
         Ok(self.insert(stored))
     }
 
@@ -230,12 +269,13 @@ impl ObstacleStore {
     /// # Errors
     /// Stale handle, or as [`create_shape`](Self::create_shape).
     pub fn set_shape(&mut self, id: ObstacleId, desc: &ShapeDesc<'_>) -> Result<(), ObstacleError> {
-        if !self.obstacles.contains(id) {
-            return Err(invalid(id));
-        }
-        let box_corners = prepare_shape(&mut self.tri, &mut self.scratch, desc)?;
         let old = self.obstacles.get(id).ok_or_else(|| invalid(id))?;
-        let (old_triangles, old_outline) = (old.triangles, old.outline);
+        check_fits_shape(old, desc)?;
+        let box_corners = prepare_shape(&mut self.tri, &mut self.scratch, desc)?;
+        let (old_triangles, old_outline, was_grid) = (old.triangles, old.outline, old.is_tile_grid());
+        if was_grid {
+            self.release_grid_data(id);
+        }
         let triangles = self.triangles.replace(old_triangles, &self.scratch);
         let outline = self
             .outlines
@@ -261,12 +301,7 @@ impl ObstacleStore {
             return Err(invalid(id));
         }
         desc.validate()?;
-        self.release_geometry(id);
-        let mut next = |s: &mut StoredObstacle| s.assign_tile_grid(desc);
-        let result = Self::replace(&mut self.obstacles, &mut self.partial_active, id, &mut next)
-            .map(|dynamic| self.note_change(id.index(), dynamic));
-        self.compact_if_needed();
-        result
+        self.apply_grid(id, desc)
     }
 
     /// Moves and turns an obstacle. A move does not change the obstacle's revision, but it is a
@@ -329,14 +364,14 @@ impl ObstacleStore {
         descs: impl Column<TileGridDesc<'a>>,
         out: &mut Vec<ObstacleId>,
     ) -> Result<(), ObstacleError> {
-        self.pending.clear();
         for (i, d) in descs.iter().enumerate() {
-            match Self::build_grid(d) {
-                Ok(stored) => self.pending.push(stored),
-                Err(e) => {
-                    self.pending.clear();
-                    return Err(batch("descs", i, e));
-                }
+            d.validate().map_err(|e| batch("descs", i, e))?;
+        }
+        self.pending.clear();
+        for d in descs.iter() {
+            // Validated above, so this cannot fail and the arenas never need a rollback.
+            if let Ok(stored) = self.build_grid(d) {
+                self.pending.push(stored);
             }
         }
         self.insert_pending(out);
@@ -355,16 +390,22 @@ impl ObstacleStore {
     ) -> Result<(), ObstacleError> {
         same_length("descs", ids.len(), descs.len())?;
         self.check_handles(&ids)?;
+        for (i, (id, d)) in ids.iter().zip(descs.iter()).enumerate() {
+            if let Some(current) = self.obstacles.get(*id) {
+                check_fits_shape(current, d).map_err(|e| batch("descs", i, e))?;
+            }
+        }
         self.stage_shapes(&descs)?;
         let mut pending = core::mem::take(&mut self.pending);
         for (id, next) in ids.iter().zip(pending.drain(..)) {
             self.release_geometry(*id);
+            if self.obstacles.get(*id).is_some_and(|s| s.is_tile_grid()) {
+                self.release_grid_data(*id);
+            }
             let mut next = Some(next);
             let mut apply = |s: &mut StoredObstacle| {
                 if let Some(n) = next.take() {
-                    let revision = s.revision;
-                    *s = n;
-                    s.revision = revision;
+                    s.replace_with(n);
                 }
             };
             if let Ok(dynamic) = Self::replace(
@@ -397,18 +438,9 @@ impl ObstacleStore {
             d.validate().map_err(|e| batch("descs", i, e))?;
         }
         for (id, d) in ids.iter().zip(descs.iter()) {
-            self.release_geometry(*id);
-            let mut apply = |s: &mut StoredObstacle| s.assign_tile_grid(d);
-            if let Ok(dynamic) = Self::replace(
-                &mut self.obstacles,
-                &mut self.partial_active,
-                *id,
-                &mut apply,
-            ) {
-                self.note_change(id.index(), dynamic);
-            }
+            // Cannot fail: handles and descriptions were checked.
+            let _ = self.apply_grid(*id, d);
         }
-        self.compact_if_needed();
         Ok(())
     }
 
@@ -591,7 +623,7 @@ impl ObstacleStore {
 
     // ---- internals ----
 
-    fn note_change(&mut self, index: u32, dynamic: bool) {
+    pub(super) fn note_change(&mut self, index: u32, dynamic: bool) {
         self.revision.bump();
         if dynamic {
             self.dirty_dynamic.insert(index as usize);
@@ -660,7 +692,7 @@ impl ObstacleStore {
     }
 
     /// Squeezes out the garbage of the arenas once it outweighs the live data.
-    fn compact_if_needed(&mut self) {
+    pub(super) fn compact_if_needed(&mut self) {
         if self.triangles.needs_compaction() {
             self.triangles.begin_compaction();
             for (_, s) in self.obstacles.iter_mut() {
@@ -675,13 +707,79 @@ impl ObstacleStore {
             }
             self.outlines.finish_compaction();
         }
+        if self.bytes.needs_compaction() {
+            self.bytes.begin_compaction();
+            for (_, s) in self.obstacles.iter_mut() {
+                let g = &mut s.grid;
+                g.solid = self.bytes.relocate(g.solid);
+                g.base_levels = self.bytes.relocate(g.base_levels);
+                g.opacity = self.bytes.relocate(g.opacity);
+                g.edges = self.bytes.relocate(g.edges);
+                s.patterns.cells = self.bytes.relocate(s.patterns.cells);
+            }
+            self.bytes.finish_compaction();
+        }
+        if self.words.needs_compaction() {
+            self.words.begin_compaction();
+            for (_, s) in self.obstacles.iter_mut() {
+                s.patterns.table = self.words.relocate(s.patterns.table);
+            }
+            self.words.finish_compaction();
+        }
     }
 
-    fn build_grid(desc: &TileGridDesc<'_>) -> Result<StoredObstacle, ObstacleError> {
+    /// Builds a tile grid obstacle, appending its channels to the byte arena.
+    fn build_grid(&mut self, desc: &TileGridDesc<'_>) -> Result<StoredObstacle, ObstacleError> {
         desc.validate()?;
+        let channels = [
+            self.bytes.push(desc.solid),
+            self.bytes.push(desc.base_levels.unwrap_or(&[])),
+            self.bytes.push(desc.opacity.unwrap_or(&[])),
+            self.bytes.push(desc.edges.unwrap_or(&[])),
+        ];
         let mut s = StoredObstacle::empty();
-        s.assign_tile_grid(desc);
+        s.assign_tile_grid(desc, channels);
         Ok(s)
+    }
+
+    /// Replaces an obstacle by a validated tile grid: the channels are written in place when the
+    /// size is the same, else appended; patterns stay as far as they fit.
+    fn apply_grid(&mut self, id: ObstacleId, desc: &TileGridDesc<'_>) -> Result<(), ObstacleError> {
+        let old = self.obstacles.get(id).ok_or_else(|| invalid(id))?;
+        let (grid, cells, was_grid) = (old.grid, old.patterns.cells, old.is_tile_grid());
+        self.release_geometry(id);
+        let (columns, rows) = (desc.columns, desc.rows);
+        if was_grid && (grid.columns != columns || grid.rows != rows) {
+            self.bytes.release(cells); // the cell indices go with the old size
+        }
+        let old = if was_grid {
+            [grid.solid, grid.base_levels, grid.opacity, grid.edges]
+        } else {
+            [Span::EMPTY; 4]
+        };
+        let channels = [
+            self.bytes.replace(old[0], desc.solid),
+            self.bytes.replace(old[1], desc.base_levels.unwrap_or(&[])),
+            self.bytes.replace(old[2], desc.opacity.unwrap_or(&[])),
+            self.bytes.replace(old[3], desc.edges.unwrap_or(&[])),
+        ];
+        let mut next = |s: &mut StoredObstacle| s.assign_tile_grid(desc, channels);
+        let result = Self::replace(&mut self.obstacles, &mut self.partial_active, id, &mut next)
+            .map(|dynamic| self.note_change(id.index(), dynamic));
+        self.compact_if_needed();
+        result
+    }
+
+    /// Marks the channels and pattern spans of a tile grid as garbage (the obstacle is about to
+    /// stop being a grid).
+    fn release_grid_data(&mut self, id: ObstacleId) {
+        if let Some(s) = self.obstacles.get(id) {
+            let g = s.grid;
+            for span in [g.solid, g.base_levels, g.opacity, g.edges, s.patterns.cells] {
+                self.bytes.release(span);
+            }
+            self.words.release(s.patterns.table);
+        }
     }
 
     fn check_handles(&self, ids: &impl Column<ObstacleId>) -> Result<(), ObstacleError> {
@@ -695,7 +793,7 @@ impl ObstacleStore {
 
     /// Runs `change` on the obstacle, grows its revision and keeps the partial counter up to
     /// date. Returns whether the change counts as dynamic (both before and after).
-    fn replace(
+    pub(super) fn replace(
         obstacles: &mut Slots<StoredObstacle>,
         partial_active_count: &mut u32,
         id: ObstacleId,
@@ -755,6 +853,72 @@ impl ObstacleStore {
         }
         self.triangles.garbage = self.triangles.data.len().saturating_sub(live.0);
         self.outlines.garbage = self.outlines.data.len().saturating_sub(live.1);
+        self.check_restored_grids()?;
+        self.partial_active = self.obstacles.iter().map(|(_, s)| partial_active(s)).sum();
+        Ok(())
+    }
+}
+
+impl ObstacleStore {
+    /// The part of the restore check that concerns tile grids and pattern assignments: spans
+    /// inside the arenas, values by the description rules, derived counts, pattern limits.
+    /// Recomputes the garbage of the byte and word arenas.
+    fn check_restored_grids(&mut self) -> Result<(), SnapshotError> {
+        const BAD: SnapshotError = SnapshotError::Invalid("obstacle violates the obstacle rules");
+        const BAD_SPAN: SnapshotError = SnapshotError::Invalid("obstacle cells outside their arena");
+        const BAD_PATTERN: SnapshotError = SnapshotError::Invalid("obstacle pattern assignment");
+        let (mut live_bytes, mut live_words) = (0usize, 0usize);
+        for (_, s) in self.obstacles.iter_mut() {
+            let p = s.patterns;
+            let table = self.words.get(p.table).ok_or(BAD_SPAN)?;
+            let cells = self.bytes.get(p.cells).ok_or(BAD_SPAN)?;
+            live_words += table.len();
+            live_bytes += cells.len();
+            if table.len() > MAX_PATTERN_TABLE || p.refs as usize > table.len() + 1 {
+                return Err(BAD_PATTERN);
+            }
+            if s.kind != ObstacleKind::TileGrid {
+                let big = s.kind == ObstacleKind::Polygon
+                    && p.pattern != 0
+                    && s.outline.len as usize > MAX_PATTERN_VERTICES;
+                if big || !table.is_empty() || !cells.is_empty() {
+                    return Err(BAD_PATTERN);
+                }
+                continue;
+            }
+            let g = s.grid;
+            let n = g.columns as usize * g.rows as usize;
+            let channel = |span: Span| self.bytes.get(span).ok_or(BAD_SPAN);
+            let (solid, base, opacity, edges) = (
+                channel(g.solid)?,
+                channel(g.base_levels)?,
+                channel(g.opacity)?,
+                channel(g.edges)?,
+            );
+            let some = |c: &[u8]| (!c.is_empty()).then_some(());
+            let desc = TileGridDesc {
+                common: s.common,
+                columns: g.columns,
+                rows: g.rows,
+                cell_size: g.cell_size,
+                level_height: g.level_height,
+                edge_width: g.edge_width,
+                solid,
+                base_levels: some(base).map(|_| base),
+                opacity: some(opacity).map(|_| opacity),
+                edges: some(edges).map(|_| edges),
+            };
+            desc.validate().map_err(|_| BAD)?;
+            if (!cells.is_empty() && cells.len() != n)
+                || cells.iter().any(|&i| usize::from(i) > table.len())
+            {
+                return Err(BAD_PATTERN);
+            }
+            s.grid.count(solid, opacity, edges);
+            live_bytes += solid.len() + base.len() + opacity.len() + edges.len();
+        }
+        self.bytes.garbage = self.bytes.data.len().saturating_sub(live_bytes);
+        self.words.garbage = self.words.data.len().saturating_sub(live_words);
         self.partial_active = self.obstacles.iter().map(|(_, s)| partial_active(s)).sum();
         Ok(())
     }
@@ -762,7 +926,7 @@ impl ObstacleStore {
 
 impl Snapshot for ObstacleStore {
     const ID: &'static str = "knorke.light2d.obstacles";
-    const VERSION: u16 = 2;
+    const VERSION: u16 = 3;
 
     fn save(&self, w: &mut Writer<'_>) {
         w.put(&self.obstacles);
@@ -772,6 +936,9 @@ impl Snapshot for ObstacleStore {
         w.put(&self.dirty_dynamic);
         w.put(&self.triangles.data);
         w.put(&self.outlines.data);
+        w.put(&self.bytes.data);
+        w.put(&self.words.data);
+        self.edit.log.save(w);
     }
 
     fn restore(&mut self, version: u16, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
@@ -788,6 +955,9 @@ impl Snapshot for ObstacleStore {
         self.dirty_dynamic.get_into(r)?;
         self.triangles.data.get_into(r)?;
         self.outlines.data.get_into(r)?;
+        self.bytes.data.get_into(r)?;
+        self.words.data.get_into(r)?;
+        self.edit.log.restore(r)?;
         self.check_restored()
     }
 }
