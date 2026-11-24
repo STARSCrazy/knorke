@@ -13,6 +13,7 @@
 //! | [`obstacle`] | obstacle descriptions, handle-based store, dirty tracking for the shadow cache, snapshots | P13 |
 //! | [`animation`], [`area_light`], [`light_culling`], [`gpu_light`] | animation curves and store, area-light model, per-frame light lists | P8 |
 //! | [`mask`], [`mask_store`], [`light_mask`], [`resources`] | masks (gobo, window): shapes, store, placement; stores as light resources | P10 |
+//! | [`shadow`] | occlusion domain and anchor, dirty rectangles, incremental mask update plan | P16 |
 //! | [`settings`] | settings and quality presets of the light (replace `CullSettings`) | P19 |
 //! | [`frame_warnings`] | debug-check findings of a frame as stable diagnostics | P18 |
 //!
@@ -58,6 +59,7 @@ pub mod profile_store;
 pub mod projection;
 pub mod resources;
 pub mod settings;
+pub mod shadow;
 pub mod triangulate;
 
 pub use animation::{AnimationDesc, AnimationError, AnimationId, AnimationStore};
