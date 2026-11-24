@@ -12,7 +12,7 @@
 
 ## Nächster Schritt
 
-- Jetzt Welle 2: P20 (Post-Pass), P22, P24 (Opus), dann P23, P25. Spike `gpu_spike.rs` wird dabei ersetzt.
+- Jetzt: P23 (Opus). Danach P25 (Opus), dann P26, P27, P31. Spike `gpu_spike.rs` wird dabei ersetzt.
 - P12, P15 (exotisch) erst bei Verbraucher.
 - Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten. Parallele Agenten in `knorke-light2d` erzeugen kleine Konflikte in `lib.rs` und `tests/contracts/tests/no_alloc_light2d.rs` – beide Seiten behalten.
 
@@ -52,11 +52,11 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 | P17 | Post-Mathe: Shockwave, CRT, Bloom-Parameter | `knorke-post` (CPU) | H | – | fertig (Merge 2026-11-24): CRT, Bloom-Plan, Shockwave in `knorke-post`; Farbtemperatur (Kelvin→RGB) fehlt noch, Aufrufer liefert die Farbe |
 | P18 | FrameWarnings → `Diagnostic` | je Crate | S | Gate | fertig (Merge 2026-11-24): `frame_warnings`; Muster-Warnungen → P15 |
 | P19 | Settings + Qualitätspresets (Redesign) | je Crate | S | Gate | fertig (Merge 2026-11-24): `LightSettings`, `PostSettings`, ADR 0016; ersetzt `CullSettings`; Anbindung → P20 |
-| P20 | Post-Pass: Output + Bloom + Tonemap | `knorke-post` | S | P2, P4, P17, P19, P1b | offen |
+| P20 | Post-Pass: Output + Bloom + Tonemap | `knorke-post` | S | P2, P4, P17, P19, P1b | fertig (Merge 2026-11-24): `PostRenderer` (Bloom, Tonemap, Grade, CRT, Shockwave), bitgleich zu Chiaro (3 Szenen, RX 6700 XT); Anbindung → P31 |
 | P21 | Druckwellen-Ringlicht | offen | H | P20 | offen (exotisch) |
-| P22 | Hindernis-Raster | `knorke-light2d` | S | P2, P13, P14, P1b | offen |
-| P23 | Okklusionsmaske, Distanzfeld, Cache | `knorke-light2d` | O | P22, P16 | offen |
-| P24 | Licht-Programmtabelle (92 Programme) | `knorke-light2d` | O | P2, P1b | offen |
+| P22 | Hindernis-Raster | `knorke-light2d` | S | P2, P13, P14, P1b | fertig (Merge 2026-11-24): `occluder_raster/`, Teil-Upload in knorke-gpu; Maske/Höhe texelgleich zu Chiaro; Muster → P15 |
+| P23 | Okklusionsmaske, Distanzfeld, Cache | `knorke-light2d` | O | P22, P16 | läuft (Worktree; Merge durch Koordinator) |
+| P24 | Licht-Programmtabelle (92 Programme) | `knorke-light2d` | O | P2, P1b | fertig (Merge 2026-11-24): `light_program` (92 Varianten), `LightPipelines` lazy; Uniform-Layouts → P25 |
 | P25 | Lichtstufe | `knorke-light2d` | O | P24, P7, P8, P23 | offen |
 | P26 | Atlanten + Ambient-Pass | `knorke-light2d` | S | P25, P9, P10, P11 | offen |
 | P27 | Composite + Layout | `knorke-light2d` | S | P25 | offen |
@@ -79,6 +79,7 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 
 Neueste oben. Datum · wer · was · Ergebnis (auch Fehlschläge, Messwerte).
 
+- 2026-11-24 · Agenten + Claude · Gemerged: P20, P22, P24 (Post-Pass und Hindernis-Raster bitgleich zu Chiaro). Prüfungen: 1426 Tests grün (all-features, auch `--release`), 1374 (no-default), 20 Regeln, standalone ok. Gestartet: P23 (Opus).
 - 2026-11-24 · Agenten + Claude · Gemerged: P9b, P13b, P14, P16, P18, P19. Prüfungen: 1353 Tests grün (all-features, auch `--release`), 1327 (no-default), 20 Regeln, standalone ok. Hindernis-Snapshot jetzt Version 3.
 - 2026-11-24 · Claude · Gestartet: P16 (Opus), P14 (Sonnet), P18+P19 (Sonnet), P9b+P13b (Sonnet).
 - 2026-11-24 · Agenten + Claude · Gemerged: P1b (sichere Pass-API, Spike bitgleich, light2d ohne `unsafe`), P13 (Hindernisse), P8+P10 (Culling, Animation, Masken), P9+P11 (Profile, Ambient-Zonen). Prüfungen: 1267 Tests grün (all-features, auch `--release`), 1241 (no-default), 20 Regeln, standalone ok. Neu als Pakete: P9b (Profil-Anbindung), P13b (Restore ohne Allokation).
