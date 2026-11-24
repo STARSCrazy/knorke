@@ -20,15 +20,16 @@
 //    misrepresented as being the original software.
 // 3. This notice may not be removed or altered from any source distribution.
 //
-// Altered: rewritten in Rust for the Knorke Engine. The CMake rules became `light_program_spec`;
-// the table Chiaro generated from them is the literal `LIGHT_PROGRAMS`, and a test checks that
-// the rules reproduce it entry by entry. Feature bits are a typed set (`LightFeatures`).
+// Altered: rewritten in Rust for the Knorke Engine. The CMake rules became const fns that
+// generate `LIGHT_PROGRAMS` at compile time; `light_program_spec` adds the HLSL source and
+// defines. Feature bits are a typed set (`LightFeatures`).
 
 //! The light program family (Chiaro E152, E153): which light and shadow fragment programs
 //! exist, their shaders, their second color target and the slot of every resource they bind.
 //!
 //! A program is a [`LightBase`] plus a set of [`LightFeature`]s. Only 92 of the 3 × 256
-//! combinations have shaders ([`LIGHT_PROGRAMS`]); the rules are [`light_program_spec`].
+//! combinations have shaders ([`LIGHT_PROGRAMS`], generated from the rules in this file;
+//! [`light_program_spec`] adds the HLSL source and defines).
 //! [`light_layout_of`] gives the binding layout the shaders declare, so a draw binds exactly
 //! what its program reads. The shader blobs themselves come from the `.kpak` pack (ADR 0014).
 
@@ -236,135 +237,203 @@ impl LightProgramInfo {
     }
 }
 
-const fn info(
-    base: LightBase,
-    features: &[LightFeature],
-    vertex: &'static str,
-    fragment: &'static str,
-    second: LightSecondTarget,
-) -> LightProgramInfo {
-    LightProgramInfo {
-        base,
-        features: LightFeatures::of(features),
-        vertex,
-        fragment,
-        second,
-    }
-}
-
 /// Number of light programs.
 pub const LIGHT_PROGRAM_COUNT: usize = 92;
 
 use LightFeature as F;
 
-/// One program per line: `Base [features] "vertex" "fragment" SecondTarget;`.
-macro_rules! light_programs {
-    ($($base:ident [$($feature:ident),*] $vertex:literal $fragment:literal $second:ident;)*) => {
-        [$(info(
-            LightBase::$base,
-            &[$(LightFeature::$feature),*],
-            $vertex,
-            $fragment,
-            LightSecondTarget::$second,
-        )),*]
-    };
+// One source of truth: the rules below (`is_valid_light_program`, `vertex_of`,
+// `fragment_name_of`, `second_of`) generate `LIGHT_PROGRAMS` at compile time, as Chiaro's CMake
+// generates its table. The other direction (a literal table the rules read from) was rejected:
+// `light_program_spec` and the invalid-combination checks still need the validity rules, so the
+// knowledge would stay in two places. Fragment names are built into fixed buffers in a `static`
+// (no allocation, no `unsafe`); the vertex names are seven literals chosen by rule.
+// `tests/light_program.rs` pins the generated table entry by entry against a checked-in copy
+// of Chiaro's table, so a rule change cannot silently reorder or rename programs.
+
+/// Whether `program` has shaders (Chiaro `cmake/ChiaroLightPrograms.cmake`).
+const fn is_valid_light_program(program: LightProgram) -> bool {
+    let sdf = matches!(program.base, LightBase::LightSdf);
+    let has_material = program.has(F::Exact) || program.has(F::Direction);
+    // Material modes need the surface programs and exclude each other.
+    if has_material && !program.has(F::Surface) {
+        return false;
+    }
+    if program.has(F::Exact) && program.has(F::Direction) {
+        return false;
+    }
+    // Height mode: the distance field shadows without surface.
+    if program.has(F::Height) && (!sdf || program.has(F::Surface)) {
+        return false;
+    }
+    // Area: the shadowed line and rect lights; masks for point and spot lights only.
+    if program.has(F::Area) && !sdf {
+        return false;
+    }
+    if program.has(F::Mask)
+        && (program.has(F::Area) || matches!(program.base, LightBase::Directional))
+    {
+        return false;
+    }
+    // Pattern obstacles: the shadow programs only.
+    !(program.has(F::Pattern) && matches!(program.base, LightBase::Light))
 }
 
-/// Every valid light program, in Chiaro's table order (base, then feature bits ascending).
-/// All of them blend ONE + ONE into the light buffer.
-pub const LIGHT_PROGRAMS: [LightProgramInfo; LIGHT_PROGRAM_COUNT] = light_programs! {
-    Light [] "light.vert" "light.frag" None;
-    Light [Surface] "light_surface.vert" "light_surface.frag" None;
-    Light [Surface, Exact] "light_surface.vert" "light_surface_exact.frag" Specular;
-    Light [Surface, Direction] "light_surface.vert" "light_surface_direction.frag" Direction;
-    Light [Mask] "light_mask.vert" "light_mask.frag" None;
-    Light [Surface, Mask] "light_surface_mask.vert" "light_surface_mask.frag" None;
-    Light [Surface, Exact, Mask] "light_surface_mask.vert" "light_surface_exact_mask.frag" Specular;
-    Light [Surface, Direction, Mask] "light_surface_mask.vert" "light_surface_direction_mask.frag" Direction;
-    Light [Medium] "light.vert" "light_medium.frag" None;
-    Light [Surface, Medium] "light_surface.vert" "light_surface_medium.frag" None;
-    Light [Surface, Exact, Medium] "light_surface.vert" "light_surface_exact_medium.frag" Specular;
-    Light [Surface, Direction, Medium] "light_surface.vert" "light_surface_direction_medium.frag" Direction;
-    Light [Mask, Medium] "light_mask.vert" "light_mask_medium.frag" None;
-    Light [Surface, Mask, Medium] "light_surface_mask.vert" "light_surface_mask_medium.frag" None;
-    Light [Surface, Exact, Mask, Medium] "light_surface_mask.vert" "light_surface_exact_mask_medium.frag" Specular;
-    Light [Surface, Direction, Mask, Medium] "light_surface_mask.vert" "light_surface_direction_mask_medium.frag" Direction;
-    LightSdf [] "light_point.vert" "light_sdf.frag" None;
-    LightSdf [Height] "light_point.vert" "light_sdf_height.frag" None;
-    LightSdf [Surface] "light_surface_point.vert" "light_sdf_surface.frag" None;
-    LightSdf [Surface, Exact] "light_surface_point.vert" "light_sdf_surface_exact.frag" Specular;
-    LightSdf [Surface, Direction] "light_surface_point.vert" "light_sdf_surface_direction.frag" Direction;
-    LightSdf [Area] "light.vert" "light_sdf_area.frag" None;
-    LightSdf [Height, Area] "light.vert" "light_sdf_height_area.frag" None;
-    LightSdf [Surface, Area] "light_surface.vert" "light_sdf_surface_area.frag" None;
-    LightSdf [Surface, Exact, Area] "light_surface.vert" "light_sdf_surface_exact_area.frag" Specular;
-    LightSdf [Surface, Direction, Area] "light_surface.vert" "light_sdf_surface_direction_area.frag" Direction;
-    LightSdf [Mask] "light_mask.vert" "light_sdf_mask.frag" None;
-    LightSdf [Height, Mask] "light_mask.vert" "light_sdf_height_mask.frag" None;
-    LightSdf [Surface, Mask] "light_surface_mask.vert" "light_sdf_surface_mask.frag" None;
-    LightSdf [Surface, Exact, Mask] "light_surface_mask.vert" "light_sdf_surface_exact_mask.frag" Specular;
-    LightSdf [Surface, Direction, Mask] "light_surface_mask.vert" "light_sdf_surface_direction_mask.frag" Direction;
-    LightSdf [Pattern] "light_point.vert" "light_sdf_pattern.frag" None;
-    LightSdf [Height, Pattern] "light_point.vert" "light_sdf_height_pattern.frag" None;
-    LightSdf [Surface, Pattern] "light_surface_point.vert" "light_sdf_surface_pattern.frag" None;
-    LightSdf [Surface, Exact, Pattern] "light_surface_point.vert" "light_sdf_surface_exact_pattern.frag" Specular;
-    LightSdf [Surface, Direction, Pattern] "light_surface_point.vert" "light_sdf_surface_direction_pattern.frag" Direction;
-    LightSdf [Area, Pattern] "light.vert" "light_sdf_area_pattern.frag" None;
-    LightSdf [Height, Area, Pattern] "light.vert" "light_sdf_height_area_pattern.frag" None;
-    LightSdf [Surface, Area, Pattern] "light_surface.vert" "light_sdf_surface_area_pattern.frag" None;
-    LightSdf [Surface, Exact, Area, Pattern] "light_surface.vert" "light_sdf_surface_exact_area_pattern.frag" Specular;
-    LightSdf [Surface, Direction, Area, Pattern] "light_surface.vert" "light_sdf_surface_direction_area_pattern.frag" Direction;
-    LightSdf [Mask, Pattern] "light_mask.vert" "light_sdf_mask_pattern.frag" None;
-    LightSdf [Height, Mask, Pattern] "light_mask.vert" "light_sdf_height_mask_pattern.frag" None;
-    LightSdf [Surface, Mask, Pattern] "light_surface_mask.vert" "light_sdf_surface_mask_pattern.frag" None;
-    LightSdf [Surface, Exact, Mask, Pattern] "light_surface_mask.vert" "light_sdf_surface_exact_mask_pattern.frag" Specular;
-    LightSdf [Surface, Direction, Mask, Pattern] "light_surface_mask.vert" "light_sdf_surface_direction_mask_pattern.frag" Direction;
-    LightSdf [Medium] "light_point.vert" "light_sdf_medium.frag" None;
-    LightSdf [Height, Medium] "light_point.vert" "light_sdf_height_medium.frag" None;
-    LightSdf [Surface, Medium] "light_surface_point.vert" "light_sdf_surface_medium.frag" None;
-    LightSdf [Surface, Exact, Medium] "light_surface_point.vert" "light_sdf_surface_exact_medium.frag" Specular;
-    LightSdf [Surface, Direction, Medium] "light_surface_point.vert" "light_sdf_surface_direction_medium.frag" Direction;
-    LightSdf [Area, Medium] "light.vert" "light_sdf_area_medium.frag" None;
-    LightSdf [Height, Area, Medium] "light.vert" "light_sdf_height_area_medium.frag" None;
-    LightSdf [Surface, Area, Medium] "light_surface.vert" "light_sdf_surface_area_medium.frag" None;
-    LightSdf [Surface, Exact, Area, Medium] "light_surface.vert" "light_sdf_surface_exact_area_medium.frag" Specular;
-    LightSdf [Surface, Direction, Area, Medium] "light_surface.vert" "light_sdf_surface_direction_area_medium.frag" Direction;
-    LightSdf [Mask, Medium] "light_mask.vert" "light_sdf_mask_medium.frag" None;
-    LightSdf [Height, Mask, Medium] "light_mask.vert" "light_sdf_height_mask_medium.frag" None;
-    LightSdf [Surface, Mask, Medium] "light_surface_mask.vert" "light_sdf_surface_mask_medium.frag" None;
-    LightSdf [Surface, Exact, Mask, Medium] "light_surface_mask.vert" "light_sdf_surface_exact_mask_medium.frag" Specular;
-    LightSdf [Surface, Direction, Mask, Medium] "light_surface_mask.vert" "light_sdf_surface_direction_mask_medium.frag" Direction;
-    LightSdf [Pattern, Medium] "light_point.vert" "light_sdf_pattern_medium.frag" None;
-    LightSdf [Height, Pattern, Medium] "light_point.vert" "light_sdf_height_pattern_medium.frag" None;
-    LightSdf [Surface, Pattern, Medium] "light_surface_point.vert" "light_sdf_surface_pattern_medium.frag" None;
-    LightSdf [Surface, Exact, Pattern, Medium] "light_surface_point.vert" "light_sdf_surface_exact_pattern_medium.frag" Specular;
-    LightSdf [Surface, Direction, Pattern, Medium] "light_surface_point.vert" "light_sdf_surface_direction_pattern_medium.frag" Direction;
-    LightSdf [Area, Pattern, Medium] "light.vert" "light_sdf_area_pattern_medium.frag" None;
-    LightSdf [Height, Area, Pattern, Medium] "light.vert" "light_sdf_height_area_pattern_medium.frag" None;
-    LightSdf [Surface, Area, Pattern, Medium] "light_surface.vert" "light_sdf_surface_area_pattern_medium.frag" None;
-    LightSdf [Surface, Exact, Area, Pattern, Medium] "light_surface.vert" "light_sdf_surface_exact_area_pattern_medium.frag" Specular;
-    LightSdf [Surface, Direction, Area, Pattern, Medium] "light_surface.vert" "light_sdf_surface_direction_area_pattern_medium.frag" Direction;
-    LightSdf [Mask, Pattern, Medium] "light_mask.vert" "light_sdf_mask_pattern_medium.frag" None;
-    LightSdf [Height, Mask, Pattern, Medium] "light_mask.vert" "light_sdf_height_mask_pattern_medium.frag" None;
-    LightSdf [Surface, Mask, Pattern, Medium] "light_surface_mask.vert" "light_sdf_surface_mask_pattern_medium.frag" None;
-    LightSdf [Surface, Exact, Mask, Pattern, Medium] "light_surface_mask.vert" "light_sdf_surface_exact_mask_pattern_medium.frag" Specular;
-    LightSdf [Surface, Direction, Mask, Pattern, Medium] "light_surface_mask.vert" "light_sdf_surface_direction_mask_pattern_medium.frag" Direction;
-    Directional [] "fullscreen.vert" "directional.frag" None;
-    Directional [Surface] "fullscreen.vert" "directional_surface.frag" None;
-    Directional [Surface, Exact] "fullscreen.vert" "directional_surface_exact.frag" Specular;
-    Directional [Surface, Direction] "fullscreen.vert" "directional_surface_direction.frag" Direction;
-    Directional [Pattern] "fullscreen.vert" "directional_pattern.frag" None;
-    Directional [Surface, Pattern] "fullscreen.vert" "directional_surface_pattern.frag" None;
-    Directional [Surface, Exact, Pattern] "fullscreen.vert" "directional_surface_exact_pattern.frag" Specular;
-    Directional [Surface, Direction, Pattern] "fullscreen.vert" "directional_surface_direction_pattern.frag" Direction;
-    Directional [Medium] "fullscreen.vert" "directional_medium.frag" None;
-    Directional [Surface, Medium] "fullscreen.vert" "directional_surface_medium.frag" None;
-    Directional [Surface, Exact, Medium] "fullscreen.vert" "directional_surface_exact_medium.frag" Specular;
-    Directional [Surface, Direction, Medium] "fullscreen.vert" "directional_surface_direction_medium.frag" Direction;
-    Directional [Pattern, Medium] "fullscreen.vert" "directional_pattern_medium.frag" None;
-    Directional [Surface, Pattern, Medium] "fullscreen.vert" "directional_surface_pattern_medium.frag" None;
-    Directional [Surface, Exact, Pattern, Medium] "fullscreen.vert" "directional_surface_exact_pattern_medium.frag" Specular;
-    Directional [Surface, Direction, Pattern, Medium] "fullscreen.vert" "directional_surface_direction_pattern_medium.frag" Direction;
+/// Whether the program draws point and spot lights only. Decides both the `_point` vertex
+/// shader and the `CHI_POINT_LIGHTS` define, so both read it from here.
+const fn draws_point_lights(program: LightProgram) -> bool {
+    program.has(F::Mask) || (matches!(program.base, LightBase::LightSdf) && !program.has(F::Area))
+}
+
+/// Vertex shader of a valid program.
+const fn vertex_of(program: LightProgram) -> &'static str {
+    if matches!(program.base, LightBase::Directional) {
+        return "fullscreen.vert";
+    }
+    // Masked lights are point lights too, but have their own vertex shader: mask wins.
+    match (
+        program.has(F::Surface),
+        program.has(F::Mask),
+        draws_point_lights(program),
+    ) {
+        (false, true, _) => "light_mask.vert",
+        (true, true, _) => "light_surface_mask.vert",
+        (false, false, true) => "light_point.vert",
+        (true, false, true) => "light_surface_point.vert",
+        (false, false, false) => "light.vert",
+        (true, false, false) => "light_surface.vert",
+    }
+}
+
+/// Second color target of a valid program: follows the material mode.
+const fn second_of(program: LightProgram) -> LightSecondTarget {
+    if program.has(F::Exact) {
+        LightSecondTarget::Specular
+    } else if program.has(F::Direction) {
+        LightSecondTarget::Direction
+    } else {
+        LightSecondTarget::None
+    }
+}
+
+/// Room for the longest fragment name, `light_sdf_surface_direction_area_pattern_medium.frag`
+/// (52 bytes); a longer one fails the build in `ShaderName::push`.
+const NAME_CAPACITY: usize = 64;
+
+/// A shader name built at compile time.
+struct ShaderName {
+    bytes: [u8; NAME_CAPACITY],
+    len: usize,
+}
+
+impl ShaderName {
+    const fn new() -> Self {
+        Self {
+            bytes: [0; NAME_CAPACITY],
+            len: 0,
+        }
+    }
+
+    /// Appends `part`; past the capacity the index goes out of bounds and the build fails.
+    const fn push(&mut self, part: &str) {
+        let part = part.as_bytes();
+        let mut i = 0;
+        while i < part.len() {
+            self.bytes[self.len] = part[i];
+            self.len += 1;
+            i += 1;
+        }
+    }
+
+    const fn as_str(&'static self) -> &'static str {
+        match core::str::from_utf8(self.bytes.split_at(self.len).0) {
+            Ok(s) => s,
+            Err(_) => panic!("shader names are built from ASCII parts"),
+        }
+    }
+}
+
+/// Fragment shader name: base stem, then the feature suffixes in bit order.
+const fn fragment_name_of(program: LightProgram) -> ShaderName {
+    let mut name = ShaderName::new();
+    name.push(program.base.stem());
+    let mut i = 0;
+    while i < LightFeature::ALL.len() {
+        let feature = LightFeature::ALL[i];
+        if program.has(feature) {
+            name.push("_");
+            name.push(feature.suffix());
+        }
+        i += 1;
+    }
+    name.push(".frag");
+    name
+}
+
+/// The valid programs in Chiaro's table order: base, then feature bits ascending.
+const VALID_LIGHT_PROGRAMS: [LightProgram; LIGHT_PROGRAM_COUNT] = {
+    let mut out = [LightProgram::new(LightBase::Light); LIGHT_PROGRAM_COUNT];
+    let mut n = 0;
+    let mut b = 0;
+    while b < LightBase::ALL.len() {
+        let mut bits: u16 = 0;
+        while bits <= u8::MAX as u16 {
+            let program = LightProgram {
+                base: LightBase::ALL[b],
+                features: LightFeatures::from_bits(bits as u8),
+            };
+            if is_valid_light_program(program) {
+                // More valid programs than LIGHT_PROGRAM_COUNT fail the build here.
+                out[n] = program;
+                n += 1;
+            }
+            bits += 1;
+        }
+        b += 1;
+    }
+    assert!(
+        n == LIGHT_PROGRAM_COUNT,
+        "the rules give fewer than LIGHT_PROGRAM_COUNT programs"
+    );
+    out
+};
+
+/// Storage the fragment names of `LIGHT_PROGRAMS` point into. A `static`, so the names are
+/// `&'static str` without allocation.
+static FRAGMENT_NAMES: [ShaderName; LIGHT_PROGRAM_COUNT] = {
+    let mut out = [const { ShaderName::new() }; LIGHT_PROGRAM_COUNT];
+    let mut i = 0;
+    while i < LIGHT_PROGRAM_COUNT {
+        out[i] = fragment_name_of(VALID_LIGHT_PROGRAMS[i]);
+        i += 1;
+    }
+    out
+};
+
+/// Every valid light program, in Chiaro's table order (base, then feature bits ascending),
+/// generated from the rules above. All of them blend ONE + ONE into the light buffer.
+pub const LIGHT_PROGRAMS: [LightProgramInfo; LIGHT_PROGRAM_COUNT] = {
+    let unset = LightProgramInfo {
+        base: LightBase::Light,
+        features: LightFeatures::NONE,
+        vertex: "",
+        fragment: "",
+        second: LightSecondTarget::None,
+    };
+    let mut out = [unset; LIGHT_PROGRAM_COUNT];
+    let mut i = 0;
+    while i < LIGHT_PROGRAM_COUNT {
+        let program = VALID_LIGHT_PROGRAMS[i];
+        out[i] = LightProgramInfo {
+            base: program.base,
+            features: program.features,
+            vertex: vertex_of(program),
+            fragment: FRAGMENT_NAMES[i].as_str(),
+            second: second_of(program),
+        };
+        i += 1;
+    }
+    out
 };
 
 /// The entry of `program`, `None` if that combination has no shaders.
@@ -409,44 +478,16 @@ impl LightProgramSpec {
     }
 }
 
-/// The rules of the light program family: `None` if `program` has no shaders, otherwise its
-/// shaders, source, defines and second target. [`LIGHT_PROGRAMS`] is exactly the valid
-/// programs of these rules. Allocates; meant for tools and tests.
+/// The full rules for one program: `None` if `program` has no shaders, otherwise its shaders
+/// and second target (read from [`LIGHT_PROGRAMS`]) plus the HLSL source and defines it is
+/// compiled from. Allocates; meant for tools and tests.
 pub fn light_program_spec(program: LightProgram) -> Option<LightProgramSpec> {
+    let info = find_light_program(program)?;
     let has = |f| program.has(f);
-    let base = program.base;
-    let sdf = base == LightBase::LightSdf;
-    // Material modes need the surface programs and exclude each other.
-    if (has(F::Exact) || has(F::Direction)) && !has(F::Surface) {
-        return None;
-    }
-    if has(F::Exact) && has(F::Direction) {
-        return None;
-    }
-    // Height mode: the distance field shadows without surface.
-    if has(F::Height) && (!sdf || has(F::Surface)) {
-        return None;
-    }
-    // Area: the shadowed line and rect lights; masks for point and spot lights only.
-    if has(F::Area) && !sdf {
-        return None;
-    }
-    if has(F::Mask) && (has(F::Area) || base == LightBase::Directional) {
-        return None;
-    }
-    // Pattern obstacles: the shadow programs only.
-    if has(F::Pattern) && base == LightBase::Light {
-        return None;
-    }
 
-    let mut fragment = String::from(base.stem());
-    for f in program.features.iter() {
-        fragment.push('_');
-        fragment.push_str(f.suffix());
-    }
-    fragment.push_str(".frag");
-
-    let mut source = String::from(base.stem());
+    // The HLSL source: height and surface programs have their own; the other features are
+    // defines on it.
+    let mut source = String::from(program.base.stem());
     if has(F::Height) {
         source.push_str("_height");
     } else if has(F::Surface) {
@@ -454,30 +495,13 @@ pub fn light_program_spec(program: LightProgram) -> Option<LightProgramSpec> {
     }
     source.push_str(".frag");
 
-    let point = has(F::Mask) || (sdf && !has(F::Area));
-    let vertex = if base == LightBase::Directional {
-        String::from("fullscreen.vert")
-    } else {
-        let mut v = String::from("light");
-        if has(F::Surface) {
-            v.push_str("_surface");
-        }
-        if has(F::Mask) {
-            v.push_str("_mask");
-        } else if point {
-            v.push_str("_point");
-        }
-        v.push_str(".vert");
-        v
-    };
-
     let mut defines = Vec::new();
     if has(F::Exact) {
         defines.push("CHI_MATERIAL_EXACT");
     } else if has(F::Direction) {
         defines.push("CHI_MATERIAL_DIRECTION");
     }
-    if point {
+    if draws_point_lights(program) {
         defines.push("CHI_POINT_LIGHTS");
     }
     if has(F::Mask) {
@@ -490,19 +514,12 @@ pub fn light_program_spec(program: LightProgram) -> Option<LightProgramSpec> {
         defines.push("CHI_PATTERN");
     }
 
-    let second = if has(F::Exact) {
-        LightSecondTarget::Specular
-    } else if has(F::Direction) {
-        LightSecondTarget::Direction
-    } else {
-        LightSecondTarget::None
-    };
     Some(LightProgramSpec {
-        vertex,
-        fragment,
+        vertex: String::from(info.vertex),
+        fragment: String::from(info.fragment),
         source,
         defines,
-        second,
+        second: info.second,
     })
 }
 
