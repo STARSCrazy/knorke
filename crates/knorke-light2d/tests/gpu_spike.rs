@@ -1,6 +1,7 @@
 //! Gate spike of the Chiaro port (plan §5.1, ADR 0014): renders two scenes through
 //! `knorke_light2d::gpu_spike` (whose light pass is the real `lighting::LightingStage` since
-//! P25, fed by `collect_lights`) on Vulkan and compares them with C++ Chiaro reference images
+//! P25, fed by `collect_lights`, and whose composite is the real `composite::CompositeStage`
+//! since P27) on Vulkan and compares them with C++ Chiaro reference images
 //! (`tests/golden/chiaro`) under `ParityBudget::STRICT`:
 //!
 //! - `minimal_normal_map`: the P3 golden scene (one point light on a normal-mapped dome);
@@ -18,6 +19,7 @@
 #![cfg(feature = "gpu")]
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Instant;
 
 use knorke_contract_tests::parity::{ParityBudget, ParityReport, compare_rgba8};
@@ -38,6 +40,9 @@ use knorke_light2d::projection::Projection;
 use knorke_light2d::settings::LightSettings;
 use knorke_light2d::{LightStore, NoResources};
 use knorke_math::{At, Vec2, Vec3};
+
+/// One device at a time: SDL's video init and the GPU tests of this crate must not overlap.
+static SERIAL: Mutex<()> = Mutex::new(());
 
 fn workspace() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
@@ -246,6 +251,7 @@ fn frame_once(
 
 #[test]
 fn spike_matches_chiaro() {
+    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     let pack = workspace().join("target/shaders/knorke-chiaro.spirv.kpak");
     let Ok(pack_bytes) = std::fs::read(&pack) else {
         eprintln!(

@@ -18,6 +18,10 @@ use knorke_light2d::codec::{
     Material, MaterialPreset, NormalMapOptions, convert_normal_map, encode_normal, material_pixel,
     surface_pixel,
 };
+use knorke_light2d::composite::{
+    CompositeParams, CompositeParamsInput, InputColorSpace, composite_layout_of,
+    composite_program_of,
+};
 use knorke_light2d::light::{Height, LightDesc, LightType, ShadowFilter};
 use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
 use knorke_light2d::lighting::{
@@ -300,6 +304,22 @@ fn steady_state_light2d_paths_allocate_nothing() {
             surface_pixel(3.0, 0.5, Vec3::new(0.0, 0.0, 1.0)),
             material_pixel(Material::preset(MaterialPreset::Glass), n),
         );
+        // Composite pass: program choice, binding layout, parameter block.
+        let program = composite_program_of(i % 2 == 0, i % 3 == 0, i % 5 == 0);
+        let composite = CompositeParams::new(&CompositeParamsInput {
+            input_space: InputColorSpace::Srgb,
+            scene_format_is_srgb: false,
+            light_buffer: true,
+            glow: Some(false),
+            ambient: Vec3::new(0.1, 0.1, 0.1),
+            use_specular: false,
+            direction: true,
+            surface_buffer: true,
+            projection: &Projection::IDENTITY,
+            scene_size: (128, 64),
+            settings: &settings,
+        });
+        let _ = (composite_layout_of(program), composite.to_bytes());
     };
     // Warm-up: the pool, the snapshot buffer, the slots and the triangulator grow.
     for i in 0..4 {
