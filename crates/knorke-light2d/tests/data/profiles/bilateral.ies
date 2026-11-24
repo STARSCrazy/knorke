@@ -1,0 +1,13 @@
+IESNA:LM-63-2019
+[TEST] chiaro test fixture: symmetric about the C0-C180 plane
+[ISSUEDATE] 2026-11-12
+TILT=NONE
+1 -1 1 3 5 1 2 0 0 0
+1 1 10
+0 45 90
+0 45 90 135 180
+10 10 0
+10 20 0
+10 30 0
+10 40 0
+10 50 0
