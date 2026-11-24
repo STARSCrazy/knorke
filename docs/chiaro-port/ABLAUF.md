@@ -12,8 +12,9 @@
 
 ## Nächster Schritt
 
-- Jetzt: P26 und P27 laufen parallel (Sonnet, Branches `port/p26-atlanten-ambient`, `port/p27-composite`). Danach P31. Spike `gpu_spike.rs` wird dabei weiter ersetzt (Lichtteil ist seit P25 weg).
-- Hinweise für P26: Zonen-Pass lädt den Lichtpuffer (`Load` statt Clear); Atlanten docken über `LightingFrame::{profile_atlas, mask_atlas}` an. Dumper für Lichtpuffer: `tests/golden/chiaro/light/light_ref.cpp` (Bau wie `mask_ref.cpp`).
+- Jetzt: P31 läuft (Opus, Branch `port/p31-pass-plan`). Danach P32, dann die 2D-Helfer (P33–P35) bei Verbraucher.
+- Mitgegeben an P31: reines Ambient aus dem Zonen-Pass (`LightingStage::pure_ambient()`, `PureAmbient`) in `CompositeLight::from_stage` verdrahten und mit Bild testen; `InputColorSpace` (light2d) und Szenen-Farbraum (`knorke-post`) aus einer Quelle speisen; Reste des Spikes (Sprite-Maske, JFA, Output) ersetzen; Atlanten (`LightAtlases`) in den Frame-Ablauf einhängen.
+- Abnahme von GPU-Paketen mit `KNORKE_REQUIRE_GPU=1` (bisher nur `gpu_atlas_zones.rs` wertet es aus: Skip wird zum Fehler).
 - P12, P15 (exotisch) erst bei Verbraucher.
 - Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten. Parallele Agenten in `knorke-light2d` erzeugen kleine Konflikte in `lib.rs` und `tests/contracts/tests/no_alloc_light2d.rs` – beide Seiten behalten.
 
@@ -59,12 +60,12 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 | P23 | Okklusionsmaske, Distanzfeld, Cache | `knorke-light2d` | O | P22, P16 | fertig (Merge 2026-11-24): `occlusion/` (`OcclusionMask`: Maske, JFA-Distanzfeld, Cache, Schwenk), `CopyPass::copy_texture_region`; texelgleich zu Chiaro; Sprite-Maske, Caster-Klassen → P25 |
 | P24 | Licht-Programmtabelle (92 Programme) | `knorke-light2d` | O | P2, P1b | fertig (Merge 2026-11-24): `light_program` (92 Varianten), `LightPipelines` lazy; Uniform-Layouts → P25 |
 | P25 | Lichtstufe | `knorke-light2d` | O | P24, P7, P8, P23 | fertig (Merge 2026-11-24): `lighting/` (`LightingStage`, `LightDraws`, Uniform-Blöcke, `program_for`); Licht-/Specular-/Direction-Puffer in 5 Szenen bytegleich zu Chiaro; Spike-Lichtpass läuft über die Stufe; Uniform-Layouts gegen SPIR-V geprüft; E53-Caster-Masken und Sprite-Maske offen (Plan 17.12) |
-| P26 | Atlanten + Ambient-Pass | `knorke-light2d` | S | P25, P9, P10, P11 | läuft (Branch `port/p26-atlanten-ambient`) |
-| P27 | Composite + Layout | `knorke-light2d` | S | P25 | läuft (Branch `port/p27-composite`) |
+| P26 | Atlanten + Ambient-Pass | `knorke-light2d` | S | P25, P9, P10, P11 | fertig (Merge 2026-11-24): `atlas/` (Profil-/Masken-Atlas, `LightAtlases`), `zone_pass/` (`AmbientZonePass`), `LightingStage::prepare_with_zones` (Lichtpass lädt bei aktiven Zonen); 5 Szenen bitgleich zu Chiaro (Profil, Maske, Zonen); Profiltabellen aus P9 weichen ≤ 2 ulp ab (Plan 17.12) |
+| P27 | Composite + Layout | `knorke-light2d` | S | P25 | fertig (Merge 2026-11-24): `composite/` (`CompositeStage`, `composite_layout_of`, `CompositeParams`, 6 Programme); 7 HDR-Szenen bytegleich zu Chiaro; Uniform-Layouts gegen SPIR-V geprüft; Spike-Composite läuft über die Stufe; Medium- und Zonen-Pfad nur über Layout/Pipelines geprüft |
 | P28 | Muster-GPU | `knorke-light2d` | S/O | P23, P15 | offen (exotisch) |
 | P29 | Medium-GPU 1 | `knorke-light2d` | S | P25, P12 | offen (exotisch) |
 | P30 | Medium-GPU 2 | `knorke-light2d` | S | P29 | offen (exotisch) |
-| P31 | Pass-Plan + Einbindung `knorke-integration` (Feature `gpu`), Snapshot/Inspect | Integration | O | P20, P25, P27 | offen |
+| P31 | Pass-Plan + Einbindung `knorke-integration` (Feature `gpu`), Snapshot/Inspect | Integration | O | P20, P25, P27 | läuft (Branch `port/p31-pass-plan`) |
 | P32 | Debug-Prüfung (opt-in) | `knorke-light2d` | S | P31 | offen |
 | P33 | 2D-Helfer: Layers | offen (Verbraucher) | S | P2, P31 | offen |
 | P34 | 2D-Helfer: Sprite + Streaming | offen (Verbraucher) | S | P33 | offen |
@@ -80,6 +81,7 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 
 Neueste oben. Datum · wer · was · Ergebnis (auch Fehlschläge, Messwerte).
 
+- 2026-11-24 · Sonnet-Agenten + Claude · Gemerged: P27 (Composite, 7 Szenen bytegleich) und P26 (Atlanten + Ambient-Zonen-Pass, 5 Szenen bitgleich; Profiltabellen ≤ 2 ulp neben Chiaro, Ursache `det`-Mathe in P9, Bild bleibt bitgleich). Prüfungen nach P27 allein: 1488 / 1399 grün. Nach beiden: 1528 Tests grün (all-features, auch `--release`, mit `KNORKE_REQUIRE_GPU=1`), 1402 (no-default), Clippy 0, 20 Regeln, standalone ok. Gestartet: P31 (Opus).
 - 2026-11-24 · Opus-Agent + Claude · Gemerged: P25 (Lichtstufe, 5 Szenen bytegleich zu Chiaro, Uniform-Layouts ohne Abweichung). Bei der Abnahme stürzte der Release-Lauf einmal ab (Speicherzugriffsfehler in `knorke-post` `gpu_parity`, aus P20): `SDL_Init` gleichzeitig aus mehreren Test-Threads. Nachgestellt (3 von 60 Läufen unter Last), behoben (Sperre in `init_video`, Tests nacheinander), danach 160 Läufe ohne Absturz. Prüfungen: 1466 Tests grün (all-features, auch `--release`), 1390 (no-default), Clippy 0, 20 Regeln, standalone ok. Gestartet: P26, P27 (Sonnet).
 - 2026-11-24 · Claude · P25 neu gestartet (Opus, eigener Worktree). Auftrag: Lichtstufe, Uniform-Layouts gegen Chiaro prüfen, Lichtteil des Spikes ersetzen, Golden-Dumper; E53 und Sprite-Maske, wenn es passt.
 - 2026-11-24 · Agent + Claude · Gemerged: P23 (Maske + Distanzfeld texelgleich zu Chiaro, inkrementell = voll). Prüfungen: 1442 Tests grün (all-features, auch `--release`), 1380 (no-default), 20 Regeln, standalone ok. Gestartet: P25 (Opus).
