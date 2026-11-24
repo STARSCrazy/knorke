@@ -12,8 +12,10 @@
 
 ## Nächster Schritt
 
-- **Läuft:** Gate-Spike (Opus). Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten.
-- Danach **Gate-Spike** (Opus): ein Punktlicht + ein Schattenfall + Offscreen-Capture in Rust gegen die Golden Scenes `minimal_normal_map` und `wet_street` oder `iso_night_hard` (Schwelle STRICT aus `manifest.toml`). Bringt einen PNG-Decoder für den Pixelvergleich mit (nur dev-dependency). Passzeiten + Bilddiff messen; Ergebnis als ADR. Bei „nein“ stoppen und ADR 0014 ändern.
+- Gate bestanden (ADR 0015): Rust ist die Zielimplementierung.
+- Jetzt parallel: **P1b** (Opus, sichere Pass-API in `knorke-gpu`) und Welle 1 CPU: **P8 + P10** (Sonnet), **P9 + P11** (Haiku), **P13** (Sonnet). Danach P12, P14–P16, P18, P19.
+- Welle 2 (P20 ff.) erst nach P1b; Spike-Modul `knorke-light2d/src/gpu_spike.rs` wird dabei ersetzt.
+- Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten.
 
 ## Umgebung (wichtig für die Prüfungen)
 
@@ -35,7 +37,8 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 | P5 | Projektion + Triangulierung | `knorke-light2d` (CPU) | S (mit P6, P7) | – | fertig (Merge 2026-11-24): `projection.rs`, `triangulate.rs` in `knorke-light2d` |
 | P6 | Pixel-/Normal-/Material-Codec | `knorke-light2d` (CPU) | S | – | fertig (Merge 2026-11-24): `codec.rs`, `material.rs`; 8-Bit-Rundung bitgleich zur C++-Referenz |
 | P7 | Licht: Store + Math | `knorke-light2d` (CPU) | S | – | fertig (Merge 2026-11-24): `light.rs`, `light_math.rs`, `light_store.rs` auf `Slots`, Snapshot `knorke.light2d.lights` v1; Ressourcen-Handles (Profil/Animation/Maske) sind Marker bis P8–P10 |
-| Gate | Spike Rust vs. C++ (Licht + Schatten + Capture) | – | O | P1, P2, P3 | läuft (Worktree; Merge durch Koordinator) |
+| Gate | Spike Rust vs. C++ (Licht + Schatten + Capture) | – | O | P1, P2, P3 | fertig (2026-11-24): **bestanden**, bitgleich, Zeit gleich → ADR 0015 |
+| P1b | Sichere Aufnahme-API: geliehener Command Buffer, RenderPass/CopyPass, Draw, Bindung über Handles | `knorke-gpu` | O | Gate | offen |
 | P8 | Licht: Culling, Fläche, Animation | `knorke-light2d` | S | P7, Gate | offen |
 | P9 | Profile + IES/EULUMDAT-Import | `knorke-light2d` | H | Gate | offen |
 | P10 | Masken (Gobo/Fenster) | `knorke-light2d` | H | P7, Gate | offen |
@@ -48,11 +51,11 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 | P17 | Post-Mathe: Shockwave, CRT, Bloom-Parameter | `knorke-post` (CPU) | H | – | fertig (Merge 2026-11-24): CRT, Bloom-Plan, Shockwave in `knorke-post`; Farbtemperatur (Kelvin→RGB) fehlt noch, Aufrufer liefert die Farbe |
 | P18 | FrameWarnings → `Diagnostic` | je Crate | S | Gate | offen |
 | P19 | Settings + Qualitätspresets (Redesign) | je Crate | S | Gate | offen |
-| P20 | Post-Pass: Output + Bloom + Tonemap | `knorke-post` | S | P2, P4, P17, P19 | offen |
+| P20 | Post-Pass: Output + Bloom + Tonemap | `knorke-post` | S | P2, P4, P17, P19, P1b | offen |
 | P21 | Druckwellen-Ringlicht | offen | H | P20 | offen (exotisch) |
-| P22 | Hindernis-Raster | `knorke-light2d` | S | P2, P13, P14 | offen |
+| P22 | Hindernis-Raster | `knorke-light2d` | S | P2, P13, P14, P1b | offen |
 | P23 | Okklusionsmaske, Distanzfeld, Cache | `knorke-light2d` | O | P22, P16 | offen |
-| P24 | Licht-Programmtabelle (92 Programme) | `knorke-light2d` | O | P2 | offen |
+| P24 | Licht-Programmtabelle (92 Programme) | `knorke-light2d` | O | P2, P1b | offen |
 | P25 | Lichtstufe | `knorke-light2d` | O | P24, P7, P8, P23 | offen |
 | P26 | Atlanten + Ambient-Pass | `knorke-light2d` | S | P25, P9, P10, P11 | offen |
 | P27 | Composite + Layout | `knorke-light2d` | S | P25 | offen |
@@ -75,6 +78,7 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 
 Neueste oben. Datum · wer · was · Ergebnis (auch Fehlschläge, Messwerte).
 
+- 2026-11-24 · Opus-Agent + Claude · **Gate-Spike gemerged und bestanden** (ADR 0015): `minimal_normal_map` und neue Referenz `gate_sprite_shadow` (C++ über C-API, `tests/golden/chiaro/gate/gate_ref.c`) bitgleich; Frame-Zeit Rust = C++ im Rauschen. Lücken: keine sichere Pass-API (→ P1b), keine Uniform-Layout-Prüfung (→ P24), SDL-GPU ohne Timestamps. Spike-Test: `cargo xtask shaders --src D:\Entwicklung\chiaro\shaders\compiled --formats spirv`, dann `KNORKE_SPIKE_OUT=<dir>`/`KNORKE_SPIKE_BENCH=<frames>`.
 - 2026-11-24 · Opus-Agent + Claude · P2 gemerged. Packs Chiaro voll (151 Programme): SPIR-V 4,4 MB, MSL 10,2 MB, DXIL 2,2 MB. Noch ein gemeinsames Pack `knorke-chiaro`; Aufteilung light2d/post per `--only`, sobald die GPU-Stufen da sind. Chiaros feste Programmtabellen bleiben für P24. Prüfungen: 1126 Tests grün (all-features, auch `--release`), 1109 (no-default), 20 Regeln, standalone ok. Gate-Spike gestartet.
 - 2026-11-24 · Sonnet-Agent + Claude · P5–P7 gemerged: Crate `knorke-light2d` (80 Tests, nur `knorke-types`/`knorke-math`), Vertragstest `no_alloc_light2d` (0 Allokationen), typisierte Fehler `knorke.light2d.*`, keine C-ABI-Flags. Gesamt nach Merge: 1103 Tests grün (all-features), 1097 (no-default), 20 Abhängigkeitsregeln.
 - 2026-11-24 · Opus-Agent + Claude · P1 gemerged: `knorke-gpu` (Device geliehen, `GpuHandle` mit Lebendzähler, RenderTarget, Samplers, UploadBuffer, Staging), Diagnosecodes `knorke.gpu.*`, 9 Tests (4 echte GPU-Tests, überspringen ohne GPU), compile_fail-Test für Lebensdauer. `Device` bewusst weder `Send` noch `Sync`. P2 gestartet.

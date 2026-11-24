@@ -828,8 +828,8 @@ Quelle: `D:\Entwicklung\chiaro` @ `9bc5b9b` (gleicher Stand wie die Inventur `do
 
 | Schritt | Inhalt | Status | Bemerkung |
 |---|---|---|---|
-| 1 | **`knorke-gpu`**: sicherer Rust-Wrapper um SDL3-GPU (Device geliehen vom Host, Texture, RenderTarget, Shader aus Chiaro-Blobs + Reflection, PipelineCache, UploadBuffer, Debug-Gruppen); `unsafe` nur hier (ADR 0005) | geplant | vorher Reife von `sdl3-sys` prüfen (Inventur §7.3/4); Vertrag ADR 0002: kein Submit/Present/Readback im Modul |
-| 2 | **Gate-Spike (5.1)**: ein Punktlicht + ein Schattenfall + Offscreen-Capture in Rust, gegen dieselbe Szene aus C++-Chiaro; Passzeiten und Bilddiff messen | geplant | Ergebnis als ADR „Chiaro: Rust-Port ja/nein“ |
+| 1 | **`knorke-gpu`** (erledigt 2026-11-24, P1/P2): sicherer Rust-Wrapper um SDL3-GPU (Device geliehen vom Host, Texture, RenderTarget, Shader aus Chiaro-Blobs + Reflection, PipelineCache, UploadBuffer, Debug-Gruppen); `unsafe` nur hier (ADR 0005) | geplant | vorher Reife von `sdl3-sys` prüfen (Inventur §7.3/4); Vertrag ADR 0002: kein Submit/Present/Readback im Modul |
+| 2 | **Gate-Spike (5.1)**: ein Punktlicht + ein Schattenfall + Offscreen-Capture in Rust, gegen dieselbe Szene aus C++-Chiaro; Passzeiten und Bilddiff messen | erledigt 2026-11-24: bestanden, bitgleich (ADR 0015) | Ergebnis als ADR „Chiaro: Rust-Port ja/nein“ |
 | 3 | Golden Scenes aus den Chiaro-Demos (`--screenshot --time`) erzeugen, Paritätsmetrik mit Ausreißer-Budget (Treiber streut schon in C++, Inventur §1.3) | geplant | ohne das keine Paritätsaussage |
 | 4 | CPU-Logik portieren (Licht-, Schatten-, Medien-Mathematik, Atlanten) samt Unit-Tests als Spezifikation; `knorke-math`-Typen, `det::*`, kein `HashMap` | geplant | gut parallel in Teilen machbar |
 | 5 | GPU-Stufen portieren (8-Stufen-Pipeline, Licht-Programmtabelle exakt aus `cmake/ChiaroLightPrograms.cmake`, Schatten-Cache) | geplant | größtes Risiko: falsch belegte Slots ergeben stille Bildfehler (Inventur §7.3/1–2) |

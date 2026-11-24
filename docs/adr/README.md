@@ -19,3 +19,4 @@ Bindend für alle Änderungen (`CLAUDE.md`). Neue Grundsatzentscheidung → neue
 | [0012](0012-sagax-split.md) | Sagax-Neuschnitt: Grid, Navigation, Perception, AI, Integration | angenommen |
 | [0013](0013-cpu-rendering.md) | CPU-Rendering: pixelraum als `knorke-render` + `knorke-lighting` | angenommen (lineares Licht umgesetzt) |
 | [0014](0014-chiaro-port-split.md) | Chiaro-Port: Schnitt in `knorke-gpu`/`-post`/`-light2d`, Shader als getrennte Pakete pro Format (Vulkan Standard, D3D12 optional), GPU als Hauptweg | angenommen (`sdl3-sys`-Prüfung offen) |
+| [0015](0015-chiaro-gate-rust.md) | Chiaro-Gate bestanden: Rust wird Zielimplementierung, sichere Pass-API vor Welle 2 | angenommen |
