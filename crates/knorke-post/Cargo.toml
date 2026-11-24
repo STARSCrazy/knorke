@@ -1,15 +1,28 @@
 [package]
 name = "knorke-post"
-description = "Post-processing math of the Knorke Engine (colour transfer, tonemap, grading, output rect, CRT, bloom plan, shockwaves), ported from Chiaro. CPU side only; the GPU passes live elsewhere."
+description = "Post-processing of the Knorke Engine, ported from Chiaro: colour transfer, tonemap, grading, output rect, CRT, bloom plan, shockwaves and settings (CPU part), the shader parameter blocks, and behind the `gpu` feature the bloom and output passes on knorke-gpu (ADR 0014)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# GPU passes (bloom chain and output pass) on knorke-gpu (SDL3 GPU).
+gpu = ["dep:knorke-gpu", "knorke-gpu/sdl"]
+# `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.
+sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
+
 [dependencies]
 knorke-math = { workspace = true }
 knorke-types = { workspace = true }
+knorke-gpu = { workspace = true, optional = true }
+
+[dev-dependencies]
+# GPU parity test: golden PNGs and the parity metric of the Chiaro port (P3).
+png = "0.17"
+knorke-contract-tests = { path = "../../tests/contracts" }
 
 [lints]
 workspace = true

@@ -242,8 +242,11 @@ dependencies = [
 name = "knorke-post"
 version = "0.0.1"
 dependencies = [
+ "knorke-contract-tests",
+ "knorke-gpu",
  "knorke-math",
  "knorke-types",
+ "png",
 ]
 
 [[package]]
