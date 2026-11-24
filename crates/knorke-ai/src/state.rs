@@ -470,4 +470,13 @@ mod tests {
         assert!(m.set_timeout(0, 1, 9).is_err());
         assert!(m.set_state(4, 0).is_err());
     }
+
+    /// Exact bytes of the plain machine values (see `pinned_bytes`).
+    #[test]
+    fn value_bytes_are_pinned() {
+        assert_bytes!(
+            Transition { from: 1, to: 2, mask: 3, value: 4, after: 5 } => "01000000020000000300000000000000040000000000000005000000",
+            StateDef { timeout: 6, next: 7 } => "0600000007000000",
+        );
+    }
 }

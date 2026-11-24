@@ -323,4 +323,18 @@ mod tests {
         assert!(Reader::new(&[2]).get::<Apply>().is_err());
         assert!(Reader::new(&[3]).get::<Pick>().is_err());
     }
+
+    /// Exact bytes of the plain decision values (see `pinned_bytes`).
+    #[test]
+    fn value_bytes_are_pinned() {
+        let c = Consideration::new(3, Curve::Linear, -1, 100);
+        assert_bytes!(
+            c => "0300000000ffffffff64000000",
+            Candidate { option: 1, target: 2 } => "0100000002000000",
+            Pick::Best => "00",
+            Pick::Weighted { top: 3 } => "0103000000",
+            Pick::Uniform { top: 4 } => "0204000000",
+            Factor { consideration: c, pull: 5, apply: Apply::Multiply } => "0300000000ffffffff640000000500000001",
+        );
+    }
 }

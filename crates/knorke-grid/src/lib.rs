@@ -87,6 +87,25 @@ mod tests {
         assert_eq!(r.get::<Cell>(), Ok(Cell::new(-3, 7, 2)));
         assert_eq!(r.get::<HexLayout>(), Ok(HexLayout::EvenQ));
         assert_eq!(r.get::<Sine>(), Ok(Sine::Coarse));
+        // Pinned bytes: cell fields in order (little-endian), then the enum tags.
+        assert_eq!(
+            bytes,
+            [253, 255, 255, 255, 7, 0, 0, 0, 2, 0, 0, 0, 3, 1][..]
+        );
+        let mut tags = alloc::vec::Vec::new();
+        let mut w = Writer::new(&mut tags);
+        for l in [
+            HexLayout::OddR,
+            HexLayout::EvenR,
+            HexLayout::OddQ,
+            HexLayout::EvenQ,
+        ] {
+            w.put(&l);
+        }
+        for s in [Sine::Fine, Sine::Coarse] {
+            w.put(&s);
+        }
+        assert_eq!(tags, [0, 1, 2, 3, 0, 1]);
         assert!(Reader::new(&[9]).get::<HexLayout>().is_err());
         assert!(Reader::new(&[2]).get::<Sine>().is_err());
     }
