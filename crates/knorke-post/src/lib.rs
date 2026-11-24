@@ -1,15 +1,22 @@
-//! Post-processing math of the Knorke Engine, ported from Chiaro (ADR 0014, packages P4 and P17).
+//! Post-processing of the Knorke Engine, ported from Chiaro (ADR 0014, packages P4, P17, P19, P20).
 //!
-//! This crate holds the CPU side of the output stage: colour transfer functions, tonemapping,
-//! grading, the output rectangle, the CRT and bloom parameter math, the shockwave helpers and the
-//! settings of these stages ([`settings`], P19).
-//! It contains no GPU code and does not depend on any rendering or lighting crate.
+//! The CPU side of the output stage: colour transfer functions, tonemapping, grading, the output
+//! rectangle, the CRT and bloom parameter math, the shockwave helpers, the settings of these
+//! stages ([`settings`], P19), the flag word of the output shader ([`output_flags`]) and the
+//! uniform blocks of the bloom and output shaders ([`params`], P20). All of it is GPU-free and
+//! allocation-free.
+//!
+//! With feature `gpu` the module `pass` adds [`PostRenderer`](pass::PostRenderer): the bloom
+//! chain and the output pass (exposure, bloom, tonemap, grade, vignette, CRT, shockwave
+//! distortion, scaling and letterbox, overlay, sRGB encode) on `knorke-gpu`, recording into a
+//! command buffer the host lends (ADR 0002). Shaders are Chiaro's compiled ones from a
+//! `.kpak` pack (`cargo xtask shaders`). The crate does not depend on any rendering or lighting
+//! crate.
 //!
 //! # Not ported (yet)
 //!
-//! - `Formats.*` (ADR 0014 P4): the format tables map `SDL_GPUTextureFormat` values. That enum belongs to the
-//!   GPU wrapper (`knorke-gpu`, P1/P3), and this crate must not depend on SDL or a GPU crate. The table moves
-//!   there with the GPU wrapper.
+//! - `Formats.*` (ADR 0014 P4): the format tables map `SDL_GPUTextureFormat` values and live in
+//!   `knorke_gpu::formats`; the GPU pass uses them.
 //! - Tests that need the C API structs (`CHI_CrtSettings`, `CHI_BloomSettings`, `CHI_ShockwaveDesc`,
 //!   `CHI_OutputSettings`), the settings store, the SDL error strings, the output flags or the C++
 //!   wrapper: the same checks run here on the Rust types (field names and values), the struct/flag/
@@ -25,7 +32,11 @@
 pub mod bloom;
 pub mod color;
 pub mod crt;
+pub mod output_flags;
 pub mod output_rect;
+pub mod params;
+#[cfg(feature = "gpu")]
+pub mod pass;
 pub mod settings;
 pub mod shockwave;
 
