@@ -613,3 +613,6 @@ impl SnapshotValue for Contagion {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod value_bytes;

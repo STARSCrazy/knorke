@@ -738,3 +738,6 @@ impl<N: Copy + Eq + Hash + SnapshotValue, H: Heuristic<N> + SnapshotValue> Snaps
         result
     }
 }
+
+#[cfg(test)]
+mod value_bytes;

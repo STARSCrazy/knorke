@@ -899,3 +899,6 @@ impl<N: Copy + Eq + Hash + SnapshotValue> SnapshotValue for Search<N> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod value_bytes;

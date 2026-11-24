@@ -668,6 +668,17 @@ mod tests {
     use super::*;
     use crate::search::{Limits, PathResult, find_path};
 
+    /// Exact bytes of the grid rules (see `knorke_types::assert_bytes!`): a swapped tag or
+    /// field order fails here even though it round-trips.
+    #[test]
+    fn rules_bytes_are_pinned() {
+        let eight = GridRules::preset(Preset::Octile);
+        knorke_types::assert_bytes!(
+            eight => "01000a0000000e000000",
+            GridRules { moves: Moves::Four, cut_corners: true, straight: 1, diagonal: 2 } => "00010100000002000000",
+        );
+    }
+
     #[test]
     fn distance_is_octile() {
         let r = GridRules::preset(Preset::Octile);

@@ -471,3 +471,6 @@ impl SnapshotValue for Inbox {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod value_bytes;

@@ -767,6 +767,17 @@ mod tests {
     use crate::grid::{DenseGrid, GridRules, Preset};
     use crate::hex::HexLayout;
 
+    /// Exact bytes of the last-result marker (see `knorke_types::assert_bytes!`): a swapped
+    /// tag fails here even though it round-trips.
+    #[test]
+    fn last_bytes_are_pinned() {
+        knorke_types::assert_bytes!(
+            Last::Nothing => "00",
+            Last::Path => "01",
+            Last::Area => "02",
+        );
+    }
+
     fn square() -> Navigator {
         Navigator::new(Topology::Square(GridRules::preset(Preset::Octile)), 10_000)
     }

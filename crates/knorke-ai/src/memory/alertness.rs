@@ -116,3 +116,6 @@ impl SnapshotValue for Alertness {
         })
     }
 }
+
+#[cfg(test)]
+mod value_bytes;
