@@ -602,10 +602,26 @@ impl<C: SnapshotValue> SnapshotValue for CommandBuffer<C> {
 /// assert_eq!(bytes, [1, 0, 0, 0, 0xfe, 0xff]);
 /// assert_eq!(Reader::new(&bytes).get::<Hit>(), Ok(Hit { at: 1, damage: -2 }));
 /// ```
+///
+/// A generic struct lists its parameters, with bounds, in brackets in front (one struct per
+/// call):
+///
+/// ```
+/// # use knorke_types::{Reader, SnapshotValue, Writer, by_fields};
+/// #[derive(Debug, PartialEq)]
+/// struct Tagged<T> { id: u8, value: T }
+/// by_fields! { [T: SnapshotValue] Tagged<T> { id, value } }
+///
+/// let mut bytes = Vec::new();
+/// Writer::new(&mut bytes).put(&Tagged { id: 7, value: 2u16 });
+/// assert_eq!(bytes, [7, 2, 0]);
+/// assert_eq!(Reader::new(&bytes).get::<Tagged<u16>>(), Ok(Tagged { id: 7, value: 2 }));
+/// ```
 #[macro_export]
 macro_rules! by_fields {
-    ($($t:ty { $($f:ident),+ $(,)? });+ $(;)?) => {$(
-        impl $crate::SnapshotValue for $t {
+    // The one place that writes the impl; the public forms below forward to it.
+    (@impl [$($gen:tt)*] $t:ty { $($f:ident),+ }) => {
+        impl<$($gen)*> $crate::SnapshotValue for $t {
             #[inline]
             fn put(&self, w: &mut $crate::Writer<'_>) { $( w.put(&self.$f); )+ }
             #[inline]
@@ -615,6 +631,14 @@ macro_rules! by_fields {
                 ::core::result::Result::Ok(Self { $( $f: r.get()? ),+ })
             }
         }
+    };
+    // Generic struct: the parameters in brackets, bounds included (`SnapshotValue` for the
+    // fields has to be among them).
+    ([$($gen:tt)+] $t:ty { $($f:ident),+ $(,)? }) => {
+        $crate::by_fields!(@impl [$($gen)+] $t { $($f),+ });
+    };
+    ($($t:ty { $($f:ident),+ $(,)? });+ $(;)?) => {$(
+        $crate::by_fields!(@impl [] $t { $($f),+ });
     )+};
 }
 
