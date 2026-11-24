@@ -153,6 +153,15 @@ const RULES: &[Rule] = &[
         through: &[],
         why: "post-processing math is shared by 2D and 3D output and stays free of lighting, rendering and AI",
     },
+    // P31 (ADR 0017): knorke-integration joins 2D light and post on the GPU, but reaches the
+    // graphics API only through knorke-gpu, like the two crates it joins.
+    Rule {
+        from: &["knorke-integration"],
+        to: &["sdl3*", "wgpu*"],
+        except: &[],
+        through: &["knorke-gpu"],
+        why: "the GPU profile of knorke-integration reaches SDL only through knorke-gpu (ADR 0014, ADR 0017)",
+    },
     Rule {
         from: &["knorke-runtime"],
         to: DEV_PLANE,
@@ -169,6 +178,7 @@ const RULES: &[Rule] = &[
             "knorke-render",
             "knorke-lighting",
             "knorke-light2d",
+            "knorke-post",
             "knorke-ai",
             "knorke-navigation",
             "knorke-perception",
@@ -235,6 +245,7 @@ const RULES: &[Rule] = &[
             "knorke-lighting",
             "knorke-gpu",
             "knorke-light2d",
+            "knorke-post",
         ],
         to: &["knorke-exec", "rayon*"],
         except: &[],
@@ -612,6 +623,44 @@ mod tests {
             v[0].starts_with("knorke-ai -> knorke-navigation"),
             "{}",
             v[0]
+        );
+    }
+
+    #[test]
+    fn integration_reaches_sdl_only_through_knorke_gpu() {
+        let m = meta(
+            &["knorke-integration", "knorke-gpu", "knorke-post"],
+            vec![
+                node(
+                    "knorke-integration",
+                    &[("knorke-gpu", "normal"), ("sdl3-sys", "normal")],
+                ),
+                node("knorke-gpu", &[("sdl3-sys", "normal")]),
+                node("knorke-post", &[("knorke-integration", "normal")]),
+                node("sdl3-sys", &[]),
+            ],
+            &[
+                "knorke-integration",
+                "knorke-gpu",
+                "knorke-post",
+                "sdl3-sys",
+            ],
+        );
+        let v = violations(&m);
+        assert!(
+            v.iter()
+                .any(|l| l.starts_with("knorke-integration -> sdl3-sys")),
+            "{v:?}"
+        );
+        assert!(
+            v.iter()
+                .any(|l| l.starts_with("knorke-post -> knorke-integration")),
+            "{v:?}"
+        );
+        assert!(
+            !v.iter()
+                .any(|l| l.starts_with("knorke-integration -> knorke-gpu -> sdl3-sys")),
+            "{v:?}"
         );
     }
 
