@@ -31,6 +31,9 @@
 // `!(x > 0.0)` rejects NaN on purpose, as in the C++ original.
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
+pub mod ambient_zone;
+pub mod ambient_zone_culling;
+pub mod ambient_zone_store;
 pub mod animation;
 pub mod area_light;
 pub mod codec;
@@ -46,6 +49,9 @@ pub mod mask;
 pub mod mask_store;
 pub mod material;
 pub mod obstacle;
+pub mod profile;
+pub mod profile_import;
+pub mod profile_store;
 pub mod projection;
 pub mod resources;
 pub mod triangulate;
