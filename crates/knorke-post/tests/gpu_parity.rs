@@ -18,19 +18,18 @@
 #![cfg(feature = "gpu")]
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
 
-use knorke_contract_tests::parity::{ParityBudget, ParityReport, compare_rgba8};
+use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, load_png_rgba8, save_png_rgba8};
 use knorke_gpu::sys::gpu::{
-    SDL_GPU_SHADERFORMAT_SPIRV, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB, SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
-    SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUBufferUsageFlags,
-    SDL_GPUTextureFormat, SDL_GPUTextureUsageFlags,
+    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB,
+    SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+    SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUTextureFormat,
 };
+use knorke_gpu::test_support::{texture, vulkan_device};
 use knorke_gpu::{
-    Bindings, Blend, ColorTarget, CommandBuffer, Device, DownloadBuffer, Filter, Gpu, LiveCounter,
-    Load, PipelineCache, ProgramDesc, RenderTarget, SamplerBinding, Samplers, ShaderLibrary,
-    StageBindings, Texture, TextureDesc, TextureRef, UploadBuffer, init_video,
+    Bindings, Blend, ColorTarget, CommandBuffer, DownloadBuffer, Filter, Gpu, LiveCounter, Load,
+    PipelineCache, ProgramDesc, RenderTarget, SamplerBinding, Samplers, ShaderLibrary,
+    StageBindings, TextureRef,
 };
 use knorke_math::Vec2;
 use knorke_post::output_rect::ScaleMode;
@@ -201,30 +200,6 @@ fn overlay_pixels(w: u32, h: u32) -> Vec<u8> {
     px
 }
 
-/// A texture, filled with `pixels` if given (host work).
-fn texture<'d>(
-    gpu: Gpu<'d>,
-    size: (u32, u32),
-    format: SDL_GPUTextureFormat,
-    usage: SDL_GPUTextureUsageFlags,
-    pixels: Option<&[u8]>,
-) -> Texture<'d> {
-    let desc = TextureDesc::new(size.0, size.1, format, usage);
-    let texture = Texture::new(gpu, desc).expect("texture");
-    if let Some(px) = pixels {
-        let mut up = UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), px.len() as u32, "pixels");
-        up.reserve(px.len() as u64).unwrap();
-        up.map().unwrap().bytes()[..px.len()].copy_from_slice(px);
-        let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
-        cmd.copy_pass()
-            .unwrap()
-            .upload_to_texture(&up, texture.texture_ref(), false)
-            .unwrap();
-        cmd.submit_and_wait().unwrap();
-    }
-    texture
-}
-
 /// The composite shader of Chiaro without lights: HDR = scene (decoded) times the ambient light,
 /// as `CHI_Render` makes the input of the output stage.
 struct Composer<'d> {
@@ -322,71 +297,13 @@ impl<'d> Composer<'d> {
     }
 }
 
-fn golden(name: &str, w: u32, h: u32) -> Vec<u8> {
-    let path = golden_dir().join(format!("{name}.png"));
-    let decoder = png::Decoder::new(std::fs::File::open(&path).unwrap());
-    let mut reader = decoder.read_info().unwrap();
-    let mut buf = vec![0; reader.output_buffer_size()];
-    let info = reader.next_frame(&mut buf).unwrap();
-    assert_eq!((info.width, info.height), (w, h), "{}", path.display());
-    let px = &buf[..info.buffer_size()];
-    match info.color_type {
-        png::ColorType::Rgb => px
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|c| [c[0], c[1], c[2], 255])
-            .collect(),
-        png::ColorType::Rgba => px.to_vec(),
-        other => panic!("unexpected golden colour type {other:?}"),
-    }
-}
-
-fn save_png(path: &Path, rgba: &[u8], w: u32, h: u32) {
-    let file = std::fs::File::create(path).unwrap();
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), w, h);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.write_header().unwrap().write_image_data(rgba).unwrap();
-}
-
-fn report(name: &str, budget: &str, r: &ParityReport) {
-    eprintln!(
-        "{name} vs C++ [{budget}]: max diff {}, differing {} / {} px ({:.4} %), outliers {} ({} ppm), mean {:.4}",
-        r.max_diff,
-        r.differing,
-        r.compared,
-        r.differing as f64 * 100.0 / r.compared as f64,
-        r.outliers,
-        r.outlier_ppm(),
-        r.sum_diff as f64 / r.compared as f64
-    );
-}
-
-/// One device at a time: drivers dislike many devices created in parallel.
-static SERIAL: Mutex<()> = Mutex::new(());
-
-/// A Vulkan device with the guard that keeps the GPU tests of this binary one after the
-/// other, or `None` (the test then skips).
-fn vulkan() -> Option<(MutexGuard<'static, ()>, Device)> {
-    let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    init_video(Some(c"vulkan"));
-    match Device::create(SDL_GPU_SHADERFORMAT_SPIRV, false) {
-        Ok(d) => Some((guard, d)),
-        Err(e) => {
-            eprintln!("skipped: no Vulkan device ({})", e.message);
-            None
-        }
-    }
-}
-
 fn pack() -> Vec<u8> {
     std::fs::read(data_dir().join("post.spirv.kpak")).expect("tests/data/post.spirv.kpak")
 }
 
 #[test]
 fn post_pass_matches_chiaro() {
-    let Some((_serial, device)) = vulkan() else {
+    let Some(device) = vulkan_device() else {
         return;
     };
     let counter = LiveCounter::new();
@@ -486,18 +403,18 @@ fn post_pass_matches_chiaro() {
             prepared.bloom_plan().map_or(0, |p| p.levels)
         );
 
-        let reference = golden(scene.name, w, h);
+        let reference = load_png_rgba8(&golden_dir().join(format!("{}.png", scene.name)), w, h);
         let strict = compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::STRICT).unwrap();
-        report(scene.name, "STRICT", &strict);
+        strict.print(scene.name, "STRICT");
         if !strict.within(&ParityBudget::STRICT) {
             let loose =
                 compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::LOOSE).unwrap();
-            report(scene.name, "LOOSE", &loose);
+            loose.print(scene.name, "LOOSE");
             failures.push(format!("{}: {strict:?}", scene.name));
         }
         if let Some(dir) = &out {
             std::fs::create_dir_all(dir).unwrap();
-            save_png(&dir.join(format!("{}.rust.png", scene.name)), &pixels, w, h);
+            save_png_rgba8(&dir.join(format!("{}.rust.png", scene.name)), &pixels, w, h);
             let diff: Vec<u8> = pixels
                 .as_chunks::<4>()
                 .0
@@ -510,7 +427,7 @@ fn post_pass_matches_chiaro() {
                     [v, g, g, 255]
                 })
                 .collect();
-            save_png(&dir.join(format!("{}.diff.png", scene.name)), &diff, w, h);
+            save_png_rgba8(&dir.join(format!("{}.diff.png", scene.name)), &diff, w, h);
         }
     }
     drop((renderer, composer));
@@ -522,7 +439,7 @@ fn post_pass_matches_chiaro() {
 
 #[test]
 fn prepare_refuses_bad_settings_and_unsupported_targets() {
-    let Some((_serial, device)) = vulkan() else {
+    let Some(device) = vulkan_device() else {
         return;
     };
     let counter = LiveCounter::new();

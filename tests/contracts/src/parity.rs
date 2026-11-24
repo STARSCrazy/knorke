@@ -13,6 +13,8 @@
 //! Inputs are tightly packed RGBA8 buffers; alpha is ignored. Rectangles can be excluded
 //! (HUD text of the demos, which shows a frame time).
 
+use std::path::Path;
+
 /// An axis-aligned pixel rectangle `x, y, w, h` excluded from a comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {
@@ -102,6 +104,55 @@ impl ParityReport {
             (u128::from(self.outliers) * 1_000_000 / u128::from(self.compared)) as u64
         }
     }
+
+    /// One line on stderr: how close a run came, so a passing run documents its margin.
+    pub fn print(&self, name: &str, budget_name: &str) {
+        eprintln!(
+            "{name} vs C++ [{budget_name}]: max diff {}, differing {} / {} px ({:.4} %), outliers {} ({} ppm), mean {:.4}",
+            self.max_diff,
+            self.differing,
+            self.compared,
+            self.differing as f64 * 100.0 / self.compared as f64,
+            self.outliers,
+            self.outlier_ppm(),
+            self.sum_diff as f64 / self.compared as f64
+        );
+    }
+}
+
+/// Reads a golden PNG as tightly packed RGBA8 (RGB gets alpha 255). Panics with the path if the
+/// file is missing, has another size than `width` x `height`, or another colour type.
+pub fn load_png_rgba8(path: &Path, width: u32, height: u32) -> Vec<u8> {
+    let file = std::fs::File::open(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let mut reader = png::Decoder::new(file).read_info().unwrap();
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).unwrap();
+    assert_eq!(
+        (info.width, info.height),
+        (width, height),
+        "{}",
+        path.display()
+    );
+    let px = &buf[..info.buffer_size()];
+    match info.color_type {
+        png::ColorType::Rgb => px
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|c| [c[0], c[1], c[2], 255])
+            .collect(),
+        png::ColorType::Rgba => px.to_vec(),
+        other => panic!("{}: unexpected colour type {other:?}", path.display()),
+    }
+}
+
+/// Writes tightly packed RGBA8 as a PNG (for looking at a failing scene).
+pub fn save_png_rgba8(path: &Path, rgba: &[u8], width: u32, height: u32) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut enc = png::Encoder::new(std::io::BufWriter::new(file), width, height);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    enc.write_header().unwrap().write_image_data(rgba).unwrap();
 }
 
 /// Compares two RGBA8 images of `width` x `height` pixels, skipping the `ignore` rectangles.

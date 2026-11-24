@@ -20,8 +20,7 @@ knorke-types = { workspace = true }
 knorke-gpu = { workspace = true, optional = true }
 
 [dev-dependencies]
-# GPU parity test: golden PNGs and the parity metric of the Chiaro port (P3).
-png = "0.17"
+# GPU parity test: the parity metric and golden PNGs of the Chiaro port (P3).
 knorke-contract-tests = { path = "../../tests/contracts" }
 
 [lints]

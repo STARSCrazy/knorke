@@ -12,15 +12,16 @@
 //! Vulkan device or without the shader pack from `cargo xtask shaders` in `target/shaders/`.
 #![cfg(feature = "gpu")]
 
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+mod common;
 
-use knorke_gpu::sys::gpu::{
-    SDL_GPU_SHADERFORMAT_SPIRV, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_TEXTUREUSAGE_SAMPLER,
+use common::{at, polygon, rect_xy, scene_mask};
+use knorke_gpu::sys::gpu::{SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_TEXTUREUSAGE_SAMPLER};
+use knorke_gpu::test_support::{
+    assert_same_bytes, golden_bytes, half_to_f32, queue_download, read_download, with_chiaro_pack,
 };
 use knorke_gpu::{
-    ColorTarget, CommandBuffer, Device, DownloadBuffer, Filter, Gpu, LiveCounter, Load,
-    PipelineCache, Samplers, ShaderLibrary, Texture, TextureDesc, init_video,
+    ColorTarget, CommandBuffer, Filter, Gpu, Load, PipelineCache, Samplers, ShaderLibrary, Texture,
+    TextureDesc,
 };
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc, TileGridDesc};
 use knorke_light2d::occluder_raster::{
@@ -29,38 +30,7 @@ use knorke_light2d::occluder_raster::{
 };
 use knorke_light2d::shadow::{CellRect, MaskAnchor, OcclusionDomain};
 use knorke_light2d::{ObstacleId, ObstacleStore, Projection};
-use knorke_math::{At, Vec2, World2};
-
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn workspace() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn at(x: f32, y: f32) -> At<World2, Vec2> {
-    At::new(Vec2::new(x, y))
-}
-
-/// The device of a test, or `None` (with a note) to skip.
-fn device() -> Option<(MutexGuard<'static, ()>, Device, Vec<u8>)> {
-    let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let pack = workspace().join("target/shaders/knorke-chiaro.spirv.kpak");
-    let Ok(pack) = std::fs::read(&pack) else {
-        eprintln!(
-            "skipped: no shader pack at {} (cargo xtask shaders)",
-            pack.display()
-        );
-        return None;
-    };
-    init_video(Some(c"vulkan"));
-    match Device::create(SDL_GPU_SHADERFORMAT_SPIRV, false) {
-        Ok(d) => Some((guard, d, pack)),
-        Err(e) => {
-            eprintln!("skipped: no Vulkan device ({})", e.message);
-            None
-        }
-    }
-}
+use knorke_math::{At, Vec2};
 
 /// What one frame produced.
 struct Out {
@@ -85,24 +55,13 @@ impl Out {
     /// Height texel at world (x, y) for the 128x64 scene: (-base, top, finite -base, finite top).
     fn height(&self, x: usize, y: usize) -> [f32; 4] {
         let i = ((y + 32) * self.width + x + 32) * 4;
-        [0, 1, 2, 3].map(|c| half(self.heights[i + c]))
-    }
-}
-
-fn half(h: u16) -> f32 {
-    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
-    let (e, m) = (i32::from((h >> 10) & 0x1F), f32::from(h & 0x3FF));
-    match e {
-        0 => sign * m * f32::from_bits((127 - 24) << 23),
-        31 => sign * f32::INFINITY,
-        _ => sign * (1.0 + m / 1024.0) * f32::from_bits(((e - 15 + 127) as u32) << 23),
+        [0, 1, 2, 3].map(|c| half_to_f32(self.heights[i + c]))
     }
 }
 
 /// The host: shaders, pipelines, the mask and height textures and the two stages.
 struct Host<'d> {
     gpu: Gpu<'d>,
-    device: &'d Device,
     shaders: ShaderLibrary<'d>,
     pipelines: PipelineCache<'d>,
     samplers: Samplers<'d>,
@@ -115,11 +74,11 @@ struct Host<'d> {
 }
 
 impl<'d> Host<'d> {
-    fn new(gpu: Gpu<'d>, device: &'d Device, pack: &[u8]) -> Self {
-        Self::with_projection(gpu, device, pack, Projection::IDENTITY)
+    fn new(gpu: Gpu<'d>, pack: &[u8]) -> Self {
+        Self::with_projection(gpu, pack, Projection::IDENTITY)
     }
 
-    fn with_projection(gpu: Gpu<'d>, device: &'d Device, pack: &[u8], p: Projection) -> Self {
+    fn with_projection(gpu: Gpu<'d>, pack: &[u8], p: Projection) -> Self {
         let shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
         let pipelines = PipelineCache::new(&shaders, &OCCLUDER_PROGRAMS).unwrap();
         let domain = OcclusionDomain::new(128, 64, 1.0);
@@ -133,7 +92,6 @@ impl<'d> Host<'d> {
         };
         Self {
             gpu,
-            device,
             shaders,
             pipelines,
             samplers: Samplers::new(gpu).unwrap(),
@@ -170,7 +128,7 @@ impl<'d> Host<'d> {
             )
             .unwrap();
 
-        let mut cmd = CommandBuffer::acquire(self.device).unwrap();
+        let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
         let mut uploads = 0;
         {
             let mut copy = cmd.copy_pass().unwrap();
@@ -204,34 +162,19 @@ impl<'d> Host<'d> {
                 )
                 .unwrap();
         }
-        let mask_down = DownloadBuffer::new(self.gpu, self.mask.desc().bytes() as u32).unwrap();
-        let height_down = DownloadBuffer::new(self.gpu, self.height.desc().bytes() as u32).unwrap();
-        {
-            let mut copy = cmd.copy_pass().unwrap();
-            copy.download_texture(self.mask.texture_ref(), &mask_down)
-                .unwrap();
-            if height_mode {
-                copy.download_texture(self.height.texture_ref(), &height_down)
-                    .unwrap();
-            }
-        }
+        let mask_down = queue_download(self.gpu, &mut cmd, self.mask.texture_ref());
+        let height_down =
+            height_mode.then(|| queue_download(self.gpu, &mut cmd, self.height.texture_ref()));
         cmd.submit_and_wait().unwrap();
-
-        let mut mask = vec![0u8; self.mask.desc().bytes() as usize];
-        let mut mask_down = mask_down;
-        mask_down.read(&mut mask).unwrap();
-        let mut heights = Vec::new();
-        if height_mode {
-            let mut raw = vec![0u8; self.height.desc().bytes() as usize];
-            let mut height_down = height_down;
-            height_down.read(&mut raw).unwrap();
-            heights = raw
+        let mask = read_download(mask_down);
+        let heights = height_down.map_or_else(Vec::new, |down| {
+            read_download(down)
                 .as_chunks::<2>()
                 .0
                 .iter()
                 .map(|b| u16::from_le_bytes(*b))
-                .collect();
-        }
+                .collect()
+        });
         Out {
             mask,
             heights,
@@ -245,24 +188,6 @@ impl<'d> Host<'d> {
 /// A texel at world (x, y) of the 128x64 scene, in mask coordinates.
 fn m(v: usize) -> usize {
     v + 32
-}
-
-fn polygon(store: &mut ObstacleStore, xy: &[Vec2], common: ObstacleCommon) -> ObstacleId {
-    store
-        .create_shape(&ShapeDesc {
-            common,
-            shape: Shape::Polygon(xy),
-        })
-        .unwrap()
-}
-
-fn rect_xy(x0: f32, y0: f32, x1: f32, y1: f32) -> [Vec2; 4] {
-    [
-        Vec2::new(x0, y0),
-        Vec2::new(x1, y0),
-        Vec2::new(x1, y1),
-        Vec2::new(x0, y1),
-    ]
 }
 
 fn square() -> [Vec2; 4] {
@@ -283,16 +208,10 @@ fn with_tiles(
 
 /// Runs `body` with a host, or skips; checks that nothing leaks afterwards.
 fn with_host(body: impl for<'d> FnOnce(&mut Host<'d>)) {
-    let Some((_guard, device, pack)) = device() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    {
-        let gpu = Gpu::new(&device, &counter);
-        let mut host = Host::new(gpu, &device, &pack);
+    with_chiaro_pack(|gpu, pack| {
+        let mut host = Host::new(gpu, pack);
         body(&mut host);
-    }
-    assert_eq!(counter.live(), 0, "GPU objects leaked");
+    });
 }
 
 #[test]
@@ -505,13 +424,9 @@ fn circles_thinner_than_a_texel_still_cast_a_shadow() {
 
 #[test]
 fn dynamic_geometry_grows_its_buffer_once_and_then_stays_stable() {
-    let Some((_guard, device, pack)) = device() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    {
-        let gpu = Gpu::new(&device, &counter);
-        let mut host = Host::new(gpu, &device, &pack);
+    with_chiaro_pack(|gpu, pack| {
+        let counter = gpu.counter();
+        let mut host = Host::new(gpu, pack);
         let mut store = ObstacleStore::new();
         // Many dynamic circles: far beyond the initial 4096 floats of the buffer.
         for i in 0..100 {
@@ -536,19 +451,14 @@ fn dynamic_geometry_grows_its_buffer_once_and_then_stays_stable() {
             assert_eq!(again.mask, out.mask);
         }
         assert_eq!(counter.live(), live);
-    }
-    assert_eq!(counter.live(), 0);
+    });
 }
 
 #[test]
 fn a_destroyed_tile_grid_releases_its_texture() {
-    let Some((_guard, device, pack)) = device() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    {
-        let gpu = Gpu::new(&device, &counter);
-        let mut host = Host::new(gpu, &device, &pack);
+    with_chiaro_pack(|gpu, pack| {
+        let counter = gpu.counter();
+        let mut host = Host::new(gpu, pack);
         let mut store = ObstacleStore::new();
         polygon(&mut store, &square(), ObstacleCommon::default());
         host.frame(&store, false);
@@ -566,19 +476,13 @@ fn a_destroyed_tile_grid_releases_its_texture() {
         assert_eq!(out.at(m(2), m(2)), 0);
         // The texture is gone; the transfer buffer for cell uploads stays for reuse.
         assert_eq!(counter.live(), with_tiles - 1);
-    }
-    assert_eq!(counter.live(), 0);
+    });
 }
 
 #[test]
 fn edited_cells_upload_only_their_bounding_box_and_give_the_same_image() {
-    let Some((_guard, device, pack)) = device() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    {
-        let gpu = Gpu::new(&device, &counter);
-        let mut host = Host::new(gpu, &device, &pack);
+    with_chiaro_pack(|gpu, pack| {
+        let mut host = Host::new(gpu, pack);
         let mut store = ObstacleStore::new();
         let id = with_tiles(&mut store, &[1; 16 * 8], 16, 8, 8.0);
         host.frame(&store, false);
@@ -595,11 +499,10 @@ fn edited_cells_upload_only_their_bounding_box_and_give_the_same_image() {
         assert_eq!(edited.at(m(48), m(20)), 255); // cell (6, 2)
 
         // A host that never saw the old grid draws the same image from scratch.
-        let mut fresh = Host::new(gpu, &device, &pack);
+        let mut fresh = Host::new(gpu, pack);
         let whole = fresh.frame(&store, false);
         assert_eq!(whole.mask, edited.mask);
-    }
-    assert_eq!(counter.live(), 0);
+    });
 }
 
 #[test]
@@ -755,63 +658,6 @@ fn switching_the_height_mode_rebuilds_the_static_buffers() {
 
 // ---- images against C++ Chiaro ----
 
-/// The scene of `tests/golden/chiaro/occluder/mask_ref.cpp` (`scene_mask`): static and dynamic
-/// polygons with opacities, a footprint obstacle, two circles (one thinner than a texel) and two
-/// tile grids (one rotated with cell opacities, one with edge strips).
-fn scene_mask() -> ObstacleStore {
-    let mut store = ObstacleStore::new();
-    let still = ObstacleCommon::default();
-    let with = |x, y, rotation, opacity| ObstacleCommon {
-        position: at(x, y),
-        rotation,
-        opacity,
-        ..still
-    };
-    polygon(&mut store, &square(), with(0.0, 0.0, 0.0, 0.75));
-    let tri = [
-        Vec2::new(70.0, 10.0),
-        Vec2::new(90.0, 14.0),
-        Vec2::new(76.0, 30.0),
-    ];
-    polygon(&mut store, &tri, with(0.0, 0.0, 0.0, 1.0));
-    let moving = ObstacleCommon {
-        dynamic: true,
-        ..with(100.0, 40.0, 33.0, 0.5)
-    };
-    polygon(&mut store, &rect_xy(-10.0, -2.0, 10.0, 2.0), moving);
-    for (radius, x, y) in [(6.0, 30.0, 45.0), (0.2, 64.25, 32.25)] {
-        store
-            .create_shape(&ShapeDesc {
-                common: with(x, y, 0.0, 1.0),
-                shape: Shape::Circle { radius },
-            })
-            .unwrap();
-    }
-    let footprint = ObstacleCommon {
-        shadow_footprint: true,
-        ..with(0.0, 0.0, 0.0, 0.6)
-    };
-    polygon(&mut store, &rect_xy(10.0, 10.0, 20.0, 18.0), footprint);
-
-    let solid: Vec<u8> = (0..32).map(|i| u8::from((i * 7 + 3) % 5 != 0)).collect();
-    let opacity: Vec<u8> = (0..32).map(|i| (255 - (i % 4) * 60) as u8).collect();
-    let mut grid = TileGridDesc::new(8, 4, &solid);
-    grid.cell_size = Vec2::new(6.0, 5.0);
-    grid.opacity = Some(&opacity);
-    grid.common = with(60.0, 38.0, 20.0, 0.8);
-    store.create_tile_grid(&grid).unwrap();
-
-    let solid = [1u8; 6];
-    let edges = [1u8, 2, 4, 8, 5, 0];
-    let mut grid = TileGridDesc::new(3, 2, &solid);
-    grid.cell_size = Vec2::new(10.0, 10.0);
-    grid.edge_width = 3.0;
-    grid.edges = Some(&edges);
-    grid.common = with(90.0, 5.0, 0.0, 1.0);
-    store.create_tile_grid(&grid).unwrap();
-    store
-}
-
 /// `scene_height` of `mask_ref.cpp`: overlapping finite obstacles, an infinite one, a circle
 /// with a bottom and a grid with its own levels and bottoms.
 fn scene_height() -> ObstacleStore {
@@ -857,23 +703,6 @@ fn scene_height() -> ObstacleStore {
     store
 }
 
-fn golden(name: &str) -> Vec<u8> {
-    let path = workspace().join("tests/golden/chiaro/occluder").join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-}
-
-/// Compares with the C++ dump and reports (differing bytes, largest difference).
-fn compare(name: &str, got: &[u8], want: &[u8]) -> (usize, u8) {
-    assert_eq!(got.len(), want.len(), "{name}: size");
-    let diffs = got.iter().zip(want).map(|(a, b)| a.abs_diff(*b));
-    let (count, max) = diffs.fold((0, 0), |(n, m), d| (n + usize::from(d > 0), m.max(d)));
-    eprintln!(
-        "{name} vs C++ Chiaro: {count} of {} bytes differ, max difference {max}",
-        got.len()
-    );
-    (count, max)
-}
-
 #[test]
 fn the_mask_scene_matches_cpp_chiaro_texel_for_texel() {
     with_host(|host| {
@@ -889,8 +718,11 @@ fn the_mask_scene_matches_cpp_chiaro_texel_for_texel() {
             lit > 1500,
             "the scene should light a good part of the mask, got {lit}"
         );
-        let (count, _) = compare("mask_scene", &out.mask, &golden("mask_scene.mask.bin"));
-        assert_eq!(count, 0, "the mask differs from C++ Chiaro");
+        assert_same_bytes(
+            "mask_scene",
+            &out.mask,
+            &golden_bytes("occluder", "mask_scene.mask.bin"),
+        );
     });
 }
 
@@ -898,19 +730,17 @@ fn the_mask_scene_matches_cpp_chiaro_texel_for_texel() {
 fn the_height_scene_matches_cpp_chiaro_texel_for_texel() {
     with_host(|host| {
         let out = host.frame(&scene_height(), true);
-        let (count, _) = compare(
+        assert_same_bytes(
             "height_scene mask",
             &out.mask,
-            &golden("height_scene.mask.bin"),
+            &golden_bytes("occluder", "height_scene.mask.bin"),
         );
-        assert_eq!(count, 0, "the mask differs from C++ Chiaro");
         let bytes: Vec<u8> = out.heights.iter().flat_map(|h| h.to_le_bytes()).collect();
-        let (count, _) = compare(
+        assert_same_bytes(
             "height_scene height",
             &bytes,
-            &golden("height_scene.height.bin"),
+            &golden_bytes("occluder", "height_scene.height.bin"),
         );
-        assert_eq!(count, 0, "the height texture differs from C++ Chiaro");
     });
 }
 
@@ -993,12 +823,7 @@ fn reference(
 
 #[test]
 fn a_skewed_projection_agrees_with_a_cpu_rasterizer() {
-    let Some((_guard, device, pack)) = device() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    {
-        let gpu = Gpu::new(&device, &counter);
+    with_chiaro_pack(|gpu, pack| {
         // An isometric-like view with a fractional origin: exercises the axes, the margin and
         // the anchor remainder of the vertex shader.
         let projection = Projection {
@@ -1007,7 +832,7 @@ fn a_skewed_projection_agrees_with_a_cpu_rasterizer() {
             y_axis: Vec2::new(-1.0, 0.5),
             z_axis: Vec2::ZERO,
         };
-        let mut host = Host::with_projection(gpu, &device, &pack, projection);
+        let mut host = Host::with_projection(gpu, pack, projection);
         let mut store = ObstacleStore::new();
         let tri = [
             Vec2::new(0.0, 0.0),
@@ -1054,6 +879,5 @@ fn a_skewed_projection_agrees_with_a_cpu_rasterizer() {
             covered > 500,
             "the scene should cover a good part of the mask"
         );
-    }
-    assert_eq!(counter.live(), 0);
+    });
 }

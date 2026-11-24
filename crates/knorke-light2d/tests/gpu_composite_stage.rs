@@ -8,21 +8,19 @@
 //! shader pack from `cargo xtask shaders` in `target/shaders/`.
 #![cfg(feature = "gpu")]
 
-use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+mod common;
 
+use common::{H, W, at, dome_material_pixels};
 use knorke_gpu::sys::gpu::{
-    SDL_GPU_SHADERFORMAT_SPIRV, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB, SDL_GPU_TEXTUREUSAGE_SAMPLER,
-    SDL_GPUBufferUsageFlags, SDL_GPUTextureFormat,
+    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB,
+    SDL_GPUTextureFormat,
 };
-use knorke_gpu::{
-    CommandBuffer, Device, DownloadBuffer, Gpu, LiveCounter, Samplers, ShaderLibrary, Texture,
-    TextureDesc, TextureRef, UploadBuffer, init_video,
+use knorke_gpu::test_support::{
+    golden_bytes, half_to_f32, queue_download, read_download, rgba16f_diff, sampled, sampled_rgba8,
+    with_chiaro_pack,
 };
-use knorke_light2d::codec::{
-    AlphaSource, Material, NormalMapOptions, convert_normal_map, surface_pixel,
-};
+use knorke_gpu::{CommandBuffer, Gpu, Samplers, ShaderLibrary, Texture};
+use knorke_light2d::codec::surface_pixel;
 use knorke_light2d::composite::{
     COMPOSITE_INPUT_MISSING, COMPOSITE_NOT_PREPARED, CompositeFrame, CompositeLight,
     CompositeProgram, CompositeStage, InputColorSpace,
@@ -33,45 +31,7 @@ use knorke_light2d::light_pipelines::LightPipelines;
 use knorke_light2d::lighting::{DetailMode, LightingFrame, LightingResult, LightingStage};
 use knorke_light2d::settings::{GlowColor, LightSettings, Quality, Resolutions};
 use knorke_light2d::{LightStore, NoResources, Projection};
-use knorke_math::{At, Vec2, Vec3, World2, det};
-
-static SERIAL: Mutex<()> = Mutex::new(());
-
-const W: u32 = 96;
-const H: u32 = 48;
-
-fn workspace() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn device() -> Option<(MutexGuard<'static, ()>, Device, Vec<u8>)> {
-    let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let pack = workspace().join("target/shaders/knorke-chiaro.spirv.kpak");
-    let Ok(pack) = std::fs::read(&pack) else {
-        eprintln!(
-            "skipped: no shader pack at {} (cargo xtask shaders)",
-            pack.display()
-        );
-        return None;
-    };
-    init_video(Some(c"vulkan"));
-    match Device::create(SDL_GPU_SHADERFORMAT_SPIRV, false) {
-        Ok(d) => Some((guard, d, pack)),
-        Err(e) => {
-            eprintln!("skipped: no Vulkan device ({})", e.message);
-            None
-        }
-    }
-}
-
-fn half(h: u16) -> f32 {
-    let (e, m) = (i32::from((h >> 10) & 0x1F), f32::from(h & 0x3FF));
-    let v = match e {
-        0 => m * f32::from_bits((127 - 24) << 23),
-        _ => (1.0 + m / 1024.0) * f32::from_bits(((e - 15 + 127) as u32) << 23),
-    };
-    if h & 0x8000 != 0 { -v } else { v }
-}
+use knorke_math::{Vec3, det};
 
 fn srgb_to_linear(c: f32) -> f32 {
     if c <= 0.04045 {
@@ -79,31 +39,6 @@ fn srgb_to_linear(c: f32) -> f32 {
     } else {
         det::pow((c + 0.055) / 1.055, 2.4)
     }
-}
-
-fn texture<'d>(
-    gpu: Gpu<'d>,
-    w: u32,
-    h: u32,
-    format: SDL_GPUTextureFormat,
-    pixels: &[u8],
-) -> Texture<'d> {
-    let desc = TextureDesc::new(w, h, format, SDL_GPU_TEXTUREUSAGE_SAMPLER);
-    let texture = Texture::new(gpu, desc).unwrap();
-    let mut up = UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), pixels.len() as u32, "px");
-    up.reserve(pixels.len() as u64).unwrap();
-    up.map().unwrap().bytes()[..pixels.len()].copy_from_slice(pixels);
-    let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
-    cmd.copy_pass()
-        .unwrap()
-        .upload_to_texture(&up, texture.texture_ref(), false)
-        .unwrap();
-    cmd.submit_and_wait().unwrap();
-    texture
-}
-
-fn rgba8<'d>(gpu: Gpu<'d>, w: u32, h: u32, pixels: &[u8]) -> Texture<'d> {
-    texture(gpu, w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, pixels)
 }
 
 // ---- The inputs of the dumper `composite_ref.cpp` ---------------------------------------------
@@ -156,44 +91,6 @@ fn surface_pixels() -> Vec<u8> {
         }
     }
     px
-}
-
-/// `Material()`: the dome normal map as material pixels (satin).
-fn material_pixels() -> Vec<u8> {
-    let mut normal = vec![0u8; (W * H * 4) as usize];
-    for y in 0..H {
-        for x in 0..W {
-            let dx = (x as f32 + 0.5 - 48.0) / 20.0;
-            let dy = (y as f32 + 0.5 - 24.0) / 20.0;
-            let d2 = dx * dx + dy * dy;
-            let n = if d2 < 1.0 {
-                [dx, -dy, (1.0 - d2).sqrt()]
-            } else {
-                [0.0, 0.0, 1.0]
-            };
-            let p = ((y * W + x) * 4) as usize;
-            for i in 0..3 {
-                normal[p + i] = ((n[i] * 0.5 + 0.5) * 255.0).round() as u8;
-            }
-            normal[p + 3] = 255;
-        }
-    }
-    let color = vec![255u8; normal.len()];
-    let options = NormalMapOptions {
-        material: Material::SATIN,
-        alpha: Some(AlphaSource {
-            rgba: &color,
-            pitch: (W * 4) as usize,
-        }),
-        ..Default::default()
-    };
-    let mut out = vec![0u8; normal.len()];
-    convert_normal_map(&normal, W, H, (W * 4) as usize, &options, &mut out).unwrap();
-    out
-}
-
-fn at(x: f32, y: f32) -> At<World2, Vec2> {
-    At::new(Vec2::new(x, y))
 }
 
 /// The lights of the dumper's `Lights()` / `Directional()`.
@@ -407,7 +304,6 @@ impl Scene {
 
 struct Host<'d> {
     gpu: Gpu<'d>,
-    device: &'d Device,
     shaders: ShaderLibrary<'d>,
     light_pipelines: LightPipelines<'d>,
     samplers: Samplers<'d>,
@@ -417,11 +313,10 @@ struct Host<'d> {
 }
 
 impl<'d> Host<'d> {
-    fn new(gpu: Gpu<'d>, device: &'d Device, pack: &[u8]) -> Self {
+    fn new(gpu: Gpu<'d>, pack: &[u8]) -> Self {
         let shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
         Self {
             gpu,
-            device,
             light_pipelines: LightPipelines::new(&shaders).unwrap(),
             samplers: Samplers::new(gpu).unwrap(),
             lighting: LightingStage::new(gpu),
@@ -431,20 +326,18 @@ impl<'d> Host<'d> {
         }
     }
 
-    fn read_hdr(&self, cmd: &mut CommandBuffer<'_>, t: TextureRef<'_>) -> DownloadBuffer<'d> {
-        let down = DownloadBuffer::new(self.gpu, t.desc().bytes() as u32).unwrap();
-        cmd.copy_pass().unwrap().download_texture(t, &down).unwrap();
-        down
-    }
-
     /// One golden scene: light pass, composite, the HDR buffer read back.
     fn frame(&mut self, s: &Scene) -> (LightingResult, CompositeProgram, Vec<u8>) {
-        let scene_tex = rgba8(self.gpu, W, H, &scene_pixels());
-        let glow_tex = s.glow.then(|| rgba8(self.gpu, W, H, &glow_pixels()));
+        let scene_tex = sampled_rgba8(self.gpu, W, H, &scene_pixels());
+        let glow_tex = s
+            .glow
+            .then(|| sampled_rgba8(self.gpu, W, H, &glow_pixels()));
         let material_tex = s
             .material
-            .then(|| rgba8(self.gpu, W, H, &material_pixels()));
-        let surface_tex = s.iso.then(|| rgba8(self.gpu, W, H, &surface_pixels()));
+            .then(|| sampled_rgba8(self.gpu, W, H, &dome_material_pixels(W, H)));
+        let surface_tex = s
+            .iso
+            .then(|| sampled_rgba8(self.gpu, W, H, &surface_pixels()));
         let settings = s.settings();
         let projection = if s.iso {
             Projection::iso(at(0.0, 0.0), 2.0, 1.0, W, H)
@@ -495,7 +388,7 @@ impl<'d> Host<'d> {
                 &lighting_frame,
             )
             .unwrap();
-        let mut cmd = CommandBuffer::acquire(self.device).unwrap();
+        let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
         self.lighting
             .record(
                 &mut cmd,
@@ -521,49 +414,14 @@ impl<'d> Host<'d> {
             .unwrap();
         let hdr = self.composite.hdr_buffer().unwrap();
         assert_eq!((hdr.width(), hdr.height()), (W, H));
-        let down = self.read_hdr(&mut cmd, hdr);
+        let down = queue_download(self.gpu, &mut cmd, hdr);
         cmd.submit_and_wait().unwrap();
-        let mut bytes = vec![0; down.size() as usize];
-        let mut down = down;
-        down.read(&mut bytes).unwrap();
-        (result, prepared.program, bytes)
+        (result, prepared.program, read_download(down))
     }
 }
 
 fn with_host(body: impl for<'d> FnOnce(&mut dyn FnMut() -> Host<'d>)) {
-    let Some((_guard, device, pack)) = device() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    {
-        let gpu = Gpu::new(&device, &counter);
-        let mut fresh = || Host::new(gpu, &device, &pack);
-        body(&mut fresh);
-    }
-    assert_eq!(counter.live(), 0, "GPU objects leaked");
-}
-
-fn golden(name: &str) -> Vec<u8> {
-    let path = workspace().join("tests/golden/chiaro/composite").join(name);
-    std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
-}
-
-/// Differing RGBA16F texels and the largest difference.
-fn diff(a: &[u8], b: &[u8]) -> (usize, f32) {
-    assert_eq!(a.len(), b.len());
-    let mut n = 0;
-    let mut max = 0.0f32;
-    for (x, y) in a.chunks(8).zip(b.chunks(8)) {
-        if x != y {
-            n += 1;
-            for c in 0..4 {
-                let u = half(u16::from_le_bytes([x[c * 2], x[c * 2 + 1]]));
-                let v = half(u16::from_le_bytes([y[c * 2], y[c * 2 + 1]]));
-                max = det::max(max, (u - v).abs());
-            }
-        }
-    }
-    (n, max)
+    with_chiaro_pack(|gpu, pack| body(&mut || Host::new(gpu, pack)));
 }
 
 #[test]
@@ -585,7 +443,8 @@ fn hdr_buffers_match_chiaro() {
                 "{name}: specular"
             );
             assert_eq!(program, CompositeProgram::Base, "{name}: program");
-            let (n, max) = diff(&hdr, &golden(&format!("{name}.hdr.bin")));
+            let (n, max) =
+                rgba16f_diff(&hdr, &golden_bytes("composite", &format!("{name}.hdr.bin")));
             eprintln!("{name}: HDR buffer {n} differing texels (max {max})");
             if n > 0 {
                 failures.push(format!("{name}: {n} texels, max {max}"));
@@ -640,11 +499,11 @@ impl Run<'_> {
     }
 
     fn render(&self, host: &mut Host<'_>) -> Vec<[f32; 3]> {
-        let scene = texture(host.gpu, GW, GH, self.scene_format, &self.scene);
+        let scene = sampled(host.gpu, GW, GH, self.scene_format, &self.scene);
         let glow = self
             .glow
             .as_ref()
-            .map(|(px, f)| texture(host.gpu, GW, GH, *f, px));
+            .map(|(px, f)| sampled(host.gpu, GW, GH, *f, px));
         let projection = Projection::IDENTITY;
         let frame = CompositeFrame {
             scene: scene.texture_ref(),
@@ -665,19 +524,17 @@ impl Run<'_> {
             input_space: self.space,
         };
         host.composite.prepare(&mut host.shaders, &frame).unwrap();
-        let mut cmd = CommandBuffer::acquire(host.device).unwrap();
+        let mut cmd = CommandBuffer::acquire(host.gpu.device()).unwrap();
         host.composite
             .record(&mut cmd, &host.samplers, &frame)
             .unwrap();
         let hdr = host.composite.hdr_buffer().unwrap();
-        let mut down = host.read_hdr(&mut cmd, hdr);
+        let down = queue_download(host.gpu, &mut cmd, hdr);
         cmd.submit_and_wait().unwrap();
-        let mut bytes = vec![0; down.size() as usize];
-        down.read(&mut bytes).unwrap();
-        bytes
+        read_download(down)
             .chunks(8)
             .map(|p| {
-                let c = |i: usize| half(u16::from_le_bytes([p[i * 2], p[i * 2 + 1]]));
+                let c = |i: usize| half_to_f32(u16::from_le_bytes([p[i * 2], p[i * 2 + 1]]));
                 [c(0), c(1), c(2)]
             })
             .collect()
@@ -850,7 +707,7 @@ fn the_hdr_target_is_reallocated_only_when_the_scene_size_changes() {
         let settings = LightSettings::default();
         let mut allocations = Vec::new();
         for (w, h) in [(8, 8), (8, 8), (16, 8), (16, 8)] {
-            let scene = rgba8(host.gpu, w, h, &vec![255; (w * h * 4) as usize]);
+            let scene = sampled_rgba8(host.gpu, w, h, &vec![255; (w * h * 4) as usize]);
             let frame = CompositeFrame {
                 scene: scene.texture_ref(),
                 glow: None,
@@ -884,7 +741,7 @@ fn the_hdr_target_is_reallocated_only_when_the_scene_size_changes() {
 fn missing_inputs_and_missing_prepare_are_diagnostics() {
     with_host(|fresh| {
         let mut host = fresh();
-        let scene = rgba8(host.gpu, 8, 8, &[255; 8 * 8 * 4]);
+        let scene = sampled_rgba8(host.gpu, 8, 8, &[255; 8 * 8 * 4]);
         let projection = Projection::IDENTITY;
         let settings = LightSettings::default();
         let mut frame = CompositeFrame {
@@ -912,7 +769,7 @@ fn missing_inputs_and_missing_prepare_are_diagnostics() {
             .unwrap_err();
         assert_eq!(e.code, COMPOSITE_INPUT_MISSING);
         // A failed prepare leaves nothing to record.
-        let mut cmd = CommandBuffer::acquire(host.device).unwrap();
+        let mut cmd = CommandBuffer::acquire(host.gpu.device()).unwrap();
         let e = host
             .composite
             .record(&mut cmd, &host.samplers, &frame)

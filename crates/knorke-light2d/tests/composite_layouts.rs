@@ -14,175 +14,20 @@
 #![cfg(feature = "gpu")]
 
 use core::mem::{offset_of, size_of};
-use std::collections::BTreeMap;
-use std::path::Path;
-use std::sync::Mutex;
+mod common;
 
-use knorke_gpu::kpak::{Program, ShaderPack, Stage};
-use knorke_gpu::sys::gpu::SDL_GPU_SHADERFORMAT_SPIRV;
-use knorke_gpu::{Device, Gpu, LiveCounter, ShaderLibrary, init_video};
+use common::check_layout;
+use knorke_gpu::ShaderLibrary;
+use knorke_gpu::kpak::ShaderPack;
+use knorke_gpu::test_support::spirv::decode;
+use knorke_gpu::test_support::{chiaro_pack, with_chiaro_pack};
 use knorke_light2d::composite::{
     COMPOSITE_PROGRAMS, CompositeParams, CompositeStage, composite_layout_of,
 };
-use knorke_light2d::light_program::{LightLayout, LightSampler, LightUniform};
-
-static SERIAL: Mutex<()> = Mutex::new(());
-
-fn pack_bytes() -> Option<Vec<u8>> {
-    let path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/shaders/knorke-chiaro.spirv.kpak");
-    match std::fs::read(&path) {
-        Ok(b) => Some(b),
-        Err(_) => {
-            eprintln!(
-                "skipped: no shader pack at {} (cargo xtask shaders)",
-                path.display()
-            );
-            None
-        }
-    }
-}
-
-/// One decoded SPIR-V module: names, decorations and struct member offsets.
-struct Module {
-    bindings: BTreeMap<String, (u32, u32)>,
-    structs: Vec<(String, Vec<(String, u32)>)>,
-}
-
-fn words(code: &[u8]) -> Vec<u32> {
-    let w: Vec<u32> = code
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|c| u32::from_le_bytes(*c))
-        .collect();
-    assert_eq!(w[0], 0x0723_0203, "not SPIR-V");
-    w
-}
-
-fn string(ws: &[u32]) -> String {
-    let bytes: Vec<u8> = ws.iter().flat_map(|w| w.to_le_bytes()).collect();
-    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    String::from_utf8(bytes[..end].to_vec()).unwrap()
-}
-
-fn decode(code: &[u8]) -> Module {
-    let words = words(code);
-    let mut names = BTreeMap::new();
-    let mut members = Vec::new();
-    let mut offsets = Vec::new();
-    let mut decorations: BTreeMap<u32, (Option<u32>, Option<u32>)> = BTreeMap::new();
-    let mut i = 5;
-    while i < words.len() {
-        let (n, op) = ((words[i] >> 16) as usize, words[i] & 0xFFFF);
-        assert!(n > 0, "malformed SPIR-V");
-        let a = &words[i + 1..i + n];
-        match op {
-            5 => {
-                names.insert(a[0], string(&a[1..]));
-            }
-            6 => members.push((a[0], a[1], string(&a[2..]))),
-            71 if n >= 4 => {
-                let d = decorations.entry(a[0]).or_default();
-                match a[1] {
-                    34 => d.0 = Some(a[2]), // DescriptorSet
-                    33 => d.1 = Some(a[2]), // Binding
-                    _ => {}
-                }
-            }
-            72 if a[2] == 35 => offsets.push((a[0], a[1], a[3])),
-            _ => {}
-        }
-        i += n;
-    }
-    let bindings = decorations
-        .into_iter()
-        .filter_map(|(id, (set, binding))| {
-            Some((names.get(&id)?.clone(), (set.unwrap_or(u32::MAX), binding?)))
-        })
-        .collect();
-    let structs = names
-        .iter()
-        .map(|(&id, name)| {
-            let mut m: Vec<(u32, String, u32)> = offsets
-                .iter()
-                .filter(|o| o.0 == id)
-                .map(|&(_, member, off)| {
-                    let mname = members
-                        .iter()
-                        .find(|x| x.0 == id && x.1 == member)
-                        .map_or_else(String::new, |x| x.2.clone());
-                    (member, mname, off)
-                })
-                .collect();
-            m.sort_by_key(|x| x.0);
-            (
-                name.clone(),
-                m.into_iter().map(|(_, n, o)| (n, o)).collect(),
-            )
-        })
-        .collect();
-    Module { bindings, structs }
-}
-
-fn check_binding(
-    bindings: &BTreeMap<String, (u32, u32)>,
-    name: &str,
-    set: u32,
-    slot: Option<u8>,
-    ctx: &str,
-) {
-    match slot {
-        None => assert!(!bindings.contains_key(name), "{ctx}: unexpected {name}"),
-        Some(s) => assert_eq!(
-            bindings.get(name),
-            Some(&(set, u32::from(s))),
-            "{ctx}: {name}"
-        ),
-    }
-}
-
-fn check_layout(frag: &Program<'_>, vert: &Program<'_>, l: &LightLayout) {
-    let ctx = format!("{} with {}", frag.name, vert.name);
-    assert_eq!(frag.stage, Stage::Fragment, "{ctx}");
-    assert_eq!(vert.stage, Stage::Vertex, "{ctx}");
-    let (f, v) = (frag.reflection, vert.reflection);
-    assert_eq!(f.samplers, u16::from(l.sampler_count), "{ctx}: samplers");
-    assert_eq!(
-        f.uniform_buffers,
-        u16::from(l.uniform_count),
-        "{ctx}: uniforms"
-    );
-    assert_eq!(
-        f.storage_buffers,
-        u16::from(l.fragment_storage_count),
-        "{ctx}: storage"
-    );
-    assert_eq!(f.storage_textures, 0, "{ctx}");
-    assert_eq!(v.samplers, 0, "{ctx}");
-    assert_eq!(
-        v.storage_buffers,
-        u16::from(l.vertex_storage_count),
-        "{ctx}: vertex storage"
-    );
-    assert_eq!(
-        v.uniform_buffers,
-        u16::from(l.vertex_uniform_count),
-        "{ctx}: vertex uniforms"
-    );
-    // SDL's SPIR-V convention: fragment samplers in set 2, fragment uniforms in set 3.
-    let fb = decode(frag.code).bindings;
-    for s in LightSampler::ALL {
-        check_binding(&fb, s.hlsl_name(), 2, l.sampler(s), &ctx);
-    }
-    for u in LightUniform::ALL {
-        check_binding(&fb, u.hlsl_name(), 3, l.uniform(u), &ctx);
-    }
-}
 
 #[test]
 fn every_composite_program_layout_matches_its_shaders() {
-    let Some(bytes) = pack_bytes() else { return };
+    let Some(bytes) = chiaro_pack() else { return };
     let pack = ShaderPack::parse(&bytes).unwrap();
     for program in COMPOSITE_PROGRAMS {
         let frag = pack.get(program.fragment()).unwrap();
@@ -229,7 +74,7 @@ const MEMBERS: [(&str, usize, usize); 16] = [
 
 #[test]
 fn rust_layout_matches_every_composite_shader() {
-    let Some(bytes) = pack_bytes() else { return };
+    let Some(bytes) = chiaro_pack() else { return };
     let pack = ShaderPack::parse(&bytes).unwrap();
     assert_eq!(size_of::<CompositeParams>(), 160);
     for program in COMPOSITE_PROGRAMS {
@@ -258,20 +103,8 @@ fn rust_layout_matches_every_composite_shader() {
 
 #[test]
 fn all_composite_pipelines_build_lazily() {
-    let Some(bytes) = pack_bytes() else { return };
-    let _guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
-    init_video(Some(c"vulkan"));
-    let device = match Device::create(SDL_GPU_SHADERFORMAT_SPIRV, false) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("skipped: no Vulkan device ({})", e.message);
-            return;
-        }
-    };
-    let counter = LiveCounter::new();
-    {
-        let gpu = Gpu::new(&device, &counter);
-        let mut shaders = ShaderLibrary::new(gpu, bytes).unwrap();
+    with_chiaro_pack(|gpu, bytes| {
+        let mut shaders = ShaderLibrary::new(gpu, bytes.to_vec()).unwrap();
         // The stage resolves all six programs up front and creates none of the pipelines.
         let stage = CompositeStage::new(gpu, &shaders).unwrap();
         assert!(stage.hdr_buffer().is_none());
@@ -283,6 +116,5 @@ fn all_composite_pipelines_build_lazily() {
                 .unwrap_or_else(|e| panic!("{program:?}: {}", e.message));
             assert_eq!(stage.pipeline_count(), 1, "{program:?} (#{n})");
         }
-    }
-    assert_eq!(counter.live(), 0, "GPU objects leaked");
+    });
 }
