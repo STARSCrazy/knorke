@@ -16,6 +16,7 @@
 //! | [`shadow`] | occlusion domain and anchor, dirty rectangles, incremental mask update plan | P16 |
 //! | [`settings`] | settings and quality presets of the light (replace `CullSettings`) | P19 |
 //! | [`frame_warnings`] | debug-check findings of a frame as stable diagnostics | P18 |
+//! | [`light_program`] (+ `light_pipelines` with `gpu`) | light program family: table of the 92 programs, rules, binding layouts, lazy pipelines | P24 |
 //!
 //! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
 //! dependency; today that is only the gate spike `gpu_spike` (to be replaced by P20–P27).
@@ -48,6 +49,9 @@ pub mod light;
 pub mod light_culling;
 pub mod light_mask;
 pub mod light_math;
+#[cfg(feature = "gpu")]
+pub mod light_pipelines;
+pub mod light_program;
 pub mod light_store;
 pub mod mask;
 pub mod mask_store;
