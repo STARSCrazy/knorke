@@ -12,10 +12,10 @@
 
 ## Nächster Schritt
 
-- Gate bestanden (ADR 0015): Rust ist die Zielimplementierung.
-- Jetzt parallel: **P1b** (Opus, sichere Pass-API in `knorke-gpu`) und Welle 1 CPU: **P8 + P10** (Sonnet), **P9 + P11** (Haiku), **P13** (Sonnet). Danach P12, P14–P16, P18, P19.
-- Welle 2 (P20 ff.) erst nach P1b; Spike-Modul `knorke-light2d/src/gpu_spike.rs` wird dabei ersetzt.
-- Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten.
+- Jetzt parallel: **P16** (Opus, Schatten-Cache-Plan, übernimmt `OcclusionDomain`/`MaskAnchor` aus `light_culling.rs`), **P14** (Sonnet, Tile-Gitter), **P18 + P19** (Sonnet, Diagnose + Settings; ersetzt `CullSettings`), **P9b + P13b** (Sonnet).
+- Danach Welle 2: P20 (Post-Pass), P22, P24 (Opus), dann P23, P25. Spike `gpu_spike.rs` wird dabei ersetzt.
+- P12, P15 (exotisch) erst bei Verbraucher.
+- Abgebrochen? `git branch` / `git worktree list` prüfen, fertige Branches mergen, sonst neu starten. Parallele Agenten in `knorke-light2d` erzeugen kleine Konflikte in `lib.rs` und `tests/contracts/tests/no_alloc_light2d.rs` – beide Seiten behalten.
 
 ## Umgebung (wichtig für die Prüfungen)
 
@@ -38,13 +38,15 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 | P6 | Pixel-/Normal-/Material-Codec | `knorke-light2d` (CPU) | S | – | fertig (Merge 2026-11-24): `codec.rs`, `material.rs`; 8-Bit-Rundung bitgleich zur C++-Referenz |
 | P7 | Licht: Store + Math | `knorke-light2d` (CPU) | S | – | fertig (Merge 2026-11-24): `light.rs`, `light_math.rs`, `light_store.rs` auf `Slots`, Snapshot `knorke.light2d.lights` v1; Ressourcen-Handles (Profil/Animation/Maske) sind Marker bis P8–P10 |
 | Gate | Spike Rust vs. C++ (Licht + Schatten + Capture) | – | O | P1, P2, P3 | fertig (2026-11-24): **bestanden**, bitgleich, Zeit gleich → ADR 0015 |
-| P1b | Sichere Aufnahme-API: geliehener Command Buffer, RenderPass/CopyPass, Draw, Bindung über Handles | `knorke-gpu` | O | Gate | läuft (Worktree; Merge durch Koordinator) |
-| P8 | Licht: Culling, Fläche, Animation | `knorke-light2d` | S | P7, Gate | läuft (Worktree; Merge durch Koordinator) |
-| P9 | Profile + IES/EULUMDAT-Import | `knorke-light2d` | H | Gate | läuft (Worktree; Merge durch Koordinator) |
-| P10 | Masken (Gobo/Fenster) | `knorke-light2d` | H | P7, Gate | läuft (Worktree; Merge durch Koordinator) |
-| P11 | Ambient-Zonen | `knorke-light2d` | H | Gate | läuft (Worktree; Merge durch Koordinator) |
+| P1b | Sichere Aufnahme-API: geliehener Command Buffer, RenderPass/CopyPass, Draw, Bindung über Handles | `knorke-gpu` | O | Gate | fertig (Merge 2026-11-24): `CommandBuffer`, `RenderPass`/`CopyPass` als Guards, `TextureRef`/`SamplerRef`/`BufferRef`/`PipelineRef`, sichere Bindung + Uniforms (`Pod`); `knorke-light2d` wieder `forbid(unsafe)`; Spike weiter bitgleich |
+| P8 | Licht: Culling, Fläche, Animation | `knorke-light2d` | S | P7, Gate | fertig (Merge 2026-11-24): `animation`, `area_light`, `light_culling` (+ `gpu_light`), Trait `ProfileAtlas`; `CullSettings` steht für P19, `OcclusionDomain`/`MaskAnchor` sind Kopien für P16 |
+| P9 | Profile + IES/EULUMDAT-Import | `knorke-light2d` | H | Gate | fertig (Merge 2026-11-24): `profile`, `profile_store`, `profile_import` (IES, EULUMDAT); Anbindung an `LightStore`/`StoreResources`/`ProfileAtlas` offen → P9b |
+| P10 | Masken (Gobo/Fenster) | `knorke-light2d` | H | P7, Gate | fertig (Merge 2026-11-24): `mask`, `mask_store`, `light_mask`, `resources` (`StoreResources`); `destroy` lehnt benutzte Masken/Animationen ab |
+| P11 | Ambient-Zonen | `knorke-light2d` | H | Gate | fertig (Merge 2026-11-24): `ambient_zone`, `ambient_zone_store`, `ambient_zone_culling` |
 | P12 | Medium-CPU | `knorke-light2d` | H | Gate | offen (exotisch, nur bei Verbraucher) |
-| P13 | Hindernisse: Store, Desc, Stored | `knorke-light2d` | S | P5, Gate | läuft (Worktree; Merge durch Koordinator) |
+| P13 | Hindernisse: Store, Desc, Stored | `knorke-light2d` | S | P5, Gate | fertig (Merge 2026-11-24): `obstacle/` (Store auf `Slots`, Versionen + Dirty-`BitSet`s für P16, Snapshot `knorke.light2d.obstacles`); **Restore alloziert noch** → P13b; Zell-/Muster-Teile → P14/P15 |
+| P9b | Profile anbinden: `StoreResources` um `ProfileStore`, `ProfileAtlas` implementieren, private `profile_reference`-Kopie in `light.rs` ersetzen, Nutzerzähler pro Profil + „benutzt → nicht löschen“ | `knorke-light2d` | S | P8, P9 | offen |
+| P13b | Hindernis-Restore ohne Allokation (Geometrie in Store-Arenen statt `Vec` pro Hindernis); Regel aus CLAUDE.md | `knorke-light2d` | S | P13 | offen |
 | P14 | Tile-Gitter + Muster an Hindernissen | `knorke-light2d` | S | P13 | offen |
 | P15 | Muster-Store + Geometrie | `knorke-light2d` | S | P13 | offen (exotisch) |
 | P16 | Schatten-Cache-Plan | `knorke-light2d` | O | P13 | offen |
@@ -78,6 +80,7 @@ Status: `offen` · `läuft` (mit Branch) · `fertig` (mit Commit) · `blockiert`
 
 Neueste oben. Datum · wer · was · Ergebnis (auch Fehlschläge, Messwerte).
 
+- 2026-11-24 · Agenten + Claude · Gemerged: P1b (sichere Pass-API, Spike bitgleich, light2d ohne `unsafe`), P13 (Hindernisse), P8+P10 (Culling, Animation, Masken), P9+P11 (Profile, Ambient-Zonen). Prüfungen: 1267 Tests grün (all-features, auch `--release`), 1241 (no-default), 20 Regeln, standalone ok. Neu als Pakete: P9b (Profil-Anbindung), P13b (Restore ohne Allokation).
 - 2026-11-24 · Claude · Gestartet: P1b (Opus), P8+P10 (Sonnet), P9+P11 (Haiku), P13 (Sonnet).
 - 2026-11-24 · Opus-Agent + Claude · **Gate-Spike gemerged und bestanden** (ADR 0015): `minimal_normal_map` und neue Referenz `gate_sprite_shadow` (C++ über C-API, `tests/golden/chiaro/gate/gate_ref.c`) bitgleich; Frame-Zeit Rust = C++ im Rauschen. Lücken: keine sichere Pass-API (→ P1b), keine Uniform-Layout-Prüfung (→ P24), SDL-GPU ohne Timestamps. Spike-Test: `cargo xtask shaders --src D:\Entwicklung\chiaro\shaders\compiled --formats spirv`, dann `KNORKE_SPIKE_OUT=<dir>`/`KNORKE_SPIKE_BENCH=<frames>`.
 - 2026-11-24 · Opus-Agent + Claude · P2 gemerged. Packs Chiaro voll (151 Programme): SPIR-V 4,4 MB, MSL 10,2 MB, DXIL 2,2 MB. Noch ein gemeinsames Pack `knorke-chiaro`; Aufteilung light2d/post per `--only`, sobald die GPU-Stufen da sind. Chiaros feste Programmtabellen bleiben für P24. Prüfungen: 1126 Tests grün (all-features, auch `--release`), 1109 (no-default), 20 Regeln, standalone ok. Gate-Spike gestartet.
