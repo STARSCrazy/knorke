@@ -10,11 +10,13 @@
 use crate::animation::{AnimationId, AnimationStore};
 use crate::light::{LightResources, ProfileId};
 use crate::mask_store::{MaskId, MaskStore};
+use crate::profile_store::ProfileStore;
 
-/// The animation and mask stores of a scene, handed to every light mutation that can name one.
+/// The animation and mask stores (and optionally the profile store) of a scene, handed to every
+/// light mutation that can name one.
 ///
-/// Profiles are not part of it yet (P9 owns the profile store): [`has_profile`] answers `false`,
-/// so a light that names a profile is refused until the profile store joins this struct.
+/// Without [`with_profiles`](Self::with_profiles) no profile exists: [`has_profile`] answers
+/// `false`, so a light that names a profile is refused.
 ///
 /// [`has_profile`]: LightResources::has_profile
 #[derive(Clone, Copy, Debug)]
@@ -23,18 +25,31 @@ pub struct StoreResources<'a> {
     pub animations: &'a AnimationStore,
     /// The masks lights may name.
     pub masks: &'a MaskStore,
+    /// The profiles lights may name; `None`: there are none.
+    pub profiles: Option<&'a ProfileStore>,
 }
 
 impl<'a> StoreResources<'a> {
-    /// The animation and mask stores of a scene.
+    /// The animation and mask stores of a scene, without profiles.
     pub fn new(animations: &'a AnimationStore, masks: &'a MaskStore) -> Self {
-        Self { animations, masks }
+        Self {
+            animations,
+            masks,
+            profiles: None,
+        }
+    }
+
+    /// The same resources with the profile store of the scene.
+    #[must_use]
+    pub fn with_profiles(mut self, profiles: &'a ProfileStore) -> Self {
+        self.profiles = Some(profiles);
+        self
     }
 }
 
 impl LightResources for StoreResources<'_> {
-    fn has_profile(&self, _: ProfileId) -> bool {
-        false
+    fn has_profile(&self, id: ProfileId) -> bool {
+        self.profiles.is_some_and(|p| p.contains(id))
     }
 
     fn has_animation(&self, id: AnimationId) -> bool {

@@ -18,6 +18,7 @@ knorke-exec = { workspace = true }
 knorke-render = { workspace = true }
 knorke-integration = { workspace = true }
 knorke-light2d = { workspace = true }
+knorke-post = { workspace = true }
 
 # Own lint table: the allocation counter needs `unsafe impl GlobalAlloc`.
 [lints.rust]

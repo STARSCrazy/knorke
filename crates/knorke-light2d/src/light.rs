@@ -22,8 +22,8 @@
 //! - Profiles, animations and masks live in their own stores (animations P8, masks P10, profiles
 //!   P9). The light only needs to know whether a handle exists, which the host answers through
 //!   [`LightResources`] (see [`StoreResources`](crate::StoreResources)). `AnimationId` and
-//!   `MaskId` are re-exported here from their stores; `profile_reference` is a private copy
-//!   until the profile package.
+//!   `MaskId` are re-exported here from their stores; the reference direction comes
+//!   from [`crate::profile::profile_reference`].
 
 use crate::light_mask::window_axes_span_plane;
 use knorke_math::{At, Vec2, Vec3, World2, det};
@@ -572,20 +572,9 @@ fn non_zero(v: Vec3) -> bool {
     v.length_squared() > 1e-12
 }
 
-/// Reference direction `C0` perpendicular to `axis`, turned by `rotation_deg` about it.
-/// (Moves to the profile package.)
-pub(crate) fn profile_reference(axis: Vec3, rotation_deg: f32) -> Vec3 {
-    let base = if axis.x.abs() > 0.99 {
-        Vec3::new(0.0, 1.0, 0.0)
-    } else {
-        Vec3::new(1.0, 0.0, 0.0)
-    };
-    let d = base.dot(axis);
-    let r = base - axis * d;
-    let r = r * (1.0 / r.length());
-    let b = r.cross(axis); // C90 = C0 x axis
-    let (s, c) = det::sin_cos(rotation_deg * DEG_TO_RAD);
-    r * c + b * s
+/// Reference direction `C0` of a profile or projector mask, see [`profile::profile_reference`].
+fn profile_reference(axis: Vec3, rotation_deg: f32) -> Vec3 {
+    Vec3::from(crate::profile::profile_reference(axis.into(), rotation_deg))
 }
 
 /// Why a light or a light operation was refused.

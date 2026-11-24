@@ -22,4 +22,4 @@ pub use desc::{
 };
 pub use error::ObstacleError;
 pub use store::{ObstacleId, ObstacleStore};
-pub use stored::{ObstacleKind, StoredObstacle, TileCells};
+pub use stored::{ObstacleKind, Span, StoredObstacle, TileCells};

@@ -54,7 +54,7 @@ fn bounds(t: &[At<World2, Vec2>]) -> (f32, f32, f32, f32) {
 
 fn world(store: &ObstacleStore, id: ObstacleId) -> Vec<At<World2, Vec2>> {
     let mut out = Vec::new();
-    store.get(id).unwrap().append_world_triangles(&mut out);
+    store.append_world_triangles(id, &mut out);
     out
 }
 
@@ -351,10 +351,10 @@ fn a_box_is_stored_as_the_four_vertex_polygon_around_its_centre() {
         store.create_shape(&b).unwrap(),
     );
     let (sa, sb) = (store.get(ia).unwrap(), store.get(ib).unwrap());
-    assert_eq!(sa.local_triangles, sb.local_triangles);
+    assert_eq!(store.triangles(ia), store.triangles(ib));
     assert_eq!(sa.common.height, sb.common.height);
     assert!(sa.box_shape && !sb.box_shape);
-    assert_eq!(sa.outline, v);
+    assert_eq!(store.outline(ia), &v[..]);
 
     for (w, d) in [(0.0, 1.0), (NAN, 1.0), (1.0, 0.0), (1.0, -2.0)] {
         assert!(
@@ -627,7 +627,7 @@ fn an_obstacle_can_change_its_kind() {
     store.set_tile_grid(id, &tiles(&[1, 1, 0, 0])).unwrap();
     let s = store.get(id).unwrap();
     assert_eq!(s.kind, ObstacleKind::TileGrid);
-    assert!(s.local_triangles.is_empty() && s.outline.is_empty());
+    assert!(store.triangles(id).is_empty() && store.outline(id).is_empty());
     assert_eq!(s.revision, rev + 1);
     store.set_shape(id, &ShapeDesc::circle(1.0)).unwrap();
     let s = store.get(id).unwrap();
@@ -968,4 +968,113 @@ fn restore_rejects_a_wrong_version() {
         store.restore(9, &mut r),
         Err(SnapshotError::UnsupportedVersion { version: 9, .. })
     ));
+}
+
+// ---- P13b: geometry lives in store arenas ----
+
+/// Replacing obstacles by shapes of changing size leaves garbage in the arenas and compacts it;
+/// every obstacle keeps reading its own geometry, and a snapshot of the churned store restores
+/// to the same bytes.
+#[test]
+fn arenas_survive_churn_and_compaction() {
+    let mut store = ObstacleStore::new();
+    let poly = [
+        Vec2::new(0.0, 0.0),
+        Vec2::new(4.0, 0.0),
+        Vec2::new(4.0, 1.0),
+        Vec2::new(1.0, 1.0),
+        Vec2::new(1.0, 4.0),
+        Vec2::new(0.0, 4.0),
+    ];
+    let shape = |k: usize| match k % 3 {
+        0 => ShapeDesc::polygon(&poly[..]),
+        1 => ShapeDesc::rect(2.0, 1.0),
+        _ => ShapeDesc::circle(1.5),
+    };
+    let ids: Vec<ObstacleId> = (0..10)
+        .map(|k| store.create_shape(&shape(k)).unwrap())
+        .collect();
+    // Reference: a fresh store holding the same final shapes.
+    for round in 1..40 {
+        for (k, &id) in ids.iter().enumerate() {
+            store.set_shape(id, &shape(k + round)).unwrap();
+        }
+    }
+    let mut fresh = ObstacleStore::new();
+    let fresh_ids: Vec<ObstacleId> = (0..10)
+        .map(|k| fresh.create_shape(&shape(k + 39)).unwrap())
+        .collect();
+    for (&id, &f) in ids.iter().zip(&fresh_ids) {
+        assert_eq!(store.triangles(id), fresh.triangles(f));
+        assert_eq!(store.outline(id), fresh.outline(f));
+    }
+    // A batch replacement and destroying obstacles also keep the rest readable.
+    let descs: Vec<ShapeDesc<'_>> = (0..5).map(|k| shape(k + 1)).collect();
+    store.set_shapes(&ids[..5], &descs[..]).unwrap();
+    store.destroy_many(&ids[5..8]).unwrap();
+    for (k, &id) in ids[..5].iter().enumerate() {
+        let mut f = ObstacleStore::new();
+        let fid = f.create_shape(&shape(k + 1)).unwrap();
+        assert_eq!(store.triangles(id), f.triangles(fid), "obstacle {k}");
+    }
+    assert!(store.triangles(ids[6]).is_empty(), "stale handle");
+
+    let mut buf = SnapshotBuf::new();
+    buf.save(&store);
+    let mut other = ObstacleStore::new();
+    restore(&mut Reader::new(buf.bytes()), &mut other).unwrap();
+    let mut again = SnapshotBuf::new();
+    again.save(&other);
+    assert_eq!(again.bytes(), buf.bytes());
+}
+
+/// A failing batch leaves the arenas as they were.
+#[test]
+fn a_failed_batch_leaves_no_geometry_behind() {
+    let mut store = ObstacleStore::new();
+    let id = store.create_shape(&square()).unwrap();
+    let before = store.triangles(id).to_vec();
+    let mut buf = SnapshotBuf::new();
+    buf.save(&store);
+    let bow = [
+        Vec2::new(0.0, 0.0),
+        Vec2::new(1.0, 1.0),
+        Vec2::new(1.0, 0.0),
+        Vec2::new(0.0, 1.0),
+    ];
+    let descs = [ShapeDesc::circle(1.0), ShapeDesc::polygon(&bow[..])];
+    let mut out = Vec::new();
+    assert!(store.create_shapes(&descs[..], &mut out).is_err());
+    assert!(out.is_empty());
+    assert_eq!(store.triangles(id), &before[..]);
+    let mut after = SnapshotBuf::new();
+    after.save(&store);
+    assert_eq!(after.bytes(), buf.bytes());
+}
+
+/// Triangles that do not belong to the described shape, or a span outside the arena, are
+/// refused on restore.
+#[test]
+fn restore_rejects_foreign_triangles_and_stray_spans() {
+    let mut store = ObstacleStore::new();
+    store.create_shape(&ShapeDesc::circle(2.0)).unwrap();
+    let mut buf = SnapshotBuf::new();
+    buf.save(&store);
+    // The last vertex of the triangle arena is the tail of the stream before the empty outline
+    // arena (an 8 byte length prefix with 0): nudge its last float.
+    let mut bytes = buf.bytes().to_vec();
+    let n = bytes.len();
+    let at = n - 8 /* outline arena length */ - 4;
+    bytes[at] ^= 0x01;
+    let r = restore(&mut Reader::new(&bytes), &mut ObstacleStore::new());
+    assert!(matches!(r, Err(SnapshotError::Invalid(_))), "{r:?}");
+
+    // Triangle span longer than the arena.
+    let mut bytes = buf.bytes().to_vec();
+    let key = 2.0f32.to_le_bytes(); // radius, directly followed by the span (start, len)
+    let radius = bytes.windows(4).position(|w| w == key).expect("radius");
+    let len_at = radius + 4 + 4;
+    bytes[len_at] = bytes[len_at].wrapping_add(3);
+    let r = restore(&mut Reader::new(&bytes), &mut ObstacleStore::new());
+    assert!(matches!(r, Err(SnapshotError::Invalid(_))), "{r:?}");
 }

@@ -10,6 +10,7 @@
 // The reference oracle uses platform `std` maths for the test inputs, as in the C++ original.
 #![allow(clippy::disallowed_methods)]
 
+use knorke_light2d::light_store::LightStore;
 use knorke_light2d::profile::{
     PROFILE_AZIMUTH, PROFILE_POLAR, PROFILE_VALUES, ProfileError, ProfilePreset, ProfileShape,
     build_shape_profile, profile_factor, profile_reference, sample_profile_table,
@@ -243,6 +244,7 @@ fn invalid_shapes_are_rejected_with_a_message() {
 #[test]
 fn profile_store_blocks_are_slot_indices_the_version_changes_at_most_128_alive() {
     let mut store = ProfileStore::new();
+    let lights = LightStore::new();
     assert_eq!(store.block_count(), 0);
     let v0 = store.version();
     let a = store.create(flat()).expect("first profile");
@@ -252,11 +254,11 @@ fn profile_store_blocks_are_slot_indices_the_version_changes_at_most_128_alive()
     assert_eq!(store.block_of(b), Some(1));
     assert_eq!(store.block_count(), 2);
     assert!(store.find(a).is_some());
-    store.destroy(a).expect("destroy a");
+    store.destroy(a, &lights).expect("destroy a");
     assert!(store.find(a).is_none());
     assert_eq!(store.block_of(a), None);
     assert_eq!(store.block_count(), 2);
-    let err = store.destroy(a).expect_err("second destroy");
+    let err = store.destroy(a, &lights).expect_err("second destroy");
     assert!(err.to_string().contains("invalid or destroyed profile"));
     let c = store.create(flat()).expect("reuses block 0"); // new generation
     assert_eq!(store.block_of(c), Some(0));
@@ -289,4 +291,62 @@ fn light_desc_defaults_have_no_profile() {
     let d = LightDesc::new(LightType::Point);
     assert!(d.profile.is_none());
     assert_eq!(d.profile_rotation, 0.0);
+}
+
+// ---- P9b: wiring to the light store, resources and culling ----
+
+#[test]
+fn a_profile_in_use_by_a_light_cannot_be_destroyed_and_the_resources_see_it() {
+    use knorke_light2d::StoreResources;
+    use knorke_light2d::animation::AnimationStore;
+    use knorke_light2d::light::{LightDesc, LightResources, LightType};
+    use knorke_light2d::mask_store::MaskStore;
+
+    let animations = AnimationStore::new();
+    let masks = MaskStore::new();
+    let mut profiles = ProfileStore::new();
+    let mut lights = LightStore::new();
+    let p = profiles.create(flat()).expect("profile");
+
+    let mut d = LightDesc::new(LightType::Spot);
+    d.profile = Some(p);
+    // Without the profile store no profile exists.
+    let bare = StoreResources::new(&animations, &masks);
+    assert!(!bare.has_profile(p));
+    assert!(lights.create(&d, &bare).is_err());
+
+    let res = StoreResources::new(&animations, &masks).with_profiles(&profiles);
+    assert!(res.has_profile(p));
+    let id = lights.create(&d, &res).expect("light with profile");
+    assert_eq!(lights.profile_users(p), 1);
+
+    let err = profiles.destroy(p, &lights).expect_err("in use");
+    assert!(matches!(err, ProfileError::InUse { users: 1 }));
+    assert_eq!(err.code().as_str(), "knorke.light2d.profile.in_use");
+    assert!(profiles.contains(p), "refused destroy keeps the profile");
+
+    d.profile = None;
+    lights
+        .update(id, &d, &StoreResources::new(&animations, &masks))
+        .expect("clear profile");
+    profiles.destroy(p, &lights).expect("unused now");
+    assert!(!profiles.contains(p));
+}
+
+#[test]
+fn the_profile_store_answers_the_atlas_rows_for_culling() {
+    use knorke_light2d::light_culling::ProfileAtlas;
+
+    let mut store = ProfileStore::new();
+    let lights = LightStore::new();
+    assert_eq!(store.inv_atlas_height(), 0.0);
+    let a = store.create(flat()).unwrap();
+    let b = store.create(flat()).unwrap();
+    assert_eq!(store.atlas_row(a), Some(0.0));
+    assert_eq!(store.atlas_row(b), Some(PROFILE_AZIMUTH as f32));
+    let h = store.inv_atlas_height();
+    assert!(h > 0.0 && h <= 1.0 / (2 * PROFILE_AZIMUTH) as f32);
+    store.destroy(a, &lights).unwrap();
+    assert_eq!(store.atlas_row(a), None);
+    assert!(store.atlas_row(b).is_some());
 }

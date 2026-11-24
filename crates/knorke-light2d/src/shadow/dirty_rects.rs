@@ -10,7 +10,7 @@
 
 use super::domain::OcclusionDomain;
 use crate::Projection;
-use crate::obstacle::StoredObstacle;
+use crate::obstacle::{ObstacleId, ObstacleStore, StoredObstacle};
 use knorke_math::{At, Vec2, World2, det};
 
 /// Rectangle coordinates stay within ±2^30 texels, so every coordinate and difference fits into
@@ -447,13 +447,19 @@ fn append_cell_corners(grid: &StoredObstacle, cells: &CellRect, out: &mut Vec<At
 /// MaskAnchor::snapped`, independent of the projection origin): world triangles or the tile grid
 /// quad through the linear part of `p` into the mask, rounded outwards plus one texel. `scratch`
 /// is reused for the world points.
+///
+/// A stale `id` gives an empty rectangle.
 pub fn obstacle_grid_rect(
-    obstacle: &StoredObstacle,
+    store: &ObstacleStore,
+    id: ObstacleId,
     p: &Projection,
     d: &OcclusionDomain,
     scratch: &mut Vec<At<World2, Vec2>>,
 ) -> DirtyRect {
     scratch.clear();
+    let Some(obstacle) = store.get(id) else {
+        return DirtyRect::EMPTY;
+    };
     if obstacle.is_tile_grid() {
         let all = CellRect {
             x0: 0,
@@ -463,7 +469,7 @@ pub fn obstacle_grid_rect(
         };
         append_cell_corners(obstacle, &all, scratch);
     } else {
-        obstacle.append_world_triangles(scratch);
+        store.append_world_triangles(id, scratch);
     }
     grid_bounds(scratch, p, d)
 }

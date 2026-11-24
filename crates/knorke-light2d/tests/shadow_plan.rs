@@ -617,11 +617,6 @@ fn obstacle_grid_rect_rounds_outwards() {
     let mut p = Plan::plain();
     let o = p.boxed(30.0, 30.0, 4.0, false);
     let mut scratch = Vec::new();
-    let rect = obstacle_grid_rect(
-        p.store.get(o).unwrap(),
-        &p.projection,
-        &p.domain,
-        &mut scratch,
-    );
+    let rect = obstacle_grid_rect(&p.store, o, &p.projection, &p.domain, &mut scratch);
     assert_eq!(rect, r(47, 47, 53, 53));
 }

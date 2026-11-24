@@ -406,9 +406,13 @@ impl MaskUpdatePlan {
             };
             f.grid_rect = match prev {
                 Some(p) => p.grid_rect,
-                None => {
-                    obstacle_grid_rect(o, input.projection, &input.domain, &mut self.grid_scratch)
-                }
+                None => obstacle_grid_rect(
+                    input.obstacles,
+                    handle,
+                    input.projection,
+                    &input.domain,
+                    &mut self.grid_scratch,
+                ),
             };
             self.next.footprints.push(f);
         }
@@ -540,10 +544,15 @@ impl MaskUpdatePlan {
             return;
         }
         self.static_grid_rects.clear();
-        for (_, o) in input.obstacles.iter() {
+        for (id, o) in input.obstacles.iter() {
             if o.is_active() && !o.common.dynamic {
-                let r =
-                    obstacle_grid_rect(o, input.projection, &input.domain, &mut self.grid_scratch);
+                let r = obstacle_grid_rect(
+                    input.obstacles,
+                    id,
+                    input.projection,
+                    &input.domain,
+                    &mut self.grid_scratch,
+                );
                 self.static_grid_rects.push(r);
             }
         }
