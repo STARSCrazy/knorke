@@ -30,7 +30,8 @@ use crate::binding::check_bindings;
 use crate::handle::sdl_error;
 use crate::kpak::Reflection;
 use crate::{
-    Bindings, BufferRef, Device, DownloadBuffer, SamplerBinding, TextureRef, UploadBuffer,
+    Bindings, BufferRef, Device, DownloadBuffer, SamplerBinding, TextureDesc, TextureRef,
+    UploadBuffer,
 };
 
 /// SDL failed to acquire or submit a command buffer or to begin a pass.
@@ -859,6 +860,19 @@ impl Drop for RenderPass<'_> {
     }
 }
 
+/// A rectangle of texels of a 2D texture.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextureRegion {
+    /// First column.
+    pub x: u32,
+    /// First row.
+    pub y: u32,
+    /// Columns.
+    pub width: u32,
+    /// Rows.
+    pub height: u32,
+}
+
 /// An open copy pass; ends when dropped. Borrows the command buffer mutably.
 #[derive(Debug)]
 pub struct CopyPass<'p> {
@@ -944,6 +958,72 @@ impl CopyPass<'_> {
         };
         // SAFETY: the pass is open; buffer and texture are live objects of this device and
         // the transfer buffer holds the whole texture (checked above).
+        unsafe { SDL_UploadToGPUTexture(self.raw.as_ptr(), &from, &to, cycle) };
+        Ok(())
+    }
+
+    /// Copies the texels of `region` from `src`'s upload buffer, tightly packed from byte
+    /// `offset` on (row after row, `region.width` texels per row), into the same rectangle of
+    /// `dst`. `cycle` drops the other texels of `dst`, so it is only for a region that covers
+    /// the whole texture. Some backends want `offset` aligned (D3D12: 512 bytes for textures).
+    /// Fails before recording if the region leaves the texture or the staged bytes leave the
+    /// buffer.
+    pub fn upload_to_texture_region(
+        &mut self,
+        src: &UploadBuffer<'_>,
+        offset: u32,
+        dst: TextureRef<'_>,
+        region: TextureRegion,
+        cycle: bool,
+    ) -> Result<(), Diagnostic> {
+        self.same_device(src.device_ptr(), "the upload buffer")?;
+        self.same_device(dst.device_ptr(), "the destination texture")?;
+        let Some(transfer) = src.transfer() else {
+            return Err(out_of_range(
+                "uploading from an unreserved buffer".to_owned(),
+            ));
+        };
+        let fits = |start: u32, size: u32, limit: u32| {
+            size > 0 && start.checked_add(size).is_some_and(|end| end <= limit)
+        };
+        if !fits(region.x, region.width, dst.width())
+            || !fits(region.y, region.height, dst.height())
+        {
+            return Err(out_of_range(format!(
+                "the region {}x{} at ({}, {}) leaves the {}x{} texture",
+                region.width,
+                region.height,
+                region.x,
+                region.y,
+                dst.width(),
+                dst.height()
+            )));
+        }
+        let need =
+            TextureDesc::new(region.width, region.height, dst.format(), dst.desc().usage).bytes();
+        if u64::from(offset) + need > u64::from(src.capacity()) {
+            return Err(out_of_range(format!(
+                "the region needs {need} bytes from offset {offset}, the upload buffer holds {}",
+                src.capacity()
+            )));
+        }
+        let from = SDL_GPUTextureTransferInfo {
+            transfer_buffer: transfer,
+            offset,
+            pixels_per_row: region.width,
+            rows_per_layer: region.height,
+        };
+        let to = SDL_GPUTextureRegion {
+            texture: dst.as_ptr(),
+            x: region.x,
+            y: region.y,
+            w: region.width,
+            h: region.height,
+            d: 1,
+            ..Default::default()
+        };
+        // SAFETY: as in `upload_to_texture`; the transfer buffer holds the region from
+        // `offset` on (checked above) and the region lies within the texture.
         unsafe { SDL_UploadToGPUTexture(self.raw.as_ptr(), &from, &to, cycle) };
         Ok(())
     }

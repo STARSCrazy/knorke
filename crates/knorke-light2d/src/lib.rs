@@ -14,6 +14,7 @@
 //! | [`animation`], [`area_light`], [`light_culling`], [`gpu_light`] | animation curves and store, area-light model, per-frame light lists | P8 |
 //! | [`mask`], [`mask_store`], [`light_mask`], [`resources`] | masks (gobo, window): shapes, store, placement; stores as light resources | P10 |
 //! | [`shadow`] | occlusion domain and anchor, dirty rectangles, incremental mask update plan | P16 |
+//! | [`occluder_raster`] | obstacles into the occlusion mask: triangle buffers, tile cell textures | P22 |
 //! | [`settings`] | settings and quality presets of the light (replace `CullSettings`) | P19 |
 //! | [`frame_warnings`] | debug-check findings of a frame as stable diagnostics | P18 |
 //! | [`light_program`] (+ `light_pipelines` with `gpu`) | light program family: table of the 92 programs, rules, binding layouts, lazy pipelines | P24 |
@@ -57,6 +58,7 @@ pub mod mask;
 pub mod mask_store;
 pub mod material;
 pub mod obstacle;
+pub mod occluder_raster;
 pub mod profile;
 pub mod profile_import;
 pub mod profile_store;
