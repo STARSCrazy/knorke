@@ -14,7 +14,9 @@
 //! conversion. The atlas upload itself is a GPU stage and not part of this file.
 
 use crate::light::{ProfileId, ProfileTag};
-use crate::profile::{PROFILE_VALUES, ProfileError};
+use crate::light_culling::ProfileAtlas;
+use crate::light_store::LightStore;
+use crate::profile::{PROFILE_AZIMUTH, PROFILE_VALUES, ProfileError, profile_atlas_blocks};
 use knorke_types::Slots;
 
 /// Most profiles alive at once; keeps the atlas within 128 * 72 = 9216 rows.
@@ -49,11 +51,17 @@ impl ProfileStore {
         Ok(self.profiles.insert(values).cast::<ProfileTag>())
     }
 
-    /// Destroys a live profile.
+    /// Destroys a live profile. Refused while a light of `lights` still uses it.
     ///
     /// # Errors
-    /// [`ProfileError::InvalidHandle`] for a stale or unknown handle.
-    pub fn destroy(&mut self, profile: ProfileId) -> Result<(), ProfileError> {
+    /// [`ProfileError::InvalidHandle`] for a stale or unknown handle, [`ProfileError::InUse`].
+    pub fn destroy(&mut self, profile: ProfileId, lights: &LightStore) -> Result<(), ProfileError> {
+        if self.contains(profile) {
+            let users = lights.profile_users(profile);
+            if users > 0 {
+                return Err(ProfileError::InUse { users });
+            }
+        }
         match self.profiles.remove(profile.cast()) {
             Some(_) => {
                 self.version += 1;
@@ -109,5 +117,20 @@ impl ProfileStore {
     /// Changes with every create and destroy, for the atlas upload.
     pub fn version(&self) -> u64 {
         self.version
+    }
+}
+
+impl ProfileAtlas for ProfileStore {
+    fn atlas_row(&self, id: ProfileId) -> Option<f32> {
+        self.block_of(id)
+            .map(|block| (block as usize * PROFILE_AZIMUTH) as f32)
+    }
+
+    fn inv_atlas_height(&self) -> f32 {
+        if self.is_empty() {
+            0.0
+        } else {
+            1.0 / (profile_atlas_blocks(self.block_count()) as usize * PROFILE_AZIMUTH) as f32
+        }
     }
 }

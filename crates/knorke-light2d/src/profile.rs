@@ -280,6 +280,11 @@ pub enum ProfileError {
         /// The handle bits.
         bits: u64,
     },
+    /// Lights still use the profile.
+    InUse {
+        /// How many lights.
+        users: usize,
+    },
 }
 
 impl ProfileError {
@@ -299,6 +304,7 @@ impl ProfileError {
             Self::InvalidHandle { .. } => {
                 DiagnosticCode::new("knorke.light2d.profile.invalid_handle")
             }
+            Self::InUse { .. } => DiagnosticCode::new("knorke.light2d.profile.in_use"),
         }
     }
 
@@ -354,6 +360,11 @@ impl core::fmt::Display for ProfileError {
             Self::InvalidHandle { bits } => {
                 write!(f, "invalid or destroyed profile handle 0x{bits:08x}")
             }
+            Self::InUse { users } => write!(
+                f,
+                "the profile is still used by {users} light(s); set their profile to None or \
+                 destroy them first"
+            ),
         }
     }
 }
