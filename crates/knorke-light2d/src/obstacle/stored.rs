@@ -8,17 +8,55 @@
 
 //! An obstacle as stored: owned copies of the shape, no caller memory (P13).
 //!
-//! Redesign against the C++ version: triangles and outlines are `Vec<Vec2>`; the pattern fields
-//! of `StoredObstacle` and the cell editing of `TileGrid.*` come with P14/P15 and are not here.
-//! The snapshot format saves the *description* (outline, radius, channels), never the derived
-//! triangles; they are rebuilt, and a description that validation or triangulation rejects is
-//! [`SnapshotError::Invalid`].
+//! Redesign against the C++ version: triangles and outlines are not owned per obstacle but live
+//! in two arenas of the [`ObstacleStore`](super::ObstacleStore); an obstacle only holds a [`Span`]
+//! into each (P13b, so a restore allocates nothing, ADR 0010). Read them through
+//! [`ObstacleStore::triangles`](super::ObstacleStore::triangles) and
+//! [`ObstacleStore::outline`](super::ObstacleStore::outline). The pattern fields of
+//! `StoredObstacle` and the cell editing of `TileGrid.*` come with P14/P15 and are not here;
+//! the cell channels of a tile grid are still owned per obstacle (P14 decides their storage).
+//!
+//! The snapshot header of an obstacle holds the description and the spans. The store saves the
+//! arenas exactly and checks on restore that the stored triangles are those of the description,
+//! so a tampered stream is [`SnapshotError::Invalid`].
 
 use super::desc::{ObstacleCommon, Shape, ShapeDesc, TileGridDesc};
 use super::error::ObstacleError;
 use crate::triangulate::{Triangulator, circle_triangles};
-use knorke_math::{At, Vec2, World2, det};
+use knorke_math::{Vec2, det};
 use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
+
+/// A range of an arena of the store: `len` elements from `start`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Span {
+    /// First element.
+    pub start: u32,
+    /// Number of elements.
+    pub len: u32,
+}
+
+impl Span {
+    /// No elements.
+    pub const EMPTY: Self = Self { start: 0, len: 0 };
+
+    /// `true` for no elements.
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+}
+
+impl SnapshotValue for Span {
+    fn put(&self, w: &mut Writer<'_>) {
+        w.put(&self.start);
+        w.put(&self.len);
+    }
+    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+        Ok(Self {
+            start: r.get()?,
+            len: r.get()?,
+        })
+    }
+}
 
 /// What an obstacle is made of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,16 +180,17 @@ pub struct StoredObstacle {
     pub kind: ObstacleKind,
     /// What every obstacle has.
     pub common: ObstacleCommon,
-    /// Polygon and circle: local-space triangle list (three vertices per triangle).
-    pub local_triangles: Vec<Vec2>,
+    /// Polygon and circle: local-space triangle list (three vertices per triangle) in the
+    /// triangle arena of the store.
+    pub triangles: Span,
     /// Tile grids only.
     pub grid: TileCells,
     /// Grows on every replacement of the obstacle (not on a move).
     pub revision: u32,
     /// Circles: the radius (thin poles are widened in the mask).
     pub radius: f32,
-    /// Polygons: the local corners of the description.
-    pub outline: Vec<Vec2>,
+    /// Polygons: the local corners of the description, in the outline arena of the store.
+    pub outline: Span,
     /// Polygons: the description was a box; the outline holds its four corners.
     pub box_shape: bool,
 }
@@ -161,11 +200,11 @@ impl StoredObstacle {
         Self {
             kind: ObstacleKind::Polygon,
             common: ObstacleCommon::default(),
-            local_triangles: Vec::new(),
+            triangles: Span::EMPTY,
             grid: TileCells::default(),
             revision: 1,
             radius: 0.0,
-            outline: Vec::new(),
+            outline: Span::EMPTY,
             box_shape: false,
         }
     }
@@ -200,30 +239,22 @@ impl StoredObstacle {
         det::max(self.common.height, 0.0)
     }
 
-    /// Copies a validated shape; `triangles` and `outline` come from [`prepare_shape`]. Keeps
-    /// `revision`; reuses the buffers.
-    pub(super) fn assign_shape(
-        &mut self,
-        desc: &ShapeDesc<'_>,
-        triangles: &[Vec2],
-        outline: &[Vec2],
-    ) {
+    /// Takes over a validated shape whose triangles and outline the store put into its arenas.
+    /// Keeps `revision`.
+    pub(super) fn assign_shape(&mut self, desc: &ShapeDesc<'_>, triangles: Span, outline: Span) {
         self.common = desc.common;
-        self.local_triangles.clear();
-        self.local_triangles.extend_from_slice(triangles);
+        self.triangles = triangles;
+        self.outline = outline;
         self.grid.reset();
         match desc.shape {
             Shape::Circle { radius } => {
                 self.kind = ObstacleKind::Circle;
                 self.radius = radius;
-                self.outline.clear();
                 self.box_shape = false;
             }
             Shape::Polygon(_) | Shape::Box { .. } => {
                 self.kind = ObstacleKind::Polygon;
                 self.radius = 0.0;
-                self.outline.clear();
-                self.outline.extend_from_slice(outline);
                 self.box_shape = matches!(desc.shape, Shape::Box { .. });
             }
         }
@@ -233,25 +264,11 @@ impl StoredObstacle {
     pub(super) fn assign_tile_grid(&mut self, desc: &TileGridDesc<'_>) {
         self.kind = ObstacleKind::TileGrid;
         self.common = desc.common;
-        self.local_triangles.clear();
-        self.outline.clear();
+        self.triangles = Span::EMPTY;
+        self.outline = Span::EMPTY;
         self.radius = 0.0;
         self.box_shape = false;
         self.grid.fill(desc);
-    }
-
-    /// The local triangles rotated by `common.rotation` (degrees, counter-clockwise) and moved
-    /// by `common.position`, appended to `out`.
-    pub fn append_world_triangles(&self, out: &mut Vec<At<World2, Vec2>>) {
-        let rad = self.common.rotation * (core::f32::consts::PI / 180.0);
-        let (s, c) = det::sin_cos(rad);
-        let p = self.common.position.raw();
-        out.reserve(self.local_triangles.len());
-        out.extend(
-            self.local_triangles
-                .iter()
-                .map(|v| At::new(Vec2::new(c * v.x - s * v.y + p.x, s * v.x + c * v.y + p.y))),
-        );
     }
 }
 
@@ -317,7 +334,7 @@ impl SnapshotValue for ObstacleCommon {
     }
 }
 
-/// Only the description is saved; triangles and counts are rebuilt on restore.
+/// The description and the spans; the store checks the spans against its arenas on restore.
 impl SnapshotValue for StoredObstacle {
     fn put(&self, w: &mut Writer<'_>) {
         w.put(&match self.kind {
@@ -331,8 +348,12 @@ impl SnapshotValue for StoredObstacle {
             ObstacleKind::Polygon => {
                 w.put(&self.box_shape);
                 w.put(&self.outline);
+                w.put(&self.triangles);
             }
-            ObstacleKind::Circle => w.put(&self.radius),
+            ObstacleKind::Circle => {
+                w.put(&self.radius);
+                w.put(&self.triangles);
+            }
             ObstacleKind::TileGrid => {
                 let g = &self.grid;
                 w.put(&g.columns);
@@ -353,28 +374,20 @@ impl SnapshotValue for StoredObstacle {
         let tag: u8 = r.get()?;
         let common: ObstacleCommon = r.get()?;
         let revision: u32 = r.get()?;
-        let mut tri = Triangulator::new();
-        let mut triangles = Vec::new();
         let mut s = Self::empty();
+        s.common = common;
+        s.revision = revision;
         match tag {
             0 => {
-                let box_shape: bool = r.get()?;
-                let outline: Vec<Vec2> = r.get()?;
-                let desc = ShapeDesc {
-                    common,
-                    shape: Shape::Polygon(&outline),
-                };
-                prepare_shape(&mut tri, &mut triangles, &desc).map_err(|_| BAD)?;
-                s.assign_shape(&desc, &triangles, &outline);
-                s.box_shape = box_shape;
+                s.kind = ObstacleKind::Polygon;
+                s.box_shape = r.get()?;
+                s.outline = r.get()?;
+                s.triangles = r.get()?;
             }
             1 => {
-                let desc = ShapeDesc {
-                    common,
-                    shape: Shape::Circle { radius: r.get()? },
-                };
-                prepare_shape(&mut tri, &mut triangles, &desc).map_err(|_| BAD)?;
-                s.assign_shape(&desc, &triangles, &[]);
+                s.kind = ObstacleKind::Circle;
+                s.radius = r.get()?;
+                s.triangles = r.get()?;
             }
             2 => {
                 let (columns, rows): (u32, u32) = (r.get()?, r.get()?);
@@ -404,7 +417,6 @@ impl SnapshotValue for StoredObstacle {
             }
             _ => return Err(SnapshotError::Invalid("obstacle kind")),
         }
-        s.revision = revision;
         Ok(s)
     }
 }
