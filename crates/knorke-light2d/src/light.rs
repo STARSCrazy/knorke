@@ -19,11 +19,13 @@
 //! - Unknown light types, unknown flag bits and non-existent handle kinds cannot be expressed.
 //! - Errors are [`LightError`] values with stable diagnostic codes `knorke.light2d.light.*`
 //!   instead of formatted SDL error strings; the texts keep the field names and received values.
-//! - Profiles, animations and masks live in stores that are ported later (P8 to P10). The light
-//!   only needs to know whether a handle exists, which the host answers through
-//!   [`LightResources`]. The small vector helpers they will own ([`profile_reference`],
-//!   [`window_axes_span_plane`]) are private copies here until then.
+//! - Profiles, animations and masks live in their own stores (animations P8, masks P10, profiles
+//!   P9). The light only needs to know whether a handle exists, which the host answers through
+//!   [`LightResources`] (see [`StoreResources`](crate::StoreResources)). `AnimationId` and
+//!   `MaskId` are re-exported here from their stores; `profile_reference` is a private copy
+//!   until the profile package.
 
+use crate::light_mask::window_axes_span_plane;
 use knorke_math::{At, Vec2, Vec3, World2, det};
 use knorke_types::{
     Diagnostic, DiagnosticCode, Handle, Reader, SnapshotError, SnapshotValue, Writer,
@@ -39,19 +41,11 @@ const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
 /// Handle kind of a light profile (stored by a later package; the light only refers to it).
 #[derive(Clone, Copy, Debug)]
 pub struct ProfileTag;
-/// Handle kind of a light animation.
-#[derive(Clone, Copy, Debug)]
-pub struct AnimationTag;
-/// Handle kind of a light mask (gobo or window).
-#[derive(Clone, Copy, Debug)]
-pub struct MaskTag;
 
 /// Handle of a light profile.
 pub type ProfileId = Handle<ProfileTag>;
-/// Handle of a light animation.
-pub type AnimationId = Handle<AnimationTag>;
-/// Handle of a light mask.
-pub type MaskId = Handle<MaskTag>;
+pub use crate::animation::AnimationId;
+pub use crate::mask_store::MaskId;
 /// Handle of a persistent light in a [`LightStore`](crate::LightStore).
 pub type LightId = Handle<StoredLight>;
 
@@ -576,12 +570,6 @@ fn range(field: &'static str, rule: &'static str, value: f32) -> LightError {
 
 fn non_zero(v: Vec3) -> bool {
     v.length_squared() > 1e-12
-}
-
-/// `true` if the window axes `u` and `v` are not parallel. (Moves to the mask package.)
-pub(crate) fn window_axes_span_plane(u: Vec3, v: Vec3) -> bool {
-    let c = u.cross(v);
-    c.length_squared() > 1e-6 * u.length_squared() * v.length_squared()
 }
 
 /// Reference direction `C0` perpendicular to `axis`, turned by `rotation_deg` about it.
