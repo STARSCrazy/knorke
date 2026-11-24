@@ -11,8 +11,9 @@
 //! | [`light_math`] | attenuation, spot cone, flicker, light-quad culling | P7 |
 //! | [`light`], [`light_store`] | light description, validation, handle-based store, snapshots | P7 |
 //!
-//! GPU stages follow later behind a `gpu` feature and take `knorke-gpu` as their only graphics
-//! dependency. This crate does not know `knorke-post`, `knorke-lighting`, `knorke-render` or
+//! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
+//! dependency; today that is only the gate spike `gpu_spike` (to be replaced by P20–P27).
+//! This crate does not know `knorke-post`, `knorke-lighting`, `knorke-render` or
 //! the AI crates (`cargo xtask deps`).
 //!
 //! What changed against the C++ library is stated in the module docs: the C ABI and its flag
@@ -28,6 +29,8 @@
 #![allow(clippy::neg_cmp_op_on_partial_ord)]
 
 pub mod codec;
+#[cfg(feature = "gpu")]
+pub mod gpu_spike;
 pub mod light;
 pub mod light_math;
 pub mod light_store;

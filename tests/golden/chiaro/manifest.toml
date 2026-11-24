@@ -201,3 +201,17 @@ golden_from = "vulkan run 0"
 noise_vulkan = { max = 0, differing_pct = 0.0000, over2_pct = 0.0000, over8_pct = 0.0000, over32_pct = 0.0000 }
 noise_direct3d12 = { max = 0, differing_pct = 0.0000, over2_pct = 0.0000, over8_pct = 0.0000, over32_pct = 0.0000 }
 cross_backend = { max = 1, differing_pct = 0.0035, over2_pct = 0.0000, over8_pct = 0.0000, over32_pct = 0.0000 }
+
+# Gate spike (ADR 0014): not a demo but tests/golden/chiaro/gate/gate_ref.c (C API, GPU textures via
+# CHI_FromGPU, Vulkan), built against the same Chiaro build; captured 2026-11-24. The C program also
+# renders minimal_normal_map through GPU textures, bit-identical to the demo's golden image above.
+[[scene]]
+name = "gate_sprite_shadow"
+file = "gate_sprite_shadow.png"
+demo = "gate/gate_ref.c"
+args = ["shadow"]
+resolution = [192, 128]
+deterministic = true
+note = "one soft point light (source size 4), occlusion sprite buffer (two boxes, a disc), flat mode, checker scene"
+golden_from = "vulkan run 0"
+noise_vulkan = { max = 0, differing_pct = 0.0000, over2_pct = 0.0000, over8_pct = 0.0000, over32_pct = 0.0000 }

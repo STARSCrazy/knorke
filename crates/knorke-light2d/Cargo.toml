@@ -1,15 +1,35 @@
 [package]
 name = "knorke-light2d"
-description = "2D lighting of the Knorke Engine, ported from Chiaro: projection, pixel and material codecs, light store and light math (CPU part; GPU stages follow behind a `gpu` feature, ADR 0014)."
+description = "2D lighting of the Knorke Engine, ported from Chiaro: projection, pixel and material codecs, light store and light math (CPU part); GPU stages behind the `gpu` feature (ADR 0014)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# GPU stages on knorke-gpu (SDL3 GPU). Today only the gate spike (`gpu_spike`), see its docs.
+gpu = ["dep:knorke-gpu", "knorke-gpu/sdl"]
+# `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.
+sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
+
 [dependencies]
 knorke-types = { workspace = true }
 knorke-math = { workspace = true }
+knorke-gpu = { workspace = true, optional = true }
 
-[lints]
-workspace = true
+[dev-dependencies]
+# Gate spike test: golden PNGs and the parity metric of the Chiaro port (P3).
+png = "0.17"
+knorke-contract-tests = { path = "../../tests/contracts" }
+
+# Own lint table instead of `workspace = true`: identical, except that `unsafe_code` is
+# `deny` so that the GPU recording of the `gpu` feature can opt in locally (ADR 0005).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
