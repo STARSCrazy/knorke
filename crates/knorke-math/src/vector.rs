@@ -95,24 +95,44 @@ macro_rules! float_vector {
 
 vector!(
     /// 2D `f32` vector. Layout: `[x, y]`, 8 bytes.
-    Vec2, f32, 0.0, 1.0, [x, y]
+    Vec2,
+    f32,
+    0.0,
+    1.0,
+    [x, y]
 );
 vector!(
     /// 3D `f32` vector. Layout: `[x, y, z]`, 12 bytes (no padding; use [`Vec4`] for GPU
     /// buffers that need 16-byte alignment).
-    Vec3, f32, 0.0, 1.0, [x, y, z]
+    Vec3,
+    f32,
+    0.0,
+    1.0,
+    [x, y, z]
 );
 vector!(
     /// 4D `f32` vector. Layout: `[x, y, z, w]`, 16 bytes.
-    Vec4, f32, 0.0, 1.0, [x, y, z, w]
+    Vec4,
+    f32,
+    0.0,
+    1.0,
+    [x, y, z, w]
 );
 vector!(
     /// 2D `i32` vector, e.g. grid cells. Layout: `[x, y]`, 8 bytes.
-    IVec2, i32, 0, 1, [x, y]
+    IVec2,
+    i32,
+    0,
+    1,
+    [x, y]
 );
 vector!(
     /// 3D `i32` vector, e.g. grid cells with level. Layout: `[x, y, z]`, 12 bytes.
-    IVec3, i32, 0, 1, [x, y, z]
+    IVec3,
+    i32,
+    0,
+    1,
+    [x, y, z]
 );
 float_vector!(Vec2, [x, y]);
 float_vector!(Vec3, [x, y, z]);

@@ -137,9 +137,11 @@ impl<C> ReplayLog<C> {
         out.ticks.reserve(self.ticks.len());
         for t in &self.ticks {
             let from = out.command_index();
-            for i in t.commands.start as usize..t.commands.end as usize {
-                if keep(i) {
-                    out.commands.push(self.commands[i].clone());
+            let start = t.commands.start as usize;
+            let end = t.commands.end as usize;
+            for (offset, cmd) in self.commands[start..end].iter().enumerate() {
+                if keep(start + offset) {
+                    out.commands.push(cmd.clone());
                 }
             }
             out.ticks.push(TickRecord {

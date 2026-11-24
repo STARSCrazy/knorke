@@ -918,8 +918,8 @@ impl GridMap {
                     let Some(c) = self.cell_at(ox, oz, level) else {
                         continue;
                     };
-                    for side in 0..4 {
-                        if !c.walls[side].is_swing() || c.walls[side].texture < 0 {
+                    for (side, wall) in c.walls.iter().enumerate() {
+                        if !wall.is_swing() || wall.texture < 0 {
                             continue;
                         }
                         let Some((q, n, _)) = self.swing_leaf(ox, oz, level, side) else {
@@ -945,7 +945,7 @@ impl GridMap {
                                 cell_z: oz as i32,
                                 level: level as i32,
                                 side: side as i32,
-                                part: c.walls[side].leaf_part(),
+                                part: wall.leaf_part(),
                                 distance: t.max(0.0),
                                 point: p,
                             });
@@ -1761,9 +1761,8 @@ mod snapshot_tests {
                     c.ceiling_corners[k] = (rnd() * 3.0).floor() * 0.25 - 0.25;
                 }
             }
-            for side in 0..4 {
+            for w in &mut c.walls {
                 if rnd() < 0.3 {
-                    let w = &mut c.walls[side];
                     w.texture = 4;
                     w.back_texture = if rnd() < 0.5 { 5 } else { -1 };
                     w.open = if rnd() < 0.3 { rnd() } else { 0.0 };

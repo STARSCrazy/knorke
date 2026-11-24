@@ -13,12 +13,10 @@ knorke-math = { workspace = true }
 knorke-replay = { workspace = true }
 # Golden PNGs of the parity tests (`parity::load_png_rgba8`).
 png = "0.17"
-# Only for the GPU contract of the pass plan (feature `gpu`).
-knorke-gpu = { workspace = true, optional = true }
 
 [features]
 # GPU contracts (no_alloc_pass_plan): need a Vulkan device and the shader pack.
-gpu = ["dep:knorke-gpu", "knorke-gpu/sdl", "knorke-light2d/gpu"]
+gpu = ["knorke-gpu/sdl", "knorke-light2d/gpu"]
 # `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.
 sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
 
@@ -29,6 +27,7 @@ knorke-render = { workspace = true }
 knorke-integration = { workspace = true }
 knorke-light2d = { workspace = true }
 knorke-post = { workspace = true }
+knorke-gpu = { workspace = true }
 
 # Own lint table: the allocation counter needs `unsafe impl GlobalAlloc`.
 [lints.rust]
