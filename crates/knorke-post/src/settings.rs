@@ -24,7 +24,6 @@
 
 use crate::bloom::{MAX_BLOOM_RADIUS, MIN_BLOOM_RADIUS};
 use crate::output_rect::ScaleMode;
-use knorke_types::{Diagnostic, DiagnosticCode};
 
 /// Largest `exposure_ev`; the smallest is its negative.
 pub const MAX_EXPOSURE: f32 = 16.0;
@@ -314,82 +313,10 @@ pub struct PostSettings {
     pub crt: CrtSettings,
 }
 
-/// Why settings were refused: the first field that breaks its rule.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SettingsError {
-    /// A value is NaN or infinite.
-    NotFinite {
-        /// Field path, e.g. `bloom.radius`.
-        field: &'static str,
-        /// The received value.
-        value: f32,
-    },
-    /// A value is outside its allowed range.
-    OutOfRange {
-        /// Field path, e.g. `crt.mask_pitch`.
-        field: &'static str,
-        /// The rule, e.g. `must be in [2, 16]`.
-        rule: &'static str,
-        /// The received value.
-        value: f32,
-    },
-}
-
-impl SettingsError {
-    /// The stable code: `knorke.post.settings.not_finite` or `.out_of_range`.
-    pub fn code(&self) -> DiagnosticCode {
-        match self {
-            Self::NotFinite { .. } => DiagnosticCode::new("knorke.post.settings.not_finite"),
-            Self::OutOfRange { .. } => DiagnosticCode::new("knorke.post.settings.out_of_range"),
-        }
-    }
-
-    /// As a diagnostic with the field as its path.
-    pub fn to_diagnostic(&self) -> Diagnostic {
-        let (Self::NotFinite { field, .. } | Self::OutOfRange { field, .. }) = self;
-        Diagnostic::error(self.code(), self.to_string()).at(format!("settings.{field}"))
-    }
-}
-
-impl core::fmt::Display for SettingsError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::NotFinite { field, value } => {
-                write!(f, "settings.{field} must be finite (got {value})")
-            }
-            Self::OutOfRange { field, rule, value } => {
-                write!(f, "settings.{field} {rule} (got {value})")
-            }
-        }
-    }
-}
-
-impl core::error::Error for SettingsError {}
-
-fn check(
-    field: &'static str,
-    value: f32,
-    ok: bool,
-    rule: &'static str,
-) -> Result<(), SettingsError> {
-    if !value.is_finite() {
-        Err(SettingsError::NotFinite { field, value })
-    } else if ok {
-        Ok(())
-    } else {
-        Err(SettingsError::OutOfRange { field, rule, value })
-    }
-}
-
-fn range(
-    field: &'static str,
-    v: f32,
-    lo: f32,
-    hi: f32,
-    rule: &'static str,
-) -> Result<(), SettingsError> {
-    check(field, v, v >= lo && v <= hi, rule)
-}
+knorke_types::settings_error!(
+    "knorke.post.settings.not_finite",
+    "knorke.post.settings.out_of_range"
+);
 
 fn color(
     field: &'static str,

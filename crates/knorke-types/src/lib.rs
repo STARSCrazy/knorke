@@ -34,6 +34,7 @@ mod handle;
 mod hash;
 mod parallel;
 mod slots;
+mod settings_error;
 mod snapshot;
 mod time;
 
@@ -51,3 +52,5 @@ pub use snapshot::{
     restore,
 };
 pub use time::{Seed, Tick};
+#[doc(hidden)]
+pub use settings_error::__private;

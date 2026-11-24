@@ -30,7 +30,6 @@
 use crate::Projection;
 use crate::frame_warnings::DebugChecks;
 use knorke_math::{Vec3, det};
-use knorke_types::{Diagnostic, DiagnosticCode};
 
 /// Scene pixels of one ripple cell when [`MaterialSettings::wet_ripple_size`] is `None`.
 pub const DEFAULT_WET_RIPPLE_PIXELS: f32 = 8.0;
@@ -284,82 +283,10 @@ impl Default for LightSettings {
     }
 }
 
-/// Why settings were refused: the first field that breaks its rule.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum SettingsError {
-    /// A value is NaN or infinite.
-    NotFinite {
-        /// Field path, e.g. `haze.density`.
-        field: &'static str,
-        /// The received value.
-        value: f32,
-    },
-    /// A value is outside its allowed range.
-    OutOfRange {
-        /// Field path, e.g. `glow.scale`.
-        field: &'static str,
-        /// The rule, e.g. `must be in [0, 64]`.
-        rule: &'static str,
-        /// The received value.
-        value: f32,
-    },
-}
-
-impl SettingsError {
-    /// The stable code: `knorke.light2d.settings.not_finite` or `.out_of_range`.
-    pub fn code(&self) -> DiagnosticCode {
-        match self {
-            Self::NotFinite { .. } => DiagnosticCode::new("knorke.light2d.settings.not_finite"),
-            Self::OutOfRange { .. } => DiagnosticCode::new("knorke.light2d.settings.out_of_range"),
-        }
-    }
-
-    /// As a diagnostic with the field as its path.
-    pub fn to_diagnostic(&self) -> Diagnostic {
-        let (Self::NotFinite { field, .. } | Self::OutOfRange { field, .. }) = self;
-        Diagnostic::error(self.code(), self.to_string()).at(format!("settings.{field}"))
-    }
-}
-
-impl core::fmt::Display for SettingsError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::NotFinite { field, value } => {
-                write!(f, "settings.{field} must be finite (got {value})")
-            }
-            Self::OutOfRange { field, rule, value } => {
-                write!(f, "settings.{field} {rule} (got {value})")
-            }
-        }
-    }
-}
-
-impl core::error::Error for SettingsError {}
-
-fn check(
-    field: &'static str,
-    value: f32,
-    ok: bool,
-    rule: &'static str,
-) -> Result<(), SettingsError> {
-    if !value.is_finite() {
-        Err(SettingsError::NotFinite { field, value })
-    } else if ok {
-        Ok(())
-    } else {
-        Err(SettingsError::OutOfRange { field, rule, value })
-    }
-}
-
-fn range(
-    field: &'static str,
-    v: f32,
-    lo: f32,
-    hi: f32,
-    rule: &'static str,
-) -> Result<(), SettingsError> {
-    check(field, v, v >= lo && v <= hi, rule)
-}
+knorke_types::settings_error!(
+    "knorke.light2d.settings.not_finite",
+    "knorke.light2d.settings.out_of_range"
+);
 
 fn scale(field: &'static str, v: f32) -> Result<(), SettingsError> {
     check(field, v, v > 0.0 && v <= 1.0, "must be in (0, 1]")
