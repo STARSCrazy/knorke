@@ -1,5 +1,6 @@
 //! Gate spike of the Chiaro port (plan §5.1, ADR 0014): renders two scenes through
-//! `knorke_light2d::gpu_spike` on Vulkan and compares them with C++ Chiaro reference images
+//! `knorke_light2d::gpu_spike` (whose light pass is the real `lighting::LightingStage` since
+//! P25, fed by `collect_lights`) on Vulkan and compares them with C++ Chiaro reference images
 //! (`tests/golden/chiaro`) under `ParityBudget::STRICT`:
 //!
 //! - `minimal_normal_map`: the P3 golden scene (one point light on a normal-mapped dome);
@@ -31,8 +32,11 @@ use knorke_gpu::{
 };
 use knorke_light2d::codec::{AlphaSource, Material, NormalMapOptions, convert_normal_map};
 use knorke_light2d::gpu_spike::{SpikeFrame, SpikeRenderer};
-use knorke_light2d::light::{LightDesc, LightType, StoredLight};
+use knorke_light2d::light::{LightDesc, LightType};
+use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
 use knorke_light2d::projection::Projection;
+use knorke_light2d::settings::LightSettings;
+use knorke_light2d::{LightStore, NoResources};
 use knorke_math::{At, Vec2, Vec3};
 
 fn workspace() -> PathBuf {
@@ -47,7 +51,7 @@ struct Scene {
     color: Vec<u8>,
     material: Option<Vec<u8>>,
     occlusion: Option<Vec<u8>>,
-    light: StoredLight,
+    light: LightDesc,
     ambient: f32,
     filter: Filter,
 }
@@ -99,7 +103,7 @@ fn minimal_normal_map() -> Scene {
         color,
         material: Some(material),
         occlusion: None,
-        light: StoredLight::derive(&d),
+        light: d,
         ambient: 0.1,
         filter: Filter::Nearest,
     }
@@ -147,7 +151,7 @@ fn gate_sprite_shadow() -> Scene {
         color,
         material: None,
         occlusion: Some(occlusion),
-        light: StoredLight::derive(&d),
+        light: d,
         ambient: 0.08,
         filter: Filter::Linear,
     }
@@ -225,12 +229,12 @@ fn frame_once(
     device: &Device,
     renderer: &mut SpikeRenderer<'_>,
     frame: &SpikeFrame<'_>,
-    light: &StoredLight,
+    lights: &LightList,
     readback: Option<&DownloadBuffer<'_>>,
 ) {
-    let prepared = renderer.prepare(frame, light).unwrap();
+    let prepared = renderer.prepare(frame, lights).unwrap();
     let mut cmd = CommandBuffer::acquire(device).unwrap();
-    renderer.record(&mut cmd, frame, prepared).unwrap();
+    renderer.record(&mut cmd, frame, lights, prepared).unwrap();
     if let Some(download) = readback {
         cmd.copy_pass()
             .unwrap()
@@ -289,14 +293,30 @@ fn spike_matches_chiaro() {
             ambient: Vec3::new(scene.ambient, scene.ambient, scene.ambient),
             output_filter: scene.filter,
         };
-        let mut download = DownloadBuffer::new(gpu, w * h * 4).unwrap();
-        frame_once(
-            &device,
-            &mut renderer,
-            &frame,
-            &scene.light,
-            Some(&download),
+        // The culling of Chiaro's context: one light, default settings with the ambient.
+        let mut store = LightStore::new();
+        store.create(&scene.light, &NoResources).unwrap();
+        let settings = LightSettings {
+            ambient: frame.ambient,
+            ..LightSettings::default()
+        };
+        let modes = LightModes {
+            normal_mode: scene.material.is_some(),
+            ..Default::default()
+        };
+        let mut lights = LightList::default();
+        collect_lights(
+            &store,
+            &settings,
+            &frame.projection,
+            0.0,
+            w,
+            h,
+            &modes,
+            &mut lights,
         );
+        let mut download = DownloadBuffer::new(gpu, w * h * 4).unwrap();
+        frame_once(&device, &mut renderer, &frame, &lights, Some(&download));
         let mut pixels = vec![0u8; (w * h * 4) as usize];
         download.read(&mut pixels).unwrap();
 
@@ -333,7 +353,7 @@ fn spike_matches_chiaro() {
             let mut times = Vec::with_capacity(frames as usize);
             for _ in 0..frames {
                 let t = Instant::now();
-                frame_once(&device, &mut renderer, &frame, &scene.light, None);
+                frame_once(&device, &mut renderer, &frame, &lights, None);
                 times.push(t.elapsed().as_secs_f64() * 1e6);
             }
             times.sort_by(f64::total_cmp);

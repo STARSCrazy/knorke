@@ -70,3 +70,81 @@ pub struct GpuDirectional {
 const _: () = assert!(size_of::<GpuLight>() == 128);
 const _: () = assert!(size_of::<GpuMask>() == 48);
 const _: () = assert!(size_of::<GpuDirectional>() == 48);
+
+/// Writes the rows of a record as little-endian `f32`s.
+fn rows_to_bytes<const N: usize>(rows: &[&[f32; 4]]) -> [u8; N] {
+    let mut out = [0u8; N];
+    for (i, v) in rows.iter().flat_map(|r| r.iter()).enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+impl GpuLight {
+    /// Size in bytes (`StructuredBuffer<GpuLight>` stride).
+    pub const SIZE: usize = 128;
+
+    /// The bytes as the shaders read them.
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        rows_to_bytes(&[
+            &self.position_radius,
+            &self.color_falloff,
+            &self.direction_type,
+            &self.spot_cos,
+            &self.shadow,
+            &self.profile,
+            &self.area,
+            &self.area_mask,
+        ])
+    }
+}
+
+impl GpuMask {
+    /// Size in bytes (`StructuredBuffer<GpuMask>` stride).
+    pub const SIZE: usize = 48;
+
+    /// The bytes as the shaders read them.
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        rows_to_bytes(&[&self.n, &self.p, &self.q])
+    }
+}
+
+impl GpuDirectional {
+    /// Size in bytes.
+    pub const SIZE: usize = 48;
+
+    /// The bytes as the shaders read them.
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        rows_to_bytes(&[&self.dir_slope, &self.color, &self.world])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::mem::offset_of;
+
+    /// Field order and offsets of `struct GpuLight` / `GpuMask` in `GpuLight.hpp`.
+    #[test]
+    fn layout_matches_chiaro() {
+        assert_eq!(offset_of!(GpuLight, position_radius), 0);
+        assert_eq!(offset_of!(GpuLight, color_falloff), 16);
+        assert_eq!(offset_of!(GpuLight, direction_type), 32);
+        assert_eq!(offset_of!(GpuLight, spot_cos), 48);
+        assert_eq!(offset_of!(GpuLight, shadow), 64);
+        assert_eq!(offset_of!(GpuLight, profile), 80);
+        assert_eq!(offset_of!(GpuLight, area), 96);
+        assert_eq!(offset_of!(GpuLight, area_mask), 112);
+        assert_eq!(offset_of!(GpuMask, p), 16);
+        assert_eq!(offset_of!(GpuMask, q), 32);
+        assert_eq!(offset_of!(GpuDirectional, world), 32);
+        let l = GpuLight {
+            shadow: [1.0, 2.0, 3.0, 4.0],
+            area_mask: [0.0, 0.0, 0.0, 9.0],
+            ..Default::default()
+        };
+        let b = l.to_bytes();
+        assert_eq!(f32::from_le_bytes(b[68..72].try_into().unwrap()), 2.0);
+        assert_eq!(f32::from_le_bytes(b[124..128].try_into().unwrap()), 9.0);
+    }
+}
