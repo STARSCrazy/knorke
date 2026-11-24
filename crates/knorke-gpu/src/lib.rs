@@ -4,8 +4,10 @@
 //! Without features the crate holds only GPU-free logic: [`LiveCounter`] (leak checks),
 //! the staging size arithmetic in [`staging`] and the shader pack format in [`kpak`]
 //! (reader and writer). Feature `sdl` adds the SDL3 wrappers: [`Device`], [`GpuHandle`],
-//! [`RenderTarget`], [`Samplers`], [`UploadBuffer`], [`ShaderLibrary`], [`PipelineCache`],
-//! [`bind_program`] and the texture format tables in [`formats`]. Feature
+//! [`RenderTarget`], [`Texture`], [`Samplers`], [`UploadBuffer`], [`DownloadBuffer`],
+//! [`ShaderLibrary`], [`PipelineCache`], the safe recording API ([`CommandBuffer`],
+//! [`RenderPass`], [`CopyPass`] on borrowed views [`TextureRef`], [`SamplerRef`],
+//! [`BufferRef`], [`PipelineRef`]) and the texture format tables in [`formats`]. Feature
 //! `sdl-build-static` builds SDL3 from source and links it statically.
 //!
 //! **Shaders (ADR 0014 §3):** shaders are not compiled into any library. Each crate with
@@ -26,9 +28,16 @@
 //! clock. Objects here borrow a [`Device`] for a lifetime `'d`, record into command buffers
 //! and copy passes the host lends them, and never submit, present or read back.
 //!
+//! **Recording (P1b):** the host acquires a [`CommandBuffer`] and lends it to modules as
+//! `&mut CommandBuffer`; a module opens [`RenderPass`]es and [`CopyPass`]es on it, binds
+//! programs with [`RenderPass::bind_program`] (checked against the shaders' reflection) and
+//! draws, all without `unsafe`. Passes borrow the command buffer mutably and end on drop;
+//! only the owner can submit. See [`CommandBuffer`] for the lifetime rules.
+//!
 //! **`unsafe` (ADR 0005):** this crate is the only place with `unsafe` for the GPU. The
 //! crate denies `unsafe_code`; the SDL modules allow it locally and justify each block with
-//! a `// SAFETY:` comment.
+//! a `// SAFETY:` comment. Domain crates record through the safe API and keep
+//! `unsafe_code = "forbid"`.
 
 pub mod kpak;
 mod live;
@@ -38,7 +47,6 @@ pub use live::{LiveCounter, global_live_gpu_objects};
 
 // FFI boundary to SDL3: the only modules allowed to use `unsafe` (ADR 0005).
 #[cfg(feature = "sdl")]
-#[allow(unsafe_code)]
 mod binding;
 #[cfg(feature = "sdl")]
 pub mod formats;
@@ -50,7 +58,13 @@ mod handle;
 mod pipeline_cache;
 #[cfg(feature = "sdl")]
 #[allow(unsafe_code)]
+mod record;
+#[cfg(feature = "sdl")]
+#[allow(unsafe_code)]
 mod render_target;
+#[cfg(feature = "sdl")]
+#[allow(unsafe_code)]
+mod resource;
 #[cfg(feature = "sdl")]
 #[allow(unsafe_code)]
 mod samplers;
@@ -62,9 +76,21 @@ mod shader_library;
 mod upload;
 
 #[cfg(feature = "sdl")]
-pub use handle::{DEVICE_CREATE_FAILED, Device, Gpu, GpuHandle, GpuObject};
+pub use handle::{DEVICE_CREATE_FAILED, Device, Gpu, GpuHandle, GpuObject, init_video};
+#[cfg(feature = "sdl")]
+pub use record::{
+    ColorTarget, CommandBuffer, CopyPass, Load, MAX_COLOR_TARGETS, MAX_SAMPLERS,
+    MAX_STORAGE_BUFFERS, MAX_STORAGE_TEXTURES, MAX_UNIFORMS, PipelineRef, RECORD_FAILED,
+    RECORD_NOT_BOUND, RECORD_OUT_OF_RANGE, RECORD_TARGET_MISMATCH, RECORD_USAGE,
+    RECORD_WRONG_DEVICE, RenderPass,
+};
 #[cfg(feature = "sdl")]
 pub use render_target::{RENDER_TARGET_CREATE_FAILED, RENDER_TARGET_ZERO_SIZE, RenderTarget};
+#[cfg(feature = "sdl")]
+pub use resource::{
+    BufferRef, DOWNLOAD_FAILED, DownloadBuffer, SamplerRef, TEXTURE_CREATE_FAILED, Texture,
+    TextureDesc, TextureRef,
+};
 #[cfg(feature = "sdl")]
 pub use samplers::{Filter, SAMPLER_CREATE_FAILED, Samplers};
 #[cfg(feature = "sdl")]
@@ -74,7 +100,7 @@ pub use upload::{
 };
 
 #[cfg(feature = "sdl")]
-pub use binding::{BINDING_MISMATCH, Bindings, StageBindings, bind_program, check_bindings};
+pub use binding::{BINDING_MISMATCH, Bindings, SamplerBinding, StageBindings, check_bindings};
 #[cfg(feature = "sdl")]
 pub use pipeline_cache::{
     Blend, PIPELINE_CREATE_FAILED, PIPELINE_STAGE_MISMATCH, PipelineCache, ProgramDesc,

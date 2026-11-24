@@ -49,25 +49,22 @@
 //! The real port replaces this module with P22–P25 (occlusion, distance field, light program
 //! table, lighting stage), P27 (composite) and P20 (output). Remove it then.
 
-#![allow(unsafe_code)] // SDL recording calls (ADR 0005); every block has a `// SAFETY:` note.
+//! It records through the safe recording API of `knorke-gpu` (P1b, ADR 0015): borrowed
+//! [`CommandBuffer`], [`TextureRef`] views of the host's textures, no `unsafe`.
 
 use std::borrow::Cow;
-use std::ptr::NonNull;
 
 use knorke_gpu::sys::gpu::{
-    SDL_BeginGPUCopyPass, SDL_BeginGPURenderPass, SDL_DrawGPUPrimitives, SDL_EndGPUCopyPass,
-    SDL_EndGPURenderPass, SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, SDL_GPU_LOADOP_CLEAR,
-    SDL_GPU_LOADOP_DONT_CARE, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, SDL_GPU_STOREOP_STORE,
+    SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
     SDL_GPU_TEXTUREFORMAT_R8G8_UNORM, SDL_GPU_TEXTUREFORMAT_R16_FLOAT,
-    SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, SDL_GPU_TEXTUREFORMAT_R32G32_FLOAT, SDL_GPUBuffer,
-    SDL_GPUColorTargetInfo, SDL_GPUCommandBuffer, SDL_GPUGraphicsPipeline, SDL_GPULoadOp,
-    SDL_GPUTexture, SDL_GPUTextureFormat, SDL_GPUTextureSamplerBinding, SDL_SetGPUScissor,
+    SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, SDL_GPU_TEXTUREFORMAT_R32G32_FLOAT,
+    SDL_GPUTextureFormat,
 };
-use knorke_gpu::sys::pixels::SDL_FColor;
 use knorke_gpu::sys::rect::SDL_Rect;
 use knorke_gpu::{
-    Bindings, Blend, Filter, Gpu, PipelineCache, ProgramDesc, ProgramIndex, RenderTarget, Samplers,
-    SecondTarget, ShaderLibrary, StageBindings, UploadBuffer, bind_program,
+    Bindings, Blend, ColorTarget, CommandBuffer, Filter, Gpu, Load, PipelineCache, ProgramDesc,
+    ProgramIndex, RenderTarget, SamplerBinding, Samplers, SecondTarget, ShaderLibrary,
+    StageBindings, TextureRef, UploadBuffer,
 };
 use knorke_math::{Vec3, det};
 use knorke_types::{Diagnostic, DiagnosticCode};
@@ -125,29 +122,37 @@ const PROGRAMS: [ProgramDesc; 8] = [
     ProgramDesc::new("fullscreen.vert", "jfa_distance.frag", Blend::Opaque),
 ];
 
-/// One frame of the spike as the host hands it over. All textures are the host's.
+/// One frame of the spike as the host hands it over. All textures are the host's, borrowed
+/// for `'a`.
 #[derive(Clone, Copy, Debug)]
-pub struct SpikeFrame {
-    /// Scene colour, `width x height`, RGBA8 UNORM holding sRGB-encoded colour.
-    pub scene: NonNull<SDL_GPUTexture>,
+pub struct SpikeFrame<'a> {
+    /// Scene colour, RGBA8 UNORM holding sRGB-encoded colour; its size is the frame size.
+    pub scene: TextureRef<'a>,
     /// Material buffer (codec `material_pixel`), same size and format: exact material mode.
-    pub material: Option<NonNull<SDL_GPUTexture>>,
+    pub material: Option<TextureRef<'a>>,
     /// Occlusion sprite buffer (alpha >= 0.5 occludes), same size: flat shadow mode.
-    pub occlusion: Option<NonNull<SDL_GPUTexture>>,
-    /// Scene width in pixels.
-    pub width: u32,
-    /// Scene height in pixels.
-    pub height: u32,
-    /// Output target; must have the scene size (no letterbox in the spike).
-    pub target: NonNull<SDL_GPUTexture>,
-    /// Its format: an UNORM format (the shader encodes sRGB).
-    pub target_format: SDL_GPUTextureFormat,
+    pub occlusion: Option<TextureRef<'a>>,
+    /// Output target in an UNORM format (the shader encodes sRGB); must have the scene size
+    /// (no letterbox in the spike).
+    pub target: TextureRef<'a>,
     /// World to scene projection.
     pub projection: Projection,
     /// Ambient light, linear RGB.
     pub ambient: Vec3,
     /// Output filter: nearest (pixel art) or linear.
     pub output_filter: Filter,
+}
+
+impl SpikeFrame<'_> {
+    /// Scene width in pixels.
+    pub fn width(&self) -> u32 {
+        self.scene.width()
+    }
+
+    /// Scene height in pixels.
+    pub fn height(&self) -> u32 {
+        self.scene.height()
+    }
 }
 
 /// Fixed-size helper that writes a uniform block in declaration order.
@@ -196,8 +201,8 @@ struct Domain {
     remainder: [f32; 2],
 }
 
-fn domain(frame: &SpikeFrame) -> Domain {
-    let (w, h) = (frame.width, frame.height);
+fn domain(frame: &SpikeFrame<'_>) -> Domain {
+    let (w, h) = (frame.width(), frame.height());
     let margin = w.max(h).div_ceil(4);
     let (full_w, full_h) = (w + 2 * margin, h + 2 * margin);
     let (width, height) = (
@@ -221,7 +226,7 @@ fn domain(frame: &SpikeFrame) -> Domain {
 }
 
 /// `GpuLight` (light_common.hlsli), 128 bytes, as CollectLights builds it.
-fn gpu_light(light: &StoredLight, frame: &SpikeFrame, d: &Domain) -> [u8; 128] {
+fn gpu_light(light: &StoredLight, frame: &SpikeFrame<'_>, d: &Domain) -> [u8; 128] {
     let desc = &light.desc;
     let normal_mode = frame.material.is_some();
     let z = match desc.height {
@@ -278,61 +283,26 @@ pub struct SpikeRenderer<'d> {
     lights: UploadBuffer<'d>,
 }
 
-/// Pipelines of one prepared frame.
+/// Result of [`SpikeRenderer::prepare`]: which mode the frame is drawn in.
 #[derive(Clone, Copy, Debug)]
 pub struct Prepared {
-    light: NonNull<SDL_GPUGraphicsPipeline>,
-    composite: NonNull<SDL_GPUGraphicsPipeline>,
-    output: NonNull<SDL_GPUGraphicsPipeline>,
-    /// Occlusion mask, seed, step, distance (shadow mode).
-    shadow: Option<[NonNull<SDL_GPUGraphicsPipeline>; 4]>,
+    shadows: bool,
 }
 
-fn non_null<T>(p: Option<*mut T>, what: &str) -> Result<NonNull<T>, Diagnostic> {
-    p.and_then(NonNull::new).ok_or_else(|| {
-        Diagnostic::error(
-            SPIKE_UNSUPPORTED,
-            format!("{what} is missing after prepare"),
-        )
-    })
+fn missing(what: &str) -> Diagnostic {
+    Diagnostic::error(
+        SPIKE_UNSUPPORTED,
+        format!("{what} is missing after prepare"),
+    )
 }
 
-fn color_target(
-    texture: NonNull<SDL_GPUTexture>,
-    load: SDL_GPULoadOp,
-    cycle: bool,
-    clear: SDL_FColor,
-) -> SDL_GPUColorTargetInfo {
-    SDL_GPUColorTargetInfo {
-        texture: texture.as_ptr(),
-        clear_color: clear,
-        load_op: load,
-        store_op: SDL_GPU_STOREOP_STORE,
-        cycle,
-        ..Default::default()
-    }
-}
-
-fn pair(
-    t: NonNull<SDL_GPUTexture>,
-    s: *mut knorke_gpu::sys::gpu::SDL_GPUSampler,
-) -> SDL_GPUTextureSamplerBinding {
-    SDL_GPUTextureSamplerBinding {
-        texture: t.as_ptr(),
-        sampler: s,
-    }
-}
-
-fn fragment_only<'a>(
-    samplers: &'a [SDL_GPUTextureSamplerBinding],
-    uniforms: &'a [&'a [u8]],
-) -> Bindings<'a> {
+fn fragment_only<'a>(samplers: &'a [SamplerBinding<'a>], uniforms: &'a [&'a [u8]]) -> Bindings<'a> {
     Bindings {
         vertex: StageBindings::default(),
         fragment: StageBindings {
             samplers,
-            storage_buffers: &[],
             uniforms,
+            ..Default::default()
         },
     }
 }
@@ -359,7 +329,7 @@ impl<'d> SpikeRenderer<'d> {
     /// Everything that can fail: targets, pipelines and the light buffer contents.
     pub fn prepare(
         &mut self,
-        frame: &SpikeFrame,
+        frame: &SpikeFrame<'_>,
         light: &StoredLight,
     ) -> Result<Prepared, Diagnostic> {
         let shadows = frame.occlusion.is_some() && light.desc.cast_shadows;
@@ -372,7 +342,7 @@ impl<'d> SpikeRenderer<'d> {
                 "the spike draws one point light with either a material buffer or a shadow-casting occlusion buffer",
             ));
         }
-        let (w, h) = (frame.width, frame.height);
+        let (w, h) = (frame.width(), frame.height());
         let d = domain(frame);
         self.light.ensure(w, h, HDR_FORMAT)?;
         self.hdr.ensure(w, h, HDR_FORMAT)?;
@@ -391,76 +361,72 @@ impl<'d> SpikeRenderer<'d> {
         self.lights.reserve(128)?;
         let bytes = gpu_light(light, frame, &d);
         self.lights.map()?.bytes()[..128].copy_from_slice(&bytes);
-        let mut get = |p: ProgramIndex, format| {
-            self.pipelines
-                .get(&mut self.shaders, p, format)
-                .and_then(|x| non_null(Some(x), "pipeline"))
-        };
-        let shadow = if shadows {
-            Some([
-                get(OCCLUSION_MASK, MASK_FORMAT)?,
-                get(JFA_SEED, SEED_FORMAT)?,
-                get(JFA_STEP, SEED_FORMAT)?,
-                get(JFA_DISTANCE, FIELD_FORMAT)?,
-            ])
-        } else {
-            None
-        };
-        Ok(Prepared {
-            light: get(if shadows { LIGHT_SDF } else { LIGHT_EXACT }, HDR_FORMAT)?,
-            composite: get(COMPOSITE, HDR_FORMAT)?,
-            output: get(OUTPUT, frame.target_format)?,
-            shadow,
-        })
+        let mut get =
+            |p: ProgramIndex, format| self.pipelines.get(&mut self.shaders, p, format).map(|_| ());
+        if shadows {
+            get(OCCLUSION_MASK, MASK_FORMAT)?;
+            get(JFA_SEED, SEED_FORMAT)?;
+            get(JFA_STEP, SEED_FORMAT)?;
+            get(JFA_DISTANCE, FIELD_FORMAT)?;
+        }
+        get(if shadows { LIGHT_SDF } else { LIGHT_EXACT }, HDR_FORMAT)?;
+        get(COMPOSITE, HDR_FORMAT)?;
+        get(OUTPUT, frame.target.format())?;
+        Ok(Prepared { shadows })
     }
 
     /// Records upload, occlusion and distance field (shadow mode), light pass, composite and
-    /// output into the host's command buffer.
-    ///
-    /// # Safety
-    ///
-    /// `cmd` must be an acquired, not yet submitted command buffer of this renderer's device
-    /// with no pass open; the textures of `frame` must be live textures of that device with
-    /// the stated sizes and sampler/colour-target usage; `prepared` must come from
-    /// [`prepare`](Self::prepare) with the same frame.
-    pub unsafe fn record(
-        &mut self,
-        cmd: NonNull<SDL_GPUCommandBuffer>,
-        frame: &SpikeFrame,
+    /// output into the host's command buffer. `prepared` must come from
+    /// [`prepare`](Self::prepare) with the same frame; otherwise recording fails with a
+    /// diagnostic.
+    pub fn record(
+        &self,
+        cmd: &mut CommandBuffer<'_>,
+        frame: &SpikeFrame<'_>,
         prepared: Prepared,
     ) -> Result<(), Diagnostic> {
-        let light_tex = non_null(self.light.texture(), "light buffer")?;
-        let hdr_tex = non_null(self.hdr.texture(), "hdr buffer")?;
-        let storage = non_null(self.lights.buffer(), "light storage buffer")?;
-        let nearest = self.samplers.get(Filter::Nearest);
-        let linear = self.samplers.get(Filter::Linear);
+        let light_tex = self
+            .light
+            .texture_ref()
+            .ok_or_else(|| missing("light buffer"))?;
+        let hdr_tex = self
+            .hdr
+            .texture_ref()
+            .ok_or_else(|| missing("hdr buffer"))?;
+        let storage = self
+            .lights
+            .buffer_ref()
+            .ok_or_else(|| missing("light storage buffer"))?;
+        let nearest = self.samplers.sampler(Filter::Nearest);
+        let linear = self.samplers.sampler(Filter::Linear);
+        let pair = SamplerBinding::new;
         let d = domain(frame);
         let p = &frame.projection;
         let (o, x, y, z) = (p.origin.raw(), p.x_axis, p.y_axis, p.z_axis);
-        let (w, h) = (frame.width as f32, frame.height as f32);
+        let (w, h) = (frame.width() as f32, frame.height() as f32);
         let a = frame.ambient;
-        let zero = SDL_FColor::default();
+        let zero = [0.0; 4];
 
-        // SAFETY: the caller guarantees an open command buffer without an active pass; the
-        // light buffer was reserved and filled in `prepare`.
-        unsafe {
-            let copy = NonNull::new(SDL_BeginGPUCopyPass(cmd.as_ptr())).ok_or_else(|| {
-                Diagnostic::error(SPIKE_UNSUPPORTED, "SDL_BeginGPUCopyPass failed")
-            })?;
-            self.lights.upload(copy, 128);
-            SDL_EndGPUCopyPass(copy.as_ptr());
-        }
+        cmd.copy_pass()?.upload_to_buffer(&self.lights, 128)?;
 
         // Shadow mode: occlusion mask from the sprite buffer, then the distance field.
         let mut shadow_maps = None;
-        if let (Some(occlusion), Some([mask_p, seed_p, step_p, distance_p])) =
-            (frame.occlusion, prepared.shadow)
-        {
-            let mask = non_null(self.mask.texture(), "occlusion mask")?;
-            let field = non_null(self.field.texture(), "distance field")?;
+        if let (Some(occlusion), true) = (frame.occlusion, prepared.shadows) {
+            let mask = self
+                .mask
+                .texture_ref()
+                .ok_or_else(|| missing("occlusion mask"))?;
+            let field = self
+                .field
+                .texture_ref()
+                .ok_or_else(|| missing("distance field"))?;
             let seeds = [
-                non_null(self.seeds[0].texture(), "seeds")?,
-                non_null(self.seeds[1].texture(), "seeds")?,
+                self.seeds[0]
+                    .texture_ref()
+                    .ok_or_else(|| missing("seeds"))?,
+                self.seeds[1]
+                    .texture_ref()
+                    .ok_or_else(|| missing("seeds"))?,
             ];
             // SpriteParams: the scene rectangle in mask texels, moved by the anchor remainder.
             let rect = [
@@ -489,9 +455,8 @@ impl<'d> SpikeRenderer<'d> {
             let samplers = [pair(occlusion, nearest)];
             let uniforms: [&[u8]; 1] = [&sprite.bytes];
             let b = fragment_only(&samplers, &uniforms);
-            let t = [color_target(mask, SDL_GPU_LOADOP_CLEAR, true, zero)];
-            // SAFETY: as above.
-            unsafe { self.pass(cmd, &t, mask_p, OCCLUSION_MASK, &b, 3, Some(scissor))? };
+            let t = [ColorTarget::new(mask, Load::Clear(zero)).cycled(true)];
+            self.pass(cmd, &t, OCCLUSION_MASK, &b, 3, Some(scissor))?;
 
             // Jump flooding: seed, k = 16 … 1 plus one extra k = 1, distance (SdfShadows.cpp).
             let (dw, dh) = (d.width as f32, d.height as f32);
@@ -500,36 +465,23 @@ impl<'d> SpikeRenderer<'d> {
                 j.f4([dw, dh, 1.0 / dw, 1.0 / dh]).f4([k, bound, 0.0, 0.0]);
                 j
             };
-            let run = |this: &Self,
-                       target: NonNull<SDL_GPUTexture>,
-                       cycle: bool,
-                       pipeline,
-                       program,
-                       input: NonNull<SDL_GPUTexture>,
-                       params: &Block<32>| {
-                let samplers = [pair(input, nearest)];
+            let mut run = |target: TextureRef<'_>,
+                           cycle: bool,
+                           program,
+                           input: TextureRef<'_>,
+                           params: &Block<32>| {
+                let samplers = [SamplerBinding::new(input, nearest)];
                 let uniforms: [&[u8]; 1] = [&params.bytes];
                 let b = fragment_only(&samplers, &uniforms);
-                let t = [color_target(target, SDL_GPU_LOADOP_DONT_CARE, cycle, zero)];
-                // SAFETY: as above.
-                unsafe { this.pass(cmd, &t, pipeline, program, &b, 3, None) }
+                let t = [ColorTarget::new(target, Load::DontCare).cycled(cycle)];
+                self.pass(cmd, &t, program, &b, 3, None)
             };
-            run(
-                self,
-                seeds[0],
-                false,
-                seed_p,
-                JFA_SEED,
-                mask,
-                &jfa(0.0, 0.0),
-            )?;
+            run(seeds[0], false, JFA_SEED, mask, &jfa(0.0, 0.0))?;
             let mut current = 0;
             for k in JFA_STEPS {
                 run(
-                    self,
                     seeds[1 - current],
                     false,
-                    step_p,
                     JFA_STEP,
                     seeds[current],
                     &jfa(k as f32, 0.0),
@@ -537,10 +489,8 @@ impl<'d> SpikeRenderer<'d> {
                 current = 1 - current;
             }
             run(
-                self,
                 field,
                 true,
-                distance_p,
                 JFA_DISTANCE,
                 seeds[current],
                 &jfa(0.0, FIELD_BOUND as f32),
@@ -549,14 +499,9 @@ impl<'d> SpikeRenderer<'d> {
         }
 
         // Light pass: light buffer cleared to the ambient (specular buffer to zero).
-        let ambient = SDL_FColor {
-            r: a.x,
-            g: a.y,
-            b: a.z,
-            a: 0.0,
-        };
-        let buffers: [*mut SDL_GPUBuffer; 1] = [storage.as_ptr()];
-        let specular = self.specular.texture().and_then(NonNull::new);
+        let ambient = [a.x, a.y, a.z, 0.0];
+        let buffers = [storage];
+        let specular = self.specular.texture_ref();
         if let Some((mask, field)) = shadow_maps {
             // LightPassParams (light.vert family), 64 bytes.
             let mut pass_params = Block::<64>::new();
@@ -580,24 +525,23 @@ impl<'d> SpikeRenderer<'d> {
             ];
             let b = Bindings {
                 vertex: StageBindings {
-                    samplers: &[],
                     storage_buffers: &buffers,
                     uniforms: &[&pass_params.bytes],
+                    ..Default::default()
                 },
                 fragment: StageBindings {
                     samplers: &samplers,
-                    storage_buffers: &[],
                     uniforms: &[&shadow.bytes],
+                    ..Default::default()
                 },
             };
-            let t = [color_target(light_tex, SDL_GPU_LOADOP_CLEAR, true, ambient)];
-            // SAFETY: as above.
-            unsafe { self.pass(cmd, &t, prepared.light, LIGHT_SDF, &b, 6, None)? };
+            let t = [ColorTarget::new(light_tex, Load::Clear(ambient)).cycled(true)];
+            self.pass(cmd, &t, LIGHT_SDF, &b, 6, None)?;
         } else {
             let material = frame.material.ok_or_else(|| {
                 Diagnostic::error(SPIKE_UNSUPPORTED, "exact mode without material")
             })?;
-            let specular = non_null(specular.map(NonNull::as_ptr), "specular buffer")?;
+            let specular = specular.ok_or_else(|| missing("specular buffer"))?;
             let det_xy = f64::from(x.x) * f64::from(y.y) - f64::from(x.y) * f64::from(y.x);
             let inv = [
                 (f64::from(y.y) / det_xy) as f32,
@@ -636,22 +580,21 @@ impl<'d> SpikeRenderer<'d> {
             ];
             let b = Bindings {
                 vertex: StageBindings {
-                    samplers: &[],
                     storage_buffers: &buffers,
                     uniforms: &[&pass_params.bytes],
+                    ..Default::default()
                 },
                 fragment: StageBindings {
                     samplers: &samplers,
-                    storage_buffers: &[],
                     uniforms: &[&surface.bytes],
+                    ..Default::default()
                 },
             };
             let t = [
-                color_target(light_tex, SDL_GPU_LOADOP_CLEAR, true, ambient),
-                color_target(specular, SDL_GPU_LOADOP_CLEAR, true, zero),
+                ColorTarget::new(light_tex, Load::Clear(ambient)).cycled(true),
+                ColorTarget::new(specular, Load::Clear(zero)).cycled(true),
             ];
-            // SAFETY: as above.
-            unsafe { self.pass(cmd, &t, prepared.light, LIGHT_EXACT, &b, 6, None)? };
+            self.pass(cmd, &t, LIGHT_EXACT, &b, 6, None)?;
         }
 
         // Composite into the HDR buffer.
@@ -681,9 +624,8 @@ impl<'d> SpikeRenderer<'d> {
         ];
         let uniforms: [&[u8]; 1] = [&composite.bytes];
         let b = fragment_only(&samplers, &uniforms);
-        let t = [color_target(hdr_tex, SDL_GPU_LOADOP_DONT_CARE, true, zero)];
-        // SAFETY: as above.
-        unsafe { self.pass(cmd, &t, prepared.composite, COMPOSITE, &b, 3, None)? };
+        let t = [ColorTarget::new(hdr_tex, Load::DontCare).cycled(true)];
+        self.pass(cmd, &t, COMPOSITE, &b, 3, None)?;
 
         // Output into the host's target (not cycled: it is the host's texture).
         let mut output = Block::<{ 240 + 32 * MAX_SHOCKWAVES }>::new();
@@ -709,62 +651,41 @@ impl<'d> SpikeRenderer<'d> {
             .f4([0.0; 4])
             .f4([0.0, 0.5 * det::min(w, h), 0.0, 0.0]);
         let samplers = [
-            pair(hdr_tex, self.samplers.get(frame.output_filter)),
+            pair(hdr_tex, self.samplers.sampler(frame.output_filter)),
             pair(hdr_tex, linear), // overlay: none
             pair(hdr_tex, linear), // bloom: none
         ];
         let uniforms: [&[u8]; 1] = [&output.bytes];
         let b = fragment_only(&samplers, &uniforms);
-        let t = [color_target(
-            frame.target,
-            SDL_GPU_LOADOP_DONT_CARE,
-            false,
-            zero,
-        )];
-        // SAFETY: as above.
-        unsafe { self.pass(cmd, &t, prepared.output, OUTPUT, &b, 3, None) }
+        let t = [ColorTarget::new(frame.target, Load::DontCare)];
+        self.pass(cmd, &t, OUTPUT, &b, 3, None)
     }
 
-    /// One render pass with one draw (`vertices`, one instance).
-    ///
-    /// # Safety
-    ///
-    /// As [`record`](Self::record); `targets` and `b` hold live objects of this device.
-    #[allow(clippy::too_many_arguments)]
-    unsafe fn pass(
+    /// One render pass with one draw (`vertices`, one instance), with the pipeline of
+    /// `program` for the first target's format.
+    fn pass(
         &self,
-        cmd: NonNull<SDL_GPUCommandBuffer>,
-        targets: &[SDL_GPUColorTargetInfo],
-        pipeline: NonNull<SDL_GPUGraphicsPipeline>,
+        cmd: &mut CommandBuffer<'_>,
+        targets: &[ColorTarget<'_>],
         program: ProgramIndex,
         b: &Bindings<'_>,
         vertices: u32,
         scissor: Option<SDL_Rect>,
     ) -> Result<(), Diagnostic> {
-        let reflection = self
+        let format = targets
+            .first()
+            .ok_or_else(|| missing("color target"))?
+            .texture
+            .format();
+        let pipeline = self
             .pipelines
-            .reflection(program)
-            .ok_or_else(|| Diagnostic::error(SPIKE_UNSUPPORTED, format!("no program {program}")))?;
-        // SAFETY: forwarded from the caller; `targets` and `scissor` are alive for the calls.
-        unsafe {
-            let pass = SDL_BeginGPURenderPass(
-                cmd.as_ptr(),
-                targets.as_ptr(),
-                targets.len() as u32,
-                std::ptr::null(),
-            );
-            let pass = NonNull::new(pass).ok_or_else(|| {
-                Diagnostic::error(SPIKE_UNSUPPORTED, "SDL_BeginGPURenderPass failed")
-            })?;
-            if let Some(s) = &scissor {
-                SDL_SetGPUScissor(pass.as_ptr(), s);
-            }
-            let bound = bind_program(pass, cmd, pipeline, reflection, b);
-            if bound.is_ok() {
-                SDL_DrawGPUPrimitives(pass.as_ptr(), vertices, 1, 0, 0);
-            }
-            SDL_EndGPURenderPass(pass.as_ptr());
-            bound
+            .pipeline(program, format)
+            .ok_or_else(|| missing("pipeline"))?;
+        let mut pass = cmd.render_pass(targets)?;
+        if let Some(s) = &scissor {
+            pass.set_scissor(s);
         }
+        pass.bind_program(pipeline, b)?;
+        pass.draw_instanced(vertices, 1)
     }
 }

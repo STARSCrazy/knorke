@@ -7,24 +7,28 @@
 //!   rendered by `tests/golden/chiaro/gate/gate_ref.c` (C++ Chiaro 9bc5b9b, Vulkan).
 //!
 //! The test plays the host (ADR 0002): it owns device, textures and command buffers, submits
-//! and reads back. It skips (passes with a note) without a Vulkan device or without the
-//! shader pack from `cargo xtask shaders` in `target/shaders/`.
+//! and reads back, all through the safe API of `knorke-gpu` (no `unsafe`). It skips (passes
+//! with a note) without a Vulkan device or without the shader pack from `cargo xtask shaders`
+//! in `target/shaders/`.
 //!
 //! `KNORKE_SPIKE_OUT=<dir>` writes each image and an amplified diff image there;
 //! `KNORKE_SPIKE_BENCH=<frames>` also times that many frames (wall clock, record + submit +
 //! wait, as `gate_ref.c` does with `CHI_Render`).
 #![cfg(feature = "gpu")]
-#![allow(unsafe_code)] // host side: raw SDL calls for device, textures, submit and readback
 
 use std::path::{Path, PathBuf};
-use std::ptr::NonNull;
 use std::time::Instant;
 
 use knorke_contract_tests::parity::{ParityBudget, ParityReport, compare_rgba8};
-use knorke_gpu::sys::gpu::*;
-use knorke_gpu::sys::hints::{SDL_HINT_GPU_DRIVER, SDL_SetHint};
-use knorke_gpu::sys::init::{SDL_INIT_VIDEO, SDL_Init};
-use knorke_gpu::{Device, Filter, Gpu, LiveCounter};
+use knorke_gpu::sys::gpu::{
+    SDL_GPU_SHADERFORMAT_SPIRV, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+    SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUBufferUsageFlags,
+    SDL_GPUTextureUsageFlags,
+};
+use knorke_gpu::{
+    CommandBuffer, Device, DownloadBuffer, Filter, Gpu, LiveCounter, Texture, TextureDesc,
+    UploadBuffer, init_video,
+};
 use knorke_light2d::codec::{AlphaSource, Material, NormalMapOptions, convert_normal_map};
 use knorke_light2d::gpu_spike::{SpikeFrame, SpikeRenderer};
 use knorke_light2d::light::{LightDesc, LightType, StoredLight};
@@ -149,74 +153,29 @@ fn gate_sprite_shadow() -> Scene {
     }
 }
 
-struct Texture {
-    device: *mut SDL_GPUDevice,
-    raw: NonNull<SDL_GPUTexture>,
-}
-
-impl Drop for Texture {
-    fn drop(&mut self) {
-        // SAFETY: created on `device` below, released once.
-        unsafe { SDL_ReleaseGPUTexture(self.device, self.raw.as_ptr()) };
-    }
-}
-
 /// A RGBA8 UNORM texture, filled with `pixels` if given (host work: in Chiaro the demo's
 /// renderer draws these layers).
-fn texture(
-    device: &Device,
+fn texture<'d>(
+    gpu: Gpu<'d>,
     w: u32,
     h: u32,
     usage: SDL_GPUTextureUsageFlags,
     pixels: Option<&[u8]>,
-) -> Texture {
-    let d = device.as_ptr();
-    let info = SDL_GPUTextureCreateInfo {
-        r#type: SDL_GPU_TEXTURETYPE_2D,
-        format: SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        usage,
-        width: w,
-        height: h,
-        layer_count_or_depth: 1,
-        num_levels: 1,
-        ..Default::default()
-    };
-    // SAFETY: live device, initialised create info.
-    let raw = NonNull::new(unsafe { SDL_CreateGPUTexture(d, &info) }).expect("texture");
+) -> Texture<'d> {
+    let desc = TextureDesc::new(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, usage);
+    let texture = Texture::new(gpu, desc).expect("texture");
     if let Some(px) = pixels {
-        let size = w * h * 4;
-        // SAFETY: plain SDL calls on a live device; the mapped range is `size` bytes.
-        unsafe {
-            let bi = SDL_GPUTransferBufferCreateInfo {
-                usage: SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-                size,
-                ..Default::default()
-            };
-            let tb = SDL_CreateGPUTransferBuffer(d, &bi);
-            let p = SDL_MapGPUTransferBuffer(d, tb, false).cast::<u8>();
-            std::ptr::copy_nonoverlapping(px.as_ptr(), p, size as usize);
-            SDL_UnmapGPUTransferBuffer(d, tb);
-            let cmd = SDL_AcquireGPUCommandBuffer(d);
-            let copy = SDL_BeginGPUCopyPass(cmd);
-            let src = SDL_GPUTextureTransferInfo {
-                transfer_buffer: tb,
-                ..Default::default()
-            };
-            let dst = SDL_GPUTextureRegion {
-                texture: raw.as_ptr(),
-                w,
-                h,
-                d: 1,
-                ..Default::default()
-            };
-            SDL_UploadToGPUTexture(copy, &src, &dst, false);
-            SDL_EndGPUCopyPass(copy);
-            assert!(SDL_SubmitGPUCommandBuffer(cmd));
-            SDL_WaitForGPUIdle(d);
-            SDL_ReleaseGPUTransferBuffer(d, tb);
-        }
+        let mut up = UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), px.len() as u32, "pixels");
+        up.reserve(px.len() as u64).unwrap();
+        up.map().unwrap().bytes()[..px.len()].copy_from_slice(px);
+        let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+        cmd.copy_pass()
+            .unwrap()
+            .upload_to_texture(&up, texture.texture_ref(), false)
+            .unwrap();
+        cmd.submit_and_wait().unwrap();
     }
-    Texture { device: d, raw }
+    texture
 }
 
 fn save_png(path: &Path, rgba: &[u8], w: u32, h: u32) {
@@ -260,44 +219,25 @@ fn report(name: &str, budget: &str, r: &ParityReport) {
     );
 }
 
-/// Records one frame into a fresh command buffer, then the readback if `readback` is given.
-///
-/// # Safety
-/// Live device and textures of that device.
-unsafe fn frame_once(
+/// Records one frame into a fresh command buffer, then the readback into `readback` if
+/// given, submits and waits.
+fn frame_once(
     device: &Device,
     renderer: &mut SpikeRenderer<'_>,
-    frame: &SpikeFrame,
+    frame: &SpikeFrame<'_>,
     light: &StoredLight,
-    readback: Option<(*mut SDL_GPUTransferBuffer, u32, u32)>,
+    readback: Option<&DownloadBuffer<'_>>,
 ) {
-    let d = device.as_ptr();
-    // SAFETY: forwarded.
-    unsafe {
-        let prepared = renderer.prepare(frame, light).unwrap();
-        let cmd = NonNull::new(SDL_AcquireGPUCommandBuffer(d)).unwrap();
-        renderer.record(cmd, frame, prepared).unwrap();
-        if let Some((tb, w, h)) = readback {
-            let copy = SDL_BeginGPUCopyPass(cmd.as_ptr());
-            let src = SDL_GPUTextureRegion {
-                texture: frame.target.as_ptr(),
-                w,
-                h,
-                d: 1,
-                ..Default::default()
-            };
-            let dst = SDL_GPUTextureTransferInfo {
-                transfer_buffer: tb,
-                ..Default::default()
-            };
-            SDL_DownloadFromGPUTexture(copy, &src, &dst);
-            SDL_EndGPUCopyPass(copy);
-        }
-        let fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd.as_ptr());
-        assert!(!fence.is_null());
-        SDL_WaitForGPUFences(d, true, &fence, 1);
-        SDL_ReleaseGPUFence(d, fence);
+    let prepared = renderer.prepare(frame, light).unwrap();
+    let mut cmd = CommandBuffer::acquire(device).unwrap();
+    renderer.record(&mut cmd, frame, prepared).unwrap();
+    if let Some(download) = readback {
+        cmd.copy_pass()
+            .unwrap()
+            .download_texture(frame.target, download)
+            .unwrap();
     }
+    cmd.submit_and_wait().unwrap();
 }
 
 #[test]
@@ -310,11 +250,7 @@ fn spike_matches_chiaro() {
         );
         return;
     };
-    // SAFETY: plain FFI calls; the hint string is NUL-terminated.
-    unsafe {
-        SDL_SetHint(SDL_HINT_GPU_DRIVER, c"vulkan".as_ptr());
-        SDL_Init(SDL_INIT_VIDEO);
-    }
+    init_video(Some(c"vulkan"));
     let device = match Device::create(SDL_GPU_SHADERFORMAT_SPIRV, false) {
         Ok(d) => d,
         Err(e) => {
@@ -334,50 +270,35 @@ fn spike_matches_chiaro() {
     for scene in [minimal_normal_map(), gate_sprite_shadow()] {
         let (w, h) = (scene.w, scene.h);
         let sampled = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-        let color = texture(&device, w, h, sampled, Some(&scene.color));
+        let color = texture(gpu, w, h, sampled, Some(&scene.color));
         let material = scene
             .material
             .as_deref()
-            .map(|m| texture(&device, w, h, sampled, Some(m)));
+            .map(|m| texture(gpu, w, h, sampled, Some(m)));
         let occlusion = scene
             .occlusion
             .as_deref()
-            .map(|o| texture(&device, w, h, sampled, Some(o)));
-        let target = texture(&device, w, h, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, None);
+            .map(|o| texture(gpu, w, h, sampled, Some(o)));
+        let target = texture(gpu, w, h, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET, None);
         let frame = SpikeFrame {
-            scene: color.raw,
-            material: material.as_ref().map(|t| t.raw),
-            occlusion: occlusion.as_ref().map(|t| t.raw),
-            width: w,
-            height: h,
-            target: target.raw,
-            target_format: SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+            scene: color.texture_ref(),
+            material: material.as_ref().map(Texture::texture_ref),
+            occlusion: occlusion.as_ref().map(Texture::texture_ref),
+            target: target.texture_ref(),
             projection: Projection::default(),
             ambient: Vec3::new(scene.ambient, scene.ambient, scene.ambient),
             output_filter: scene.filter,
         };
-        let d = device.as_ptr();
-        // SAFETY: host-side readback of the target into a download buffer.
-        let pixels = unsafe {
-            let bi = SDL_GPUTransferBufferCreateInfo {
-                usage: SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
-                size: w * h * 4,
-                ..Default::default()
-            };
-            let tb = SDL_CreateGPUTransferBuffer(d, &bi);
-            frame_once(
-                &device,
-                &mut renderer,
-                &frame,
-                &scene.light,
-                Some((tb, w, h)),
-            );
-            let p = SDL_MapGPUTransferBuffer(d, tb, false).cast::<u8>();
-            let v = std::slice::from_raw_parts(p, (w * h * 4) as usize).to_vec();
-            SDL_UnmapGPUTransferBuffer(d, tb);
-            SDL_ReleaseGPUTransferBuffer(d, tb);
-            v
-        };
+        let mut download = DownloadBuffer::new(gpu, w * h * 4).unwrap();
+        frame_once(
+            &device,
+            &mut renderer,
+            &frame,
+            &scene.light,
+            Some(&download),
+        );
+        let mut pixels = vec![0u8; (w * h * 4) as usize];
+        download.read(&mut pixels).unwrap();
 
         let reference = golden(scene.name, w, h);
         let strict = compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::STRICT).unwrap();
@@ -412,8 +333,7 @@ fn spike_matches_chiaro() {
             let mut times = Vec::with_capacity(frames as usize);
             for _ in 0..frames {
                 let t = Instant::now();
-                // SAFETY: as above.
-                unsafe { frame_once(&device, &mut renderer, &frame, &scene.light, None) };
+                frame_once(&device, &mut renderer, &frame, &scene.light, None);
                 times.push(t.elapsed().as_secs_f64() * 1e6);
             }
             times.sort_by(f64::total_cmp);

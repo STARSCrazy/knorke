@@ -11,7 +11,7 @@ publish.workspace = true
 default = []
 # GPU wrappers over SDL3. Links the SDL3 library the host provides (system install, or
 # `SDL3.lib`/`libSDL3` on the linker search path, e.g. via `RUSTFLAGS=-L<dir>`).
-sdl = ["dep:sdl3-sys"]
+sdl = ["dep:sdl3-sys", "dep:bytemuck"]
 # Builds SDL3 from the bundled source (sdl3-src) and links it statically. Needs CMake and a
 # C compiler, but no installed SDL3. `--all-features` uses it, so tests are self-contained.
 sdl-build-static = ["sdl", "sdl3-sys/build-from-source-static"]
@@ -19,6 +19,8 @@ sdl-build-static = ["sdl", "sdl3-sys/build-from-source-static"]
 [dependencies]
 knorke-types = { workspace = true }
 sdl3-sys = { workspace = true, optional = true }
+# Typed uniform pushes (`RenderPass::push_*_uniform`).
+bytemuck = { workspace = true, optional = true }
 
 # Own lint table instead of `workspace = true`: identical, except that `unsafe_code` is
 # `deny` so that the FFI boundary to SDL3 can opt in locally per module (ADR 0005).

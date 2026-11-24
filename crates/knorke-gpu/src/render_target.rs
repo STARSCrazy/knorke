@@ -33,7 +33,7 @@ use sdl3_sys::gpu::{
 };
 
 use crate::handle::sdl_error;
-use crate::{Gpu, GpuHandle};
+use crate::{Gpu, GpuHandle, TextureDesc, TextureRef};
 
 /// [`RenderTarget::ensure`] was called with a zero width or height.
 pub const RENDER_TARGET_ZERO_SIZE: DiagnosticCode =
@@ -136,6 +136,20 @@ impl<'d> RenderTarget<'d> {
     /// The texture, if one is allocated. Valid until the next `ensure`/`release`.
     pub fn texture(&self) -> Option<*mut SDL_GPUTexture> {
         self.texture.as_ref().map(GpuHandle::as_ptr)
+    }
+
+    /// The texture as a view for recording, if one is allocated. The view borrows the
+    /// target, so it cannot be reallocated or released while the view is in use.
+    pub fn texture_ref(&self) -> Option<TextureRef<'_>> {
+        let desc = TextureDesc::new(
+            self.width,
+            self.height,
+            self.format,
+            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER,
+        );
+        self.texture
+            .as_ref()
+            .map(|t| TextureRef::of_handle(t, desc))
     }
 
     /// Current width (0 without texture).

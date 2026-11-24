@@ -153,6 +153,7 @@ dependencies = [
 name = "knorke-gpu"
 version = "0.0.1"
 dependencies = [
+ "bytemuck",
  "knorke-types",
  "sdl3-sys",
 ]
