@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 knorke-math = { workspace = true }
+knorke-types = { workspace = true }
 
 [lints]
 workspace = true

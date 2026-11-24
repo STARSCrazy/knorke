@@ -16,9 +16,10 @@ use knorke_light2d::codec::{
     surface_pixel,
 };
 use knorke_light2d::light::{Height, LightDesc, LightType, ShadowFilter};
-use knorke_light2d::light_culling::{CullSettings, LightList, LightModes, collect_lights};
+use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
 use knorke_light2d::mask::{MaskPreset, MaskShape};
 use knorke_light2d::obstacle::{ShapeDesc, TileGridDesc};
+use knorke_light2d::settings::LightSettings;
 use knorke_light2d::{
     AnimationStore, LightStore, MaskStore, NoResources, ObstacleStore, Projection, StoreResources,
     Triangulator,
@@ -187,7 +188,7 @@ fn steady_state_light2d_paths_allocate_nothing() {
         };
         collect_lights(
             &scene,
-            &CullSettings::default(),
+            &LightSettings::default(),
             &Projection::IDENTITY,
             f64::from(i) / 60.0,
             128,

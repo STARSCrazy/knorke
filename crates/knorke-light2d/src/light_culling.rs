@@ -14,8 +14,8 @@
 //!
 //! - Lights come from a [`LightStore`] (persistent first, then the frame's transient lights);
 //!   [`LightRef::seed_index`] seeds flicker and fire as the slot index did.
-//! - `Settings` is not ported yet (P19); the two values the culling reads are [`CullSettings`]:
-//!   the ambient colour and the shadow resolution scale.
+//! - Settings are [`LightSettings`]; the culling reads the ambient colour and the shadow
+//!   resolution (P19).
 //! - The profile store (P9) is reached through the small trait [`ProfileAtlas`]: the culling needs
 //!   the atlas row of a profile and the inverse atlas height, nothing else.
 //! - The pointers of `LightModes` to the animation, mask and profile stores are optional
@@ -40,6 +40,7 @@ use crate::light_math::{
 };
 use crate::mask::mask_atlas_blocks;
 use crate::mask_store::MaskStore;
+use crate::settings::LightSettings;
 use crate::{LightStore, Projection};
 use knorke_math::{At, Screen, Vec2, Vec3, det};
 use std::borrow::Cow;
@@ -48,24 +49,6 @@ const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
 
 /// `Height::Auto` with normals (surface or material buffer): this factor on the radius (E39).
 pub const AUTO_HEIGHT_SCALE: f32 = 0.4;
-
-/// What the culling reads of the settings (P19 will own the full settings).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct CullSettings {
-    /// Ambient light, linear RGB, each `>= 0`. Default white.
-    pub ambient: Vec3,
-    /// Resolution of the shadow mask against the scene, in `(0, 1]`. Default 1.
-    pub shadow_resolution: f32,
-}
-
-impl Default for CullSettings {
-    fn default() -> Self {
-        Self {
-            ambient: Vec3::ONE,
-            shadow_resolution: 1.0,
-        }
-    }
-}
 
 /// What the profile store (P9) answers to the culling.
 pub trait ProfileAtlas {
@@ -566,7 +549,7 @@ fn make_directional(
 #[allow(clippy::too_many_arguments)]
 pub fn collect_lights(
     lights: &LightStore,
-    settings: &CullSettings,
+    settings: &LightSettings,
     projection: &Projection,
     time: f64,
     scene_w: u32,
@@ -581,7 +564,7 @@ pub fn collect_lights(
         .map_or(0, |m| mask_atlas_blocks(m.block_count()));
 
     // Shadow parameters live in the occlusion mask's texel space (same domain as the mask).
-    let shadow_scale = settings.shadow_resolution;
+    let shadow_scale = settings.resolutions().shadow;
     let domain = OcclusionDomain::new(scene_w, scene_h, shadow_scale);
     // Must equal the occlusion stage's anchor: same projection, scene size and shadow scale.
     let anchor = MaskAnchor::compute(projection, &domain);

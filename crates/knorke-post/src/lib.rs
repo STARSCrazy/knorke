@@ -1,7 +1,8 @@
 //! Post-processing math of the Knorke Engine, ported from Chiaro (ADR 0014, packages P4 and P17).
 //!
 //! This crate holds the CPU side of the output stage: colour transfer functions, tonemapping,
-//! grading, the output rectangle, the CRT and bloom parameter math and the shockwave helpers.
+//! grading, the output rectangle, the CRT and bloom parameter math, the shockwave helpers and the
+//! settings of these stages ([`settings`], P19).
 //! It contains no GPU code and does not depend on any rendering or lighting crate.
 //!
 //! # Not ported (yet)
@@ -25,6 +26,7 @@ pub mod bloom;
 pub mod color;
 pub mod crt;
 pub mod output_rect;
+pub mod settings;
 pub mod shockwave;
 
 /// Clamps `v` to `[lo, hi]` like C++ `std::clamp`: a value below `lo` gives `lo`, above `hi` gives

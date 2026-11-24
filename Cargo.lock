@@ -136,6 +136,7 @@ dependencies = [
  "knorke-light2d",
  "knorke-math",
  "knorke-observe",
+ "knorke-post",
  "knorke-render",
  "knorke-replay",
  "knorke-types",
@@ -242,6 +243,7 @@ name = "knorke-post"
 version = "0.0.1"
 dependencies = [
  "knorke-math",
+ "knorke-types",
 ]
 
 [[package]]
