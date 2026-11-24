@@ -4,7 +4,7 @@
 //! [`Squad`](crate::group::Squad): its options can be added at run time, and its current
 //! choice, clock and memory steer the next decision.
 
-use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
+use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer, by_fields, by_tag};
 
 use crate::{
     Apply, Candidate, Combine, Consideration, Curve, Decider, Factor, MEMORY_LIMIT, OptionDef, Pick,
@@ -38,73 +38,19 @@ impl SnapshotValue for Apply {
     }
 }
 
-impl SnapshotValue for Consideration {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.input);
-        w.put(&self.curve);
-        w.put(&self.min);
-        w.put(&self.max);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Consideration {
-            input: r.get()?,
-            curve: r.get()?,
-            min: r.get()?,
-            max: r.get()?,
-        })
-    }
+// Plain values: tags and field order are pinned by `tests::value_bytes_are_pinned`.
+by_fields! {
+    Consideration { input, curve, min, max };
+    Candidate { option, target };
+    Factor { consideration, pull, apply };
 }
 
-impl SnapshotValue for Candidate {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.option);
-        w.put(&self.target);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Candidate {
-            option: r.get()?,
-            target: r.get()?,
-        })
-    }
-}
-
-impl SnapshotValue for Pick {
-    fn put(&self, w: &mut Writer<'_>) {
-        match *self {
-            Pick::Best => w.put(&0u8),
-            Pick::Weighted { top } => {
-                w.put(&1u8);
-                w.put(&top);
-            }
-            Pick::Uniform { top } => {
-                w.put(&2u8);
-                w.put(&top);
-            }
-        }
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Pick::Best,
-            1 => Pick::Weighted { top: r.get()? },
-            2 => Pick::Uniform { top: r.get()? },
-            _ => return Err(SnapshotError::Invalid("knorke.ai: pick")),
-        })
-    }
-}
-
-impl SnapshotValue for Factor {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.consideration);
-        w.put(&self.pull);
-        w.put(&self.apply);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Factor {
-            consideration: r.get()?,
-            pull: r.get()?,
-            apply: r.get()?,
-        })
-    }
+by_tag! {
+    Pick, SnapshotError::Invalid("knorke.ai: pick") => {
+        0 => Best,
+        1 => Weighted { top },
+        2 => Uniform { top },
+    };
 }
 
 impl SnapshotValue for OptionDef {

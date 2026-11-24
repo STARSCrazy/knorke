@@ -36,40 +36,18 @@ impl SnapshotValue for Cell {
     }
 }
 
-impl SnapshotValue for HexLayout {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&(*self as u8));
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => HexLayout::OddR,
-            1 => HexLayout::EvenR,
-            2 => HexLayout::OddQ,
-            3 => HexLayout::EvenQ,
-            _ => {
-                return Err(SnapshotError::Invalid(
-                    "knorke.grid: hex layout out of range",
-                ));
-            }
-        })
-    }
-}
-
-impl SnapshotValue for Sine {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&(*self as u8));
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Sine::Fine,
-            1 => Sine::Coarse,
-            _ => {
-                return Err(SnapshotError::Invalid(
-                    "knorke.grid: sine table out of range",
-                ));
-            }
-        })
-    }
+// Tags pinned by `tests::snapshot_values_round_trip`.
+knorke_types::by_tag! {
+    HexLayout, SnapshotError::Invalid("knorke.grid: hex layout out of range") => {
+        0 => OddR,
+        1 => EvenR,
+        2 => OddQ,
+        3 => EvenQ,
+    };
+    Sine, SnapshotError::Invalid("knorke.grid: sine table out of range") => {
+        0 => Fine,
+        1 => Coarse,
+    };
 }
 
 #[cfg(test)]

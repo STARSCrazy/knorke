@@ -268,36 +268,10 @@ impl StateMachine {
 
 // --- Snapshot (ADR 0010, ADR 0012) -------------------------------------------------------
 
-impl SnapshotValue for Transition {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.from);
-        w.put(&self.to);
-        w.put(&self.mask);
-        w.put(&self.value);
-        w.put(&self.after);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Transition {
-            from: r.get()?,
-            to: r.get()?,
-            mask: r.get()?,
-            value: r.get()?,
-            after: r.get()?,
-        })
-    }
-}
-
-impl SnapshotValue for StateDef {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.timeout);
-        w.put(&self.next);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(StateDef {
-            timeout: r.get()?,
-            next: r.get()?,
-        })
-    }
+// Field order pinned by `tests::value_bytes_are_pinned`.
+knorke_types::by_fields! {
+    Transition { from, to, mask, value, after };
+    StateDef { timeout, next };
 }
 
 /// The whole machine: its states and transitions (so a restored machine needs no setup
