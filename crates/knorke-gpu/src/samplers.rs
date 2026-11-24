@@ -32,6 +32,7 @@ use sdl3_sys::gpu::{
     SDL_GPUSampler, SDL_GPUSamplerCreateInfo,
 };
 
+use crate::SamplerRef;
 use crate::handle::sdl_error;
 use crate::{Gpu, GpuHandle};
 
@@ -85,6 +86,14 @@ impl<'d> Samplers<'d> {
         Ok(Self {
             nearest: create(gpu, SDL_GPU_FILTER_NEAREST)?,
             linear: create(gpu, SDL_GPU_FILTER_LINEAR)?,
+        })
+    }
+
+    /// The sampler for `filter` as a view for binding.
+    pub fn sampler(&self, filter: Filter) -> SamplerRef<'_> {
+        SamplerRef::of_handle(match filter {
+            Filter::Nearest => &self.nearest,
+            Filter::Linear => &self.linear,
         })
     }
 

@@ -40,6 +40,7 @@ use sdl3_sys::gpu::{
     SDL_GPUPrimitiveType, SDL_GPUTextureFormat,
 };
 
+use crate::PipelineRef;
 use crate::formats::format_text;
 use crate::handle::sdl_error;
 use crate::kpak::{Reflection, SHADER_PACK_MISSING_PROGRAM, Stage};
@@ -287,6 +288,31 @@ impl<'d> PipelineCache<'d> {
             pipeline,
         });
         Ok(ptr)
+    }
+
+    /// A pipeline created earlier by [`get`](Self::get), as a view for binding; `None` if
+    /// `get` was not called for this program and format yet.
+    pub fn pipeline(
+        &self,
+        program: ProgramIndex,
+        target: SDL_GPUTextureFormat,
+    ) -> Option<PipelineRef<'_>> {
+        let e = self
+            .entries
+            .iter()
+            .find(|e| e.program == program && e.format == target)?;
+        let p = self.programs.get(program)?;
+        let (formats, targets) = match p.desc.second {
+            Some(second) => ([target, second.format], 2),
+            None => ([target, target], 1),
+        };
+        Some(PipelineRef::new(
+            e.pipeline.non_null(),
+            self.gpu.device().non_null(),
+            (p.vertex_reflection, p.fragment_reflection),
+            formats,
+            targets,
+        ))
     }
 
     /// Reflection of a program's (vertex, fragment) shaders, to check bindings against.

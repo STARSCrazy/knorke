@@ -36,6 +36,7 @@ use sdl3_sys::gpu::{
     SDL_UploadToGPUBuffer,
 };
 
+use crate::BufferRef;
 use crate::handle::sdl_error;
 use crate::staging::{MAX_GPU_BUFFER_BYTES, grow_capacity};
 use crate::{Gpu, GpuHandle};
@@ -230,6 +231,17 @@ impl<'d> UploadBuffer<'d> {
     /// The GPU buffer, if this upload buffer has one and is reserved.
     pub fn buffer(&self) -> Option<*mut SDL_GPUBuffer> {
         self.buffer.as_ref().map(GpuHandle::as_ptr)
+    }
+
+    /// The GPU buffer as a view for binding, if this upload buffer has one and is reserved.
+    pub fn buffer_ref(&self) -> Option<BufferRef<'_>> {
+        self.buffer
+            .as_ref()
+            .map(|b| BufferRef::of_handle(b, self.usage, self.capacity))
+    }
+
+    pub(crate) fn device_ptr(&self) -> *mut sdl3_sys::gpu::SDL_GPUDevice {
+        self.gpu.device().as_ptr()
     }
 
     /// The transfer buffer, once reserved.

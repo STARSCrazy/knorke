@@ -24,12 +24,5 @@ knorke-gpu = { workspace = true, optional = true }
 png = "0.17"
 knorke-contract-tests = { path = "../../tests/contracts" }
 
-# Own lint table instead of `workspace = true`: identical, except that `unsafe_code` is
-# `deny` so that the GPU recording of the `gpu` feature can opt in locally (ADR 0005).
-[lints.rust]
-unsafe_code = "deny"
-missing_docs = "warn"
-unreachable_pub = "warn"
-
-[lints.clippy]
-all = { level = "warn", priority = -1 }
+[lints]
+workspace = true

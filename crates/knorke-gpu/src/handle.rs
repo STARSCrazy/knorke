@@ -57,6 +57,21 @@ pub(crate) fn sdl_error() -> String {
     unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned()
 }
 
+/// Initialises SDL's video subsystem for a host or test that does not do it itself,
+/// optionally forcing a GPU driver (`c"vulkan"`, `c"direct3d12"`, `c"metal"`) through the
+/// `SDL_GPU_DRIVER` hint. Returns SDL's success flag; a failure also shows up as
+/// [`DEVICE_CREATE_FAILED`] in [`Device::create`].
+pub fn init_video(driver: Option<&CStr>) -> bool {
+    // SAFETY: plain FFI calls; the hint name and value are NUL-terminated strings that SDL
+    // copies.
+    unsafe {
+        if let Some(driver) = driver {
+            sdl3_sys::hints::SDL_SetHint(sdl3_sys::hints::SDL_HINT_GPU_DRIVER, driver.as_ptr());
+        }
+        sdl3_sys::init::SDL_Init(sdl3_sys::init::SDL_INIT_VIDEO)
+    }
+}
+
 /// An SDL_GPU device.
 ///
 /// The host owns the device (ADR 0002). It either creates one with [`Device::create`] or
@@ -121,6 +136,10 @@ impl Device {
     /// The raw device pointer, for FFI calls of the host.
     pub fn as_ptr(&self) -> *mut SDL_GPUDevice {
         self.raw.as_ptr()
+    }
+
+    pub(crate) fn non_null(&self) -> NonNull<SDL_GPUDevice> {
+        self.raw
     }
 }
 
@@ -218,6 +237,10 @@ impl<'d, T: GpuObject> GpuHandle<'d, T> {
     /// The raw object pointer, valid while the handle lives.
     pub fn as_ptr(&self) -> *mut T {
         self.raw.as_ptr()
+    }
+
+    pub(crate) fn non_null(&self) -> NonNull<T> {
+        self.raw
     }
 
     /// The device and counter this handle belongs to.
