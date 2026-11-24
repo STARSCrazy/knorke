@@ -7,6 +7,11 @@ use std::collections::BTreeMap;
 use knorke_gpu::kpak::{Program, Stage};
 use knorke_light2d::codec::{AlphaSource, Material, NormalMapOptions, convert_normal_map};
 use knorke_light2d::light_program::{LightLayout, LightSampler, LightStorage, LightUniform};
+use knorke_gpu::ProgramDesc;
+use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc, TileGridDesc};
+use knorke_light2d::occluder_raster::OCCLUDER_PROGRAMS;
+use knorke_light2d::occlusion::MASK_PROGRAMS;
+use knorke_light2d::{ObstacleId, ObstacleStore};
 use knorke_math::{At, Vec2, World2};
 
 pub(crate) fn at(x: f32, y: f32) -> At<World2, Vec2> {
@@ -123,4 +128,98 @@ pub(crate) fn dome_material_pixels(w: u32, h: u32) -> Vec<u8> {
     let mut out = vec![0u8; normal.len()];
     convert_normal_map(&normal, w, h, (w * 4) as usize, &options, &mut out).unwrap();
     out
+}
+
+/// The programs of the occluder stages and the occlusion mask, in the order their stages index them.
+pub(crate) fn programs() -> Vec<ProgramDesc> {
+    OCCLUDER_PROGRAMS
+        .iter()
+        .chain(&MASK_PROGRAMS)
+        .copied()
+        .collect()
+}
+
+pub(crate) fn polygon(store: &mut ObstacleStore, xy: &[Vec2], common: ObstacleCommon) -> ObstacleId {
+    store
+        .create_shape(&ShapeDesc {
+            common,
+            shape: Shape::Polygon(xy),
+        })
+        .unwrap()
+}
+
+pub(crate) fn rect_xy(x0: f32, y0: f32, x1: f32, y1: f32) -> [Vec2; 4] {
+    [
+        Vec2::new(x0, y0),
+        Vec2::new(x1, y0),
+        Vec2::new(x1, y1),
+        Vec2::new(x0, y1),
+    ]
+}
+
+/// The scene of `tests/golden/chiaro/occluder/mask_ref.cpp` (`scene_mask`) and of `field_ref.cpp`
+/// (`Scene()`), built into `store`: static and dynamic polygons with opacities, a footprint
+/// obstacle, two circles (one thinner than a texel) and two tile grids (one rotated with cell
+/// opacities, one with edge strips). Returns the dynamic bar.
+pub(crate) fn scene_mask_into(store: &mut ObstacleStore) -> ObstacleId {
+    let still = ObstacleCommon::default();
+    let with = |x, y, rotation, opacity| ObstacleCommon {
+        position: at(x, y),
+        rotation,
+        opacity,
+        ..still
+    };
+    polygon(
+        store,
+        &rect_xy(48.0, 24.0, 56.0, 40.0),
+        with(0.0, 0.0, 0.0, 0.75),
+    );
+    let tri = [
+        Vec2::new(70.0, 10.0),
+        Vec2::new(90.0, 14.0),
+        Vec2::new(76.0, 30.0),
+    ];
+    polygon(store, &tri, with(0.0, 0.0, 0.0, 1.0));
+    let moving = ObstacleCommon {
+        dynamic: true,
+        ..with(100.0, 40.0, 33.0, 0.5)
+    };
+    let bar = polygon(store, &rect_xy(-10.0, -2.0, 10.0, 2.0), moving);
+    for (radius, x, y) in [(6.0, 30.0, 45.0), (0.2, 64.25, 32.25)] {
+        store
+            .create_shape(&ShapeDesc {
+                common: with(x, y, 0.0, 1.0),
+                shape: Shape::Circle { radius },
+            })
+            .unwrap();
+    }
+    let footprint = ObstacleCommon {
+        shadow_footprint: true,
+        ..with(0.0, 0.0, 0.0, 0.6)
+    };
+    polygon(store, &rect_xy(10.0, 10.0, 20.0, 18.0), footprint);
+
+    let solid: Vec<u8> = (0..32).map(|i| u8::from((i * 7 + 3) % 5 != 0)).collect();
+    let opacity: Vec<u8> = (0..32).map(|i| (255 - (i % 4) * 60) as u8).collect();
+    let mut grid = TileGridDesc::new(8, 4, &solid);
+    grid.cell_size = Vec2::new(6.0, 5.0);
+    grid.opacity = Some(&opacity);
+    grid.common = with(60.0, 38.0, 20.0, 0.8);
+    store.create_tile_grid(&grid).unwrap();
+
+    let solid = [1u8; 6];
+    let edges = [1u8, 2, 4, 8, 5, 0];
+    let mut grid = TileGridDesc::new(3, 2, &solid);
+    grid.cell_size = Vec2::new(10.0, 10.0);
+    grid.edge_width = 3.0;
+    grid.edges = Some(&edges);
+    grid.common = with(90.0, 5.0, 0.0, 1.0);
+    store.create_tile_grid(&grid).unwrap();
+    bar
+}
+
+pub(crate) fn scene_mask() -> ObstacleStore {
+    let mut store = ObstacleStore::new();
+    scene_mask_into(&mut store);
+    store
 }

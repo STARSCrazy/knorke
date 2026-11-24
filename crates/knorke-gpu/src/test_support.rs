@@ -154,14 +154,16 @@ pub fn golden_bytes(dir: &str, name: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
-/// An IEEE half float as `f32` (the dumps and readbacks of `R16G16B16A16_FLOAT` targets).
+/// An IEEE half float as `f32` (the dumps and readbacks of `R16G16B16A16_FLOAT` targets);
+/// infinities are kept, NaNs are not expected.
 pub fn half_to_f32(h: u16) -> f32 {
+    let sign = if h & 0x8000 != 0 { -1.0 } else { 1.0 };
     let (e, m) = (i32::from((h >> 10) & 0x1F), f32::from(h & 0x3FF));
-    let v = match e {
-        0 => m * f32::from_bits((127 - 24) << 23),
-        _ => (1.0 + m / 1024.0) * f32::from_bits(((e - 15 + 127) as u32) << 23),
-    };
-    if h & 0x8000 != 0 { -v } else { v }
+    match e {
+        0 => sign * m * f32::from_bits((127 - 24) << 23),
+        31 => sign * f32::INFINITY,
+        _ => sign * (1.0 + m / 1024.0) * f32::from_bits(((e - 15 + 127) as u32) << 23),
+    }
 }
 
 /// Differing RGBA16F texels of two readbacks and the largest channel difference.
@@ -198,6 +200,12 @@ pub fn compare_bytes(name: &str, got: &[u8], want: &[u8]) -> (usize, u8) {
         got.len()
     );
     (count, max)
+}
+
+/// [`compare_bytes`] that fails unless the readback equals the dump byte for byte.
+pub fn assert_same_bytes(name: &str, got: &[u8], want: &[u8]) {
+    let (count, max) = compare_bytes(name, got, want);
+    assert_eq!(count, 0, "{name}: {count} bytes differ (max {max})");
 }
 
 // ---- Textures ---------------------------------------------------------------------------
