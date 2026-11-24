@@ -221,48 +221,67 @@ pub trait SquadRules {
     }
 }
 
+/// Forwards the nine decision slots (all but `walk`) unchanged to `$target`, an expression
+/// over `$this` (the `&mut self` of the generated method). Callers write `walk` themselves:
+/// that is the one slot the forwarding impls differ in. `self` cannot be named across the
+/// macro boundary (hygiene), hence the `|this|` binding.
+macro_rules! forward_decision_slots {
+    (|$this:ident| $target:expr) => {
+        fn keep_target(&mut self, view: &SquadView<'_>, fact: &Fact) -> bool {
+            let $this = self;
+            $target.keep_target(view, fact)
+        }
+
+        fn columns(&mut self, view: &SquadView<'_>, ctx: &RowCtx<'_>, out: &mut [i32]) {
+            let $this = self;
+            $target.columns(view, ctx, out);
+        }
+
+        fn place(&mut self, id: u32, ctx: &PlaceCtx) -> Pos {
+            let $this = self;
+            $target.place(id, ctx)
+        }
+
+        fn member_cost(&mut self, ctx: &CostCtx) -> Option<i128> {
+            let $this = self;
+            $target.member_cost(ctx)
+        }
+
+        fn spot_score(&mut self, ctx: &SpotCtx) -> Option<i128> {
+            let $this = self;
+            $target.spot_score(ctx)
+        }
+
+        fn trigger(&mut self, id: u32, view: &SquadView<'_>, now: u32) -> bool {
+            let $this = self;
+            $target.trigger(id, view, now)
+        }
+
+        fn abort(&mut self, id: u32, view: &SquadView<'_>, ctx: &RowCtx<'_>) -> bool {
+            let $this = self;
+            $target.abort(id, view, ctx)
+        }
+
+        fn channel_delay(&mut self, id: u32, ctx: &ChannelCtx) -> Option<u32> {
+            let $this = self;
+            $target.channel_delay(id, ctx)
+        }
+
+        fn report(
+            &mut self,
+            view: &SquadView<'_>,
+            msg: &Message,
+            now: u32,
+            actions: &mut ReportActions<'_>,
+        ) {
+            let $this = self;
+            $target.report(view, msg, now, actions);
+        }
+    };
+}
+
 impl<T: SquadRules + ?Sized> SquadRules for &mut T {
-    fn keep_target(&mut self, view: &SquadView<'_>, fact: &Fact) -> bool {
-        (**self).keep_target(view, fact)
-    }
-
-    fn columns(&mut self, view: &SquadView<'_>, ctx: &RowCtx<'_>, out: &mut [i32]) {
-        (**self).columns(view, ctx, out);
-    }
-
-    fn place(&mut self, id: u32, ctx: &PlaceCtx) -> Pos {
-        (**self).place(id, ctx)
-    }
-
-    fn member_cost(&mut self, ctx: &CostCtx) -> Option<i128> {
-        (**self).member_cost(ctx)
-    }
-
-    fn spot_score(&mut self, ctx: &SpotCtx) -> Option<i128> {
-        (**self).spot_score(ctx)
-    }
-
-    fn trigger(&mut self, id: u32, view: &SquadView<'_>, now: u32) -> bool {
-        (**self).trigger(id, view, now)
-    }
-
-    fn abort(&mut self, id: u32, view: &SquadView<'_>, ctx: &RowCtx<'_>) -> bool {
-        (**self).abort(id, view, ctx)
-    }
-
-    fn channel_delay(&mut self, id: u32, ctx: &ChannelCtx) -> Option<u32> {
-        (**self).channel_delay(id, ctx)
-    }
-
-    fn report(
-        &mut self,
-        view: &SquadView<'_>,
-        msg: &Message,
-        now: u32,
-        actions: &mut ReportActions<'_>,
-    ) {
-        (**self).report(view, msg, now, actions);
-    }
+    forward_decision_slots!(|this| (**this));
 
     fn walk(&mut self) -> Option<&mut dyn Distance> {
         (**self).walk()
@@ -316,47 +335,7 @@ impl<'a, R: SquadRules> Walking<'a, R> {
 }
 
 impl<R: SquadRules> SquadRules for Walking<'_, R> {
-    fn keep_target(&mut self, view: &SquadView<'_>, fact: &Fact) -> bool {
-        self.rules.keep_target(view, fact)
-    }
-
-    fn columns(&mut self, view: &SquadView<'_>, ctx: &RowCtx<'_>, out: &mut [i32]) {
-        self.rules.columns(view, ctx, out);
-    }
-
-    fn place(&mut self, id: u32, ctx: &PlaceCtx) -> Pos {
-        self.rules.place(id, ctx)
-    }
-
-    fn member_cost(&mut self, ctx: &CostCtx) -> Option<i128> {
-        self.rules.member_cost(ctx)
-    }
-
-    fn spot_score(&mut self, ctx: &SpotCtx) -> Option<i128> {
-        self.rules.spot_score(ctx)
-    }
-
-    fn trigger(&mut self, id: u32, view: &SquadView<'_>, now: u32) -> bool {
-        self.rules.trigger(id, view, now)
-    }
-
-    fn abort(&mut self, id: u32, view: &SquadView<'_>, ctx: &RowCtx<'_>) -> bool {
-        self.rules.abort(id, view, ctx)
-    }
-
-    fn channel_delay(&mut self, id: u32, ctx: &ChannelCtx) -> Option<u32> {
-        self.rules.channel_delay(id, ctx)
-    }
-
-    fn report(
-        &mut self,
-        view: &SquadView<'_>,
-        msg: &Message,
-        now: u32,
-        actions: &mut ReportActions<'_>,
-    ) {
-        self.rules.report(view, msg, now, actions);
-    }
+    forward_decision_slots!(|this| this.rules);
 
     fn walk(&mut self) -> Option<&mut dyn Distance> {
         Some(&mut *self.distance)
