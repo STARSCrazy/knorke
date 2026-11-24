@@ -61,9 +61,18 @@ pub(crate) fn sdl_error() -> String {
 /// optionally forcing a GPU driver (`c"vulkan"`, `c"direct3d12"`, `c"metal"`) through the
 /// `SDL_GPU_DRIVER` hint. Returns SDL's success flag; a failure also shows up as
 /// [`DEVICE_CREATE_FAILED`] in [`Device::create`].
+///
+/// Calls are serialised: `SDL_Init` is not safe to run from several threads at once, and
+/// tests of one binary call this in parallel. Without the lock a second thread could see the
+/// video subsystem half initialised ("Video subsystem not initialized") or crash.
 pub fn init_video(driver: Option<&CStr>) -> bool {
+    static INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    // A poisoned lock only means another caller panicked; the guard is still usable.
+    let _guard = INIT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // SAFETY: plain FFI calls; the hint name and value are NUL-terminated strings that SDL
-    // copies.
+    // copies. The lock above keeps concurrent callers out of `SDL_Init`.
     unsafe {
         if let Some(driver) = driver {
             sdl3_sys::hints::SDL_SetHint(sdl3_sys::hints::SDL_HINT_GPU_DRIVER, driver.as_ptr());

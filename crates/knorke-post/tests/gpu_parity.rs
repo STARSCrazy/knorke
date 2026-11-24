@@ -18,6 +18,7 @@
 #![cfg(feature = "gpu")]
 
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 
 use knorke_contract_tests::parity::{ParityBudget, ParityReport, compare_rgba8};
 use knorke_gpu::sys::gpu::{
@@ -362,11 +363,16 @@ fn report(name: &str, budget: &str, r: &ParityReport) {
     );
 }
 
-/// A Vulkan device, or `None` (the test then skips).
-fn vulkan() -> Option<Device> {
+/// One device at a time: drivers dislike many devices created in parallel.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+/// A Vulkan device with the guard that keeps the GPU tests of this binary one after the
+/// other, or `None` (the test then skips).
+fn vulkan() -> Option<(MutexGuard<'static, ()>, Device)> {
+    let guard = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
     init_video(Some(c"vulkan"));
     match Device::create(SDL_GPU_SHADERFORMAT_SPIRV, false) {
-        Ok(d) => Some(d),
+        Ok(d) => Some((guard, d)),
         Err(e) => {
             eprintln!("skipped: no Vulkan device ({})", e.message);
             None
@@ -380,7 +386,9 @@ fn pack() -> Vec<u8> {
 
 #[test]
 fn post_pass_matches_chiaro() {
-    let Some(device) = vulkan() else { return };
+    let Some((_serial, device)) = vulkan() else {
+        return;
+    };
     let counter = LiveCounter::new();
     let gpu = Gpu::new(&device, &counter);
     let mut renderer = PostRenderer::new(gpu, pack()).unwrap();
@@ -514,7 +522,9 @@ fn post_pass_matches_chiaro() {
 
 #[test]
 fn prepare_refuses_bad_settings_and_unsupported_targets() {
-    let Some(device) = vulkan() else { return };
+    let Some((_serial, device)) = vulkan() else {
+        return;
+    };
     let counter = LiveCounter::new();
     let gpu = Gpu::new(&device, &counter);
     {
