@@ -37,7 +37,11 @@
 //! - `light` / `frame_light`: the fields of `CHI_LightDesc` in declaration order;
 //! - `sample` light-of-the-animated-group intensity color_rgb rotation (Chiaro's sample at t = 5);
 //! - `shape` type flags x y rotation height base opacity radius width depth pattern;
-//! - `zone` type flags ambient_rgb soft_edge priority height base x y rotation radius width depth.
+//! - `zone` type flags ambient_rgb soft_edge priority height base x y rotation radius width depth;
+//! - hard only, the surface pass in call order: `figure` w h world_height with `figure_row` lines
+//!   of alpha bytes, `figure_draw` x y w h, `surface_box` x y width depth height, `surface_wall`
+//!   a_xyz b_xyz top, `surface_floor` x,y pairs and height. The surface layer drawn from these by
+//!   [`SpriteBatch`] and [`SurfaceBatch`] must equal Chiaro's byte for byte.
 #![cfg(feature = "gpu")]
 
 #[path = "common/gpu.rs"]
@@ -50,9 +54,11 @@ use knorke_gpu::sys::gpu::{
 use knorke_gpu::test_support::{
     golden_bytes, read_texture, sampled_rgba8, texture, with_chiaro_pack,
 };
-use knorke_gpu::{CommandBuffer, Texture};
+use knorke_gpu::{CommandBuffer, Samplers, ShaderLibrary, Texture};
 use knorke_integration::layers::{Layer, LayerSet, Layers};
 use knorke_integration::light2d::{Light2dRenderer, Light2dSettings};
+use knorke_integration::sprites::{Sprite, SpriteBatch, SpriteDesc, SpriteDraw};
+use knorke_integration::surface::SurfaceBatch;
 use knorke_light2d::ambient_zone::{AmbientZoneParams, ZoneShape, make_stored_zone};
 use knorke_light2d::ambient_zone_store::AmbientZoneStore;
 use knorke_light2d::animation::AnimationType;
@@ -65,6 +71,7 @@ use knorke_light2d::profile::{ProfileShape, build_shape_profile};
 use knorke_light2d::profile_store::ProfileStore;
 use knorke_light2d::projection::Projection;
 use knorke_light2d::settings::{GlowColor, LightSettings, Quality, QualitySettings, Resolutions};
+use knorke_light2d::surface_geometry::{SurfaceBox, SurfaceGeometry};
 use knorke_light2d::{
     AnimationDesc, AnimationStore, LightStore, MaskStore, ObstacleStore, PatternStore,
     StoreResources,
@@ -77,6 +84,8 @@ const W: u32 = 640;
 const H: u32 = 360;
 const OUT: (u32, u32) = (1280, 720);
 const TIME: f64 = 5.0;
+/// `kHeightStep` of the demo's Scene.hpp.
+const HEIGHT_STEP: f32 = 0.1;
 /// `ignore_rects` of both variants in `tests/golden/chiaro/manifest.toml`.
 const HUD: Rect = Rect {
     x: 0,
@@ -120,10 +129,16 @@ struct Scene {
     lights: LightStore,
     obstacles: ObstacleStore,
     zones: AmbientZoneStore,
+    /// The surface pass (hard): the helper geometry in call order.
+    surface: SurfaceGeometry,
+    /// The figure sprite: width, height, world height and its RGBA (white where opaque).
+    figure: Option<(u32, u32, f32, Vec<u8>)>,
+    /// Where the surface pass draws the figure's surface entry, `[x, y, w, h]`.
+    figure_draws: Vec<[f32; 4]>,
 }
 
 impl Scene {
-    fn parse(text: &str) -> Self {
+    fn parse(text: &str, p: &Projection) -> Self {
         let mut s = Self {
             profiles: ProfileStore::new(),
             animations: AnimationStore::new(),
@@ -132,6 +147,9 @@ impl Scene {
             lights: LightStore::new(),
             obstacles: ObstacleStore::new(),
             zones: AmbientZoneStore::new(),
+            surface: SurfaceGeometry::new(),
+            figure: None,
+            figure_draws: Vec::new(),
         };
         let (mut profiles, mut animations, mut masks) = (Vec::new(), Vec::new(), Vec::new());
         let (mut sheet, mut pattern_descs, mut patterns) = (Vec::new(), Vec::new(), Vec::new());
@@ -233,6 +251,41 @@ impl Scene {
                 "zone" => {
                     let zone = zone(&f);
                     s.zones.create(make_stored_zone(&zone).unwrap()).unwrap();
+                }
+                "figure" => s.figure = Some((num(f[0]), num(f[1]), num(f[2]), Vec::new())),
+                "figure_row" => {
+                    let px = &mut s.figure.as_mut().unwrap().3;
+                    for k in 0..f[0].len() / 2 {
+                        let a = u8::from_str_radix(&f[0][2 * k..2 * k + 2], 16).unwrap();
+                        px.extend_from_slice(&[a; 4]);
+                    }
+                }
+                "figure_draw" => s.figure_draws.push([0, 1, 2, 3].map(|i| num(f[i]))),
+                "surface_box" => {
+                    let v: Vec<f32> = f.iter().map(|s| num(s)).collect();
+                    let b = SurfaceBox {
+                        center: At::new(Vec2::new(v[0], v[1])),
+                        width: v[2],
+                        depth: v[3],
+                        height: v[4],
+                    };
+                    s.surface.push_boxes(p, HEIGHT_STEP, &[b]).unwrap();
+                }
+                "surface_wall" => {
+                    let top = num(f[6]);
+                    let (a, b) = (vec3(&f[0..3]), vec3(&f[3..6]));
+                    s.surface.push_wall(p, HEIGHT_STEP, a, b, top).unwrap();
+                }
+                "surface_floor" => {
+                    let v: Vec<f32> = f.iter().map(|s| num(s)).collect();
+                    let (xy, z) = v.split_at(v.len() - 1);
+                    let points: Vec<_> = xy
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|[x, y]| At::new(Vec2::new(*x, *y)))
+                        .collect();
+                    s.surface.push_floor(p, HEIGHT_STEP, &points, z[0]).unwrap();
                 }
                 _ => panic!("unknown scene item {kind}"),
             }
@@ -399,7 +452,7 @@ fn settings() -> Light2dSettings {
                 }),
                 ..QualitySettings::default()
             },
-            surface_height_step: 0.1,
+            surface_height_step: HEIGHT_STEP,
             ..LightSettings::default()
         },
         post: PostSettings::default(),
@@ -436,8 +489,8 @@ fn check(variant: &str, kinds: LayerSet, hud_longest: u32) {
     with_chiaro_pack(|gpu, pack| {
         let text = golden_bytes("iso_night", &format!("{variant}.txt"));
         let text = String::from_utf8(text).expect("the scene text is UTF-8");
-        let scene = Scene::parse(&text);
         let projection = Projection::iso(At::new(Vec2::new(18.0, 14.0)), 10.0, 1.0, W, H);
+        let scene = Scene::parse(&text, &projection);
         let mut layers = Layers::new(gpu, W, H, kinds).unwrap();
         let mut renderer = Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
         let target: Texture<'_> = texture(
@@ -451,15 +504,54 @@ fn check(variant: &str, kinds: LayerSet, hud_longest: u32) {
 
         let fixture = |layer: &str| scene_common::fixture("iso_night", layer, (W, H));
         let (color, glow) = (fixture("scene"), fixture("glow"));
+        let mut shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
+        let samplers = Samplers::new(gpu).unwrap();
+        let mut sprites = SpriteBatch::new(gpu, &shaders).unwrap();
+        let mut surface = SurfaceBatch::new(gpu, &shaders).unwrap();
         let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+        let figure = scene.figure.as_ref().map(|(w, h, height, px)| {
+            let desc = SpriteDesc {
+                standing: true,
+                standing_height: *height,
+                ..SpriteDesc::new(*w, *h, px)
+            };
+            Sprite::new(gpu, &mut cmd, &desc, kinds, HEIGHT_STEP).unwrap()
+        });
+        let draws: Vec<_> = (scene.figure_draws.iter())
+            .map(|dst| SpriteDraw::new(figure.as_ref().unwrap(), *dst))
+            .collect();
+        sprites.prepare(&mut shaders, &draws).unwrap();
+        surface.prepare(&mut shaders, &scene.surface).unwrap();
         drop(layers.clear_pass(&mut cmd, LayerSet::ALL).unwrap());
+        // Chiaro queues the helper geometry and draws it when the target changes, after the
+        // figures the renderer drew in between: sprites first, geometry on top. The sprites also
+        // write their colour, which the colour fixture then replaces.
+        sprites
+            .record(&mut cmd, &samplers, &mut layers, &draws)
+            .unwrap();
         let _uploads = scene_common::upload_layers(
             gpu,
             &mut cmd,
             &mut layers,
             &[(Layer::Scene, &color), (Layer::Glow, &glow)],
         );
+        surface
+            .record(&mut cmd, &mut layers, &scene.surface)
+            .unwrap();
         cmd.submit_and_wait().unwrap();
+        // The helper-drawn surface layer equals Chiaro's (hard; plain draws none, `surface.png`
+        // stays unread).
+        let surface_parity = (!draws.is_empty()).then(|| {
+            let got = read_texture(gpu, layers.texture(Layer::Surface).unwrap());
+            let want = fixture("surface");
+            let r = compare_rgba8(&got, &want, W, H, &[], &ParityBudget::STRICT).unwrap();
+            r.print(&format!("iso_night_{variant} surface layer"), "exact");
+            if let Some(dir) = scene_common::scene_out() {
+                let name = format!("iso_night_{variant}.surface");
+                scene_common::save_with_diff(&dir, &name, &got, &want, (W, H));
+            }
+            (got == want, r)
+        });
 
         renderer.note_layers(&mut layers);
         let settings = settings();
@@ -496,6 +588,9 @@ fn check(variant: &str, kinds: LayerSet, hud_longest: u32) {
                 OUT,
             );
         }
+        if let Some((equal, r)) = surface_parity {
+            assert!(equal, "the surface layer differs from Chiaro's: {r:?}");
+        }
         assert!(
             strict.within(&ParityBudget::STRICT),
             "STRICT parity missed: {strict:?}"
@@ -507,4 +602,10 @@ fn check(variant: &str, kinds: LayerSet, hud_longest: u32) {
 fn iso_night_plain_matches_chiaro() {
     // The toggles line "M moon shadows off  F soft  P running  Z haze" is the longest.
     check("plain", LayerSet::of(Layer::Surface).with(Layer::Glow), 45);
+}
+
+#[test]
+fn iso_night_hard_matches_chiaro() {
+    // "M moon shadows on  F hard  P running  Z haze": the panel stays inside the HUD rect.
+    check("hard", LayerSet::of(Layer::Surface).with(Layer::Glow), 44);
 }
