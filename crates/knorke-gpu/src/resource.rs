@@ -347,8 +347,25 @@ impl<'d> DownloadBuffer<'d> {
                 ),
             ));
         }
+        // SAFETY: SDL mapped `size` >= `out.len()` readable bytes at `ptr`; `out` is a distinct
+        // Rust allocation.
+        self.mapped(|ptr| unsafe {
+            core::ptr::copy_nonoverlapping(ptr.as_ptr(), out.as_mut_ptr(), out.len());
+        })
+    }
+
+    /// Zeroes the buffer, so that a [`read`](Self::read) before its first download has
+    /// completed returns zeros instead of undefined bytes.
+    pub fn clear(&mut self) -> Result<(), Diagnostic> {
+        let size = self.size as usize;
+        // SAFETY: SDL mapped `size` writable bytes at `ptr`.
+        self.mapped(|ptr| unsafe { core::ptr::write_bytes(ptr.as_ptr(), 0, size) })
+    }
+
+    /// Runs `f` on the mapped buffer (`size` bytes, valid until `f` returns).
+    fn mapped(&mut self, f: impl FnOnce(NonNull<u8>)) -> Result<(), Diagnostic> {
         let device = self.device_ptr();
-        // SAFETY: device and transfer buffer are live; no cycling, we read the last download.
+        // SAFETY: device and transfer buffer are live; no cycling, we keep the last download.
         let ptr = unsafe { SDL_MapGPUTransferBuffer(device, self.raw(), false) };
         let Some(ptr) = NonNull::new(ptr.cast::<u8>()) else {
             return Err(Diagnostic::error(
@@ -356,12 +373,9 @@ impl<'d> DownloadBuffer<'d> {
                 format!("mapping the download buffer failed: {}", sdl_error()),
             ));
         };
-        // SAFETY: SDL mapped `size` >= `out.len()` readable bytes at `ptr` until the unmap
-        // below; `out` is a distinct Rust allocation.
-        unsafe {
-            core::ptr::copy_nonoverlapping(ptr.as_ptr(), out.as_mut_ptr(), out.len());
-            SDL_UnmapGPUTransferBuffer(device, self.raw());
-        }
+        f(ptr);
+        // SAFETY: mapped above, unmapped exactly once.
+        unsafe { SDL_UnmapGPUTransferBuffer(device, self.raw()) };
         Ok(())
     }
 }

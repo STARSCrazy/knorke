@@ -16,6 +16,7 @@
 //! | 3 | [`LightAtlases`](crate::atlas::LightAtlases) (P26) | profile and mask store | atlases |
 //! | 4 | [`LightingStage`](crate::lighting::LightingStage) with the zone pass (P25, P26) | light list, zone list, steps 2 and 3 | light, specular, direction, pure ambient |
 //! | 5 | [`CompositeStage`](crate::composite::CompositeStage) (P27) | scene buffers, step 4 | HDR buffer |
+//! | 6 | [`DebugCheckStage`](crate::debug_check::DebugCheckStage) (P32, opt-in) | surface and material buffer | findings of an earlier frame |
 //!
 //! Per frame the host calls [`PassPlan::prepare`] (may fail; culls the lights and zones, decides
 //! every stage and creates what the frame needs) and then [`PassPlan::record`] into the command
@@ -33,13 +34,14 @@
 //! - The plan's state is a cache of GPU contents, not simulation state. It has no snapshot: a
 //!   plan built anew from restored stores draws the same image (tested), and after a restore of
 //!   the stores into a running plan the host calls [`PassPlan::invalidate`].
-//! - No output stage, no submit, present or readback (ADR 0002). The result is a texture
+//! - No output stage, no submit or present, and no readback (ADR 0002) except the debug check
+//!   the host switches on ([`debug_check`](crate::debug_check)). The result is a texture
 //!   reference into the plan's own HDR buffer.
 //! - Communication is the fixed order of the stages, each one's result passed on as a value; no
 //!   event bus and no callbacks. Frame warnings ([`frame_warnings`](crate::frame_warnings)) are
 //!   evaluated in `record` and returned with it.
 //! - Not built (and not blocked): medium (P12, P29, P30), patterns (P15, P28), caster class masks
-//!   (E53), the GPU debug check (P32), ring lights (P21). Their inputs are fields still to come in
+//!   (E53), ring lights (P21). Their inputs are fields still to come in
 //!   [`PassFrame`] and [`SceneStores`] and stages between steps 2 and 5; the stages already take
 //!   `None` for them.
 
@@ -72,6 +74,8 @@ impl PassStages {
     pub const LIGHTS: Self = Self(8);
     /// Composite into the HDR buffer (step 5); every successful frame runs it.
     pub const COMPOSITE: Self = Self(16);
+    /// GPU debug check (after the composite; only with `DebugChecks::LAYERS`).
+    pub const DEBUG_CHECK: Self = Self(32);
 
     /// `true` if every stage of `other` is in `self`.
     pub const fn contains(self, other: Self) -> bool {

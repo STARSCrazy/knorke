@@ -1,6 +1,7 @@
 //! Contract: the pass plan of `knorke-light2d` (P31) allocates nothing on the heap in the steady
 //! state: once warm, `PassPlan::prepare` and `PassPlan::record` of an unchanged scene with
-//! lights, a shadow-casting light over an obstacle, ambient zones and a sprite mask make no Rust
+//! lights, a shadow-casting light over an obstacle, ambient zones, a sprite mask and every debug
+//! check (the GPU one with its readback included) make no Rust
 //! allocation (ADR 0006). Command buffer acquire and submit are the host's and stay outside.
 //!
 //! Needs the feature `gpu` of this crate, a Vulkan device and the shader pack of
@@ -22,6 +23,7 @@ use knorke_gpu::{
 };
 use knorke_light2d::ambient_zone::{AmbientZoneParams, ZoneShape, make_stored_zone};
 use knorke_light2d::ambient_zone_store::AmbientZoneStore;
+use knorke_light2d::frame_warnings::DebugChecks;
 use knorke_light2d::light::{LightDesc, LightType};
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassFrame, PassPlan, SceneStores};
@@ -120,9 +122,12 @@ fn steady_state_pass_plan_allocates_nothing() {
         }
     }
     let sprite = texture(gpu, w, h, &sprite_px);
+    // An empty material buffer, so the GPU debug check has something to read.
+    let material = texture(gpu, w, h, &vec![0u8; (w * h * 4) as usize]);
     let projection = Projection::IDENTITY;
     let frame = PassFrame {
         occlusion: Some(sprite.texture_ref()),
+        material: Some(material.texture_ref()),
         ..PassFrame::new(scene.texture_ref(), &projection)
     };
     let stores = SceneStores {
@@ -131,6 +136,7 @@ fn steady_state_pass_plan_allocates_nothing() {
     };
 
     let mut plan = PassPlan::new(gpu, pack).unwrap();
+    plan.set_debug_checks(DebugChecks::ALL);
     let frames = |n: u32, plan: &mut PassPlan<'_>| -> u64 {
         let mut counted = 0;
         for _ in 0..n {
@@ -143,7 +149,7 @@ fn steady_state_pass_plan_allocates_nothing() {
         }
         counted
     };
-    frames(3, &mut plan); // warm: targets, pipelines, buffers, cull lists
+    frames(3, &mut plan); // warm: targets, pipelines, buffers, cull lists, readback slots
     let live = counter.live();
     let allocations = frames(5, &mut plan);
     assert_eq!(
@@ -152,6 +158,6 @@ fn steady_state_pass_plan_allocates_nothing() {
     );
     assert_eq!(counter.live(), live, "no GPU object per frame");
     drop(plan);
-    drop((scene, sprite));
+    drop((scene, sprite, material));
     assert_eq!(counter.live(), 0, "GPU objects leaked");
 }

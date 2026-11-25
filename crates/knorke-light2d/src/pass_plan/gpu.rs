@@ -24,6 +24,7 @@ use crate::ambient_zone_store::AmbientZoneStore;
 use crate::animation::AnimationStore;
 use crate::atlas::LightAtlases;
 use crate::composite::{CompositeFrame, CompositeLight, CompositeStage, InputColorSpace};
+use crate::debug_check::{DebugCheckFrame, DebugCheckStage};
 use crate::frame_warnings::{DebugChecks, FrameFindings, FrameWarnings, WarningSet};
 use crate::light_culling::{LightList, LightModes, collect_lights};
 use crate::light_pipelines::LightPipelines;
@@ -228,6 +229,7 @@ pub struct PassPlan<'d> {
     atlases: LightAtlases<'d>,
     lighting: LightingStage<'d>,
     composite: CompositeStage<'d>,
+    debug_check: DebugCheckStage<'d>,
     lights: LightList,
     zones: AmbientZoneList,
     warnings: FrameWarnings,
@@ -311,6 +313,19 @@ fn composite_frame<'a>(
     }
 }
 
+fn debug_check_frame<'a>(
+    frame: &PassFrame<'a>,
+    settings: &'a LightSettings,
+) -> DebugCheckFrame<'a> {
+    DebugCheckFrame {
+        size: frame.size(),
+        surface: frame.surface,
+        material: frame.material,
+        medium: None,
+        settings,
+    }
+}
+
 impl<'d> PassPlan<'d> {
     /// Loads the shader pack (`knorke-chiaro.<format>.kpak`) and creates the stages (without
     /// targets: the first frame creates them).
@@ -322,6 +337,7 @@ impl<'d> PassPlan<'d> {
         let pipelines = PipelineCache::new(&shaders, &OCCLUSION_PROGRAMS)?;
         let light_pipelines = LightPipelines::new(&shaders)?;
         let composite = CompositeStage::new(gpu, &shaders)?;
+        let debug_check = DebugCheckStage::new(gpu, &shaders)?;
         Ok(Self {
             shaders,
             pipelines,
@@ -333,6 +349,7 @@ impl<'d> PassPlan<'d> {
             atlases: LightAtlases::new(gpu),
             lighting: LightingStage::new(gpu),
             composite,
+            debug_check,
             lights: LightList::default(),
             zones: AmbientZoneList::default(),
             warnings: FrameWarnings::new(),
@@ -346,7 +363,8 @@ impl<'d> PassPlan<'d> {
         })
     }
 
-    /// The debug checks the frame warnings evaluate (default none: no warnings).
+    /// The debug checks the frame warnings evaluate (default none: no warnings). `LAYERS` also
+    /// switches on the GPU check with its readback ([`debug_check`](crate::debug_check)).
     pub fn set_debug_checks(&mut self, checks: DebugChecks) {
         self.checks = checks;
     }
@@ -564,6 +582,16 @@ impl<'d> PassPlan<'d> {
             ),
         )?;
         prepared.allocations += composite.allocations;
+
+        // Step 6: the GPU debug check (nothing unless the host switched it on).
+        prepared.allocations += self.debug_check.prepare(
+            &mut self.shaders,
+            self.checks,
+            &debug_check_frame(frame, settings),
+        )?;
+        if self.debug_check.is_active() {
+            prepared.stages.insert(PassStages::DEBUG_CHECK);
+        }
         self.pending = Some(Pending {
             prepared,
             shadows,
@@ -574,7 +602,7 @@ impl<'d> PassPlan<'d> {
     }
 
     /// Records the prepared frame into the host's command buffer: occlusion, atlas uploads,
-    /// zone and light pass, composite; then evaluates the frame warnings. `frame` and
+    /// zone and light pass, composite, debug check; then evaluates the frame warnings. `frame` and
     /// `settings` must be the ones given to [`prepare`](Self::prepare). The result is
     /// [`hdr`](Self::hdr).
     ///
@@ -634,9 +662,12 @@ impl<'d> PassPlan<'d> {
             &composite_frame(frame, settings, light),
         )?;
 
+        let gpu_findings =
+            self.debug_check
+                .record(cmd, &self.samplers, &debug_check_frame(frame, settings))?;
         out.warnings = self.warnings.update(&FrameFindings {
             checks: self.checks,
-            gpu_findings: WarningSet::EMPTY,
+            gpu_findings,
             flat_lights: self.lights.flat_lights,
             unreachable_lights: self.lights.unreachable_lights,
             facing_away_lights: self.lights.facing_away_lights,
@@ -695,9 +726,12 @@ impl<'d> PassPlan<'d> {
         &self.atlases
     }
 
-    /// Pipelines created so far: occlusion table, light programs, composite programs.
+    /// Pipelines created so far: occlusion table, light programs, composite programs, debug check.
     pub fn pipeline_count(&self) -> usize {
-        self.pipelines.len() + self.light_pipelines.len() + self.composite.pipeline_count()
+        self.pipelines.len()
+            + self.light_pipelines.len()
+            + self.composite.pipeline_count()
+            + self.debug_check.pipeline_count()
     }
 
     /// Checks what must hold after a recorded frame and reports each broken invariant as an
@@ -784,6 +818,7 @@ impl Inspect for PassPlan<'_> {
                 ("zones", PassStages::ZONES),
                 ("lights", PassStages::LIGHTS),
                 ("composite", PassStages::COMPOSITE),
+                ("debug_check", PassStages::DEBUG_CHECK),
             ] {
                 v.field(name, last.stages.contains(s));
             }

@@ -51,6 +51,7 @@ pub mod area_light;
 pub mod atlas;
 pub mod codec;
 pub mod composite;
+pub mod debug_check;
 pub mod frame_warnings;
 pub mod gpu_light;
 pub mod light;
