@@ -876,6 +876,9 @@ Aus P32/P33 (Debug-Prüfung, Layers; 2026-11-25):
 - **Eigene Shader für die 2D-Helfer** (Sprites, Surface-Geometrie zeichnen; in Chiaro machte das SDL_Renderer) – **erledigt für Sprites (P34)**, Surface offen (P35) (Entscheidung Manuel 2026-11-25): Übersetzen mit DXC statt shadercross (`D:\Dev-Tools\dxc`, SPIR-V bytegleich zu Chiaros Blobs geprüft an `output.frag`), Ablage laut ADR 0014 §3. **MSL für eigene Shader** – **offen** (DXC kann kein MSL; shadercross oder SPIRV-Cross nötig).
 - **Sprites** (P34) – **erledigt**: Karten-Texel werden exakt geschrieben statt geblendet (Abweichung von Chiaro, dessen Blend nasse Material-Einträge mit Alpha 224 mischte). **Stehende Sprites** – **offen** (P35, brauchen die Surface-Kodierung). **Streaming-Upload** – **vertagt**: kein Verbraucher; kommt mit der Brücke CPU-Bild → GPU-Licht.
 - **`SV_VertexID` und erster Vertex** – nicht nachgeschlagen (Wissen des Agenten, keine Quelle geprüft): auf Vulkan zählt er den ersten Vertex mit, auf D3D12 nicht. Eigene Shader bekommen den Startindex deshalb als Parameter. **D3D12-Lauf der eigenen Shader** – **offen**: nur Vulkan getestet.
+- **Surface-Geometrie** (P35) – **erledigt**; **stehende Sprites** – **erledigt** (damit ist der Punkt oben geschlossen). `Sprite::new` hat seitdem das Argument `height_step`. **Medium-Draw** – **offen** (P30).
+- **Surface-Geometrie und stehende Sprites zusammen in einer Szene** (Golden-Bild) – **offen**: kommt mit den Demo-Szenen.
+- **`encode_surface_sprite` parallel** (`Parallel`, feste Chunks) – **offen**: läuft einmal beim Laden über alle Pixel; erst messen, wenn große Atlanten da sind.
 - **Ein Shader-Paket für alles** (`knorke-chiaro` aus Chiaros und Knorkes Blobs) statt eines Pakets pro Crate (ADR 0014 §3) – **offen**: so gewachsen, weil alle Tests ein Paket laden; Aufteilen erst, wenn Chiaros Shader ins Repo umziehen.
 
 Aufräumen (Auftrag Manuel 2026-11-24; zwei Opus-Audits, nur gelesen; Ersparnis meist geschätzt):

@@ -33,6 +33,8 @@ pub mod light2d;
 pub mod pixel;
 #[cfg(feature = "gpu")]
 pub mod sprites;
+#[cfg(feature = "gpu")]
+pub mod surface;
 
 #[cfg(feature = "ai")]
 pub use knorke_ai as decide;

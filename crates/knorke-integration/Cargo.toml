@@ -27,7 +27,7 @@ default = ["ai", "pixel"]
 ai = ["dep:knorke-ai", "dep:knorke-grid", "dep:knorke-navigation", "dep:knorke-observe", "dep:knorke-perception"]
 pixel = ["dep:knorke-math", "dep:knorke-render", "dep:knorke-lighting", "dep:knorke-exec"]
 # GPU 2D light: the pass plan of knorke-light2d and the post pass of knorke-post (not in default).
-gpu = ["dep:knorke-gpu", "dep:knorke-light2d", "dep:knorke-post", "knorke-light2d/gpu", "knorke-post/gpu"]
+gpu = ["dep:knorke-gpu", "dep:knorke-math", "dep:knorke-light2d", "dep:knorke-post", "knorke-light2d/gpu", "knorke-post/gpu"]
 # `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.
 sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
 

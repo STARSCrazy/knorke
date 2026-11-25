@@ -22,6 +22,7 @@
 //! | [`lighting`] | light pass: uniform blocks, program choice, draw plan; `LightingStage` with `gpu` | P25 |
 //! | [`composite`] | composite pass: programs, binding layouts, uniform block; `CompositeStage` with `gpu` | P27 |
 //! | [`pass_plan`] | the fixed stage order of a frame; `PassPlan` with `gpu` | P31 |
+//! | [`surface_geometry`] | surface helpers (box, wall, floor, quad as triangles) and surface sprite encoding | P35 |
 //!
 //! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
 //! dependency: the occluder raster (P22), the occlusion mask (P23), the light pipelines (P24),
@@ -77,6 +78,7 @@ pub mod projection;
 pub mod resources;
 pub mod settings;
 pub mod shadow;
+pub mod surface_geometry;
 pub mod triangulate;
 pub mod zone_pass;
 

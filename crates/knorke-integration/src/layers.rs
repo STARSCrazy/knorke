@@ -25,7 +25,8 @@
 //! - The layers do not know a renderer. A frame is a value built from them, so "a buffer entry
 //!   overrides its layer" is struct update syntax and `skip_layers` is an argument.
 //! - Sprites, surface geometry and medium clouds are not methods here; they draw into the
-//!   layers from outside through [`Layers::draw_pass`] ([`sprites`](crate::sprites), P35).
+//!   layers from outside through [`Layers::draw_pass`] ([`sprites`](crate::sprites),
+//!   [`surface`](crate::surface)).
 
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,

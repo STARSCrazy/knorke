@@ -1,6 +1,7 @@
 // Origin: chiaro @ 9bc5b9b, src/integration/Sprite.hpp and Sprite.cpp (CreateSprite: which maps
 // a sprite gets and how they are converted; DrawSprites: the validation, the layer order and the
-// pre-mirrored material variants) and CHI_SpriteDesc / CHI_SpriteDraw of include/Chiaro/Chiaro.h.
+// pre-mirrored material variants, the surface entry of CHI_SPRITE_STANDING) and CHI_SpriteDesc /
+// CHI_SpriteDraw of include/Chiaro/Chiaro.h.
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any
 // express or implied warranty; the origin must not be misrepresented; altered source versions
 // must be plainly marked as such (this file is a Rust redesign) and this notice may not be
@@ -10,8 +11,9 @@
 //! [`Layers`](crate::layers::Layers).
 //!
 //! A [`Sprite`] converts its maps once on the CPU and uploads them once. A [`SpriteBatch`]
-//! draws sprites: the colour into the scene layer (blended by its alpha), the material into the
-//! material layer and the shadow shape into the occlusion layer, all at the same rectangle.
+//! draws sprites: the colour into the scene layer (blended by its alpha), the surface entry of a
+//! standing sprite into the surface layer, the material into the material layer and the shadow
+//! shape into the occlusion layer, all at the same rectangle.
 //!
 //! # Redesign against Chiaro
 //!
@@ -20,7 +22,8 @@
 //!   host's command buffer (ADR 0002).
 //! - Map texels are written exactly where the sprite has an entry and not blended, so a wet
 //!   material (alpha below 255) keeps its bytes. Chiaro's blend mixed such texels.
-//! - Standing sprites (a surface entry) come with the surface helpers (P35).
+//! - The height step of a standing sprite is an argument of [`Sprite::new`]
+//!   (`LightSettings::surface_height_step`): there is no context to read it from.
 
 use knorke_gpu::sys::gpu::{
     SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, SDL_GPU_TEXTUREUSAGE_SAMPLER,
@@ -30,9 +33,12 @@ use knorke_gpu::{
     Bindings, Blend, CommandBuffer, Filter, Gpu, PipelineCache, ProgramDesc, SamplerBinding,
     Samplers, ShaderLibrary, StageBindings, Texture, TextureDesc, TextureRef, UploadBuffer,
 };
+use knorke_light2d::Projection;
 use knorke_light2d::codec::{
     AlphaSource, Material, NormalMapFlags, NormalMapOptions, convert_normal_map,
 };
+use knorke_light2d::surface_geometry::{FaceKind, SpriteShape, SurfaceFace, encode_surface_sprite};
+use knorke_math::Vec2;
 use knorke_types::{Diagnostic, DiagnosticCode};
 
 use crate::layers::{LAYER_FORMAT, Layer, LayerSet, Layers};
@@ -72,6 +78,12 @@ pub struct SpriteDesc<'a> {
     pub green_down: bool,
     /// Writes its alpha shape into the occlusion layer. Needs the occlusion layer.
     pub casts_shadow: bool,
+    /// Writes a surface entry: an upright face toward the viewer (scene +y), height rising
+    /// from the bottom edge. Needs the surface layer.
+    pub standing: bool,
+    /// `standing` only: world units the full pixel height stands for, >= 0; 0 = the pixel
+    /// height (Chiaro's `CHI_SpriteDesc::height`).
+    pub standing_height: f32,
 }
 
 impl<'a> SpriteDesc<'a> {
@@ -86,6 +98,8 @@ impl<'a> SpriteDesc<'a> {
             material: Material::MATTE,
             green_down: false,
             casts_shadow: false,
+            standing: false,
+            standing_height: 0.0,
         }
     }
 }
@@ -113,6 +127,7 @@ pub struct Sprite<'d> {
     color: Texture<'d>,
     /// One pre-mirrored variant per [`Flip`], or none.
     material: Option<[Texture<'d>; 4]>,
+    surface: Option<Texture<'d>>,
     occlusion: Option<Texture<'d>>,
 }
 
@@ -141,17 +156,21 @@ fn upload<'d>(
 
 impl<'d> Sprite<'d> {
     /// Converts the maps and records the uploads on `cmd`; the sprite can be drawn in command
-    /// buffers submitted after it. `layers` are the kinds of the layers it will be drawn into.
+    /// buffers submitted after it. `layers` are the kinds of the layers it will be drawn into;
+    /// `height_step` encodes the heights of a standing sprite
+    /// (`LightSettings::surface_height_step`).
     ///
     /// # Errors
-    /// [`SPRITE_INVALID`] for an empty sprite, an image of the wrong length or a material out
-    /// of range, [`SPRITE_MISSING_LAYER`] for a map whose layer `layers` lacks, or a texture
-    /// could not be created.
+    /// [`SPRITE_INVALID`] for an empty sprite, an image of the wrong length, a material or
+    /// height out of range, [`SPRITE_MISSING_LAYER`] for a map whose layer `layers` lacks, a
+    /// `knorke.light2d.surface_geometry.*` code for a standing sprite it cannot encode, or a
+    /// texture could not be created.
     pub fn new(
         gpu: Gpu<'d>,
         cmd: &mut CommandBuffer<'_>,
         desc: &SpriteDesc<'_>,
         layers: LayerSet,
+        height_step: f32,
     ) -> Result<Self, Diagnostic> {
         let size = (desc.width, desc.height);
         let pixels = desc.width as usize * desc.height as usize;
@@ -185,6 +204,12 @@ impl<'d> Sprite<'d> {
                 m.specular, m.gloss
             )));
         }
+        if !(desc.standing_height >= 0.0 && desc.standing_height.is_finite()) {
+            return Err(invalid(format!(
+                "standing_height must be >= 0 (got {})",
+                desc.standing_height
+            )));
+        }
         let has_material =
             desc.normal_map.is_some() || desc.specular_map.is_some() || m.specular > 0.0;
         for (needed, layer, what) in [
@@ -193,6 +218,7 @@ impl<'d> Sprite<'d> {
                 Layer::Material,
                 "a material entry (normal_map, specular_map or material.specular > 0)",
             ),
+            (desc.standing, Layer::Surface, "standing"),
             (desc.casts_shadow, Layer::Occlusion, "casts_shadow"),
         ] {
             if needed && !layers.contains(layer) {
@@ -244,6 +270,33 @@ impl<'d> Sprite<'d> {
         } else {
             None
         };
+        let surface = if desc.standing {
+            // Upright toward scene +y, the full pixel height standing for `height` world units
+            // above the bottom edge.
+            let (w, h) = (desc.width as f32, desc.height as f32);
+            let world = if desc.standing_height > 0.0 {
+                desc.standing_height
+            } else {
+                h
+            };
+            let shape = SpriteShape {
+                rgba: desc.color,
+                width: desc.width,
+                height: desc.height,
+                pitch: desc.width as usize * 4,
+                foot: [Vec2::new(0.0, h), Vec2::new(w, h)],
+            };
+            let projection = Projection {
+                z_axis: Vec2::new(0.0, -h / world),
+                ..Projection::IDENTITY
+            };
+            let face = [SurfaceFace::new(FaceKind::Standing)];
+            encode_surface_sprite(&shape, &face, None, &projection, height_step, &mut scratch)
+                .map_err(|e| e.to_diagnostic())?;
+            Some(upload(gpu, cmd, size, &scratch)?)
+        } else {
+            None
+        };
         let occlusion = if desc.casts_shadow {
             let texels = scratch.as_chunks_mut::<4>().0.iter_mut();
             for (out, c) in texels.zip(desc.color.as_chunks::<4>().0) {
@@ -257,6 +310,7 @@ impl<'d> Sprite<'d> {
             size,
             color,
             material,
+            surface,
             occlusion,
         })
     }
@@ -275,6 +329,7 @@ impl<'d> Sprite<'d> {
     fn part(&self, layer: Layer, flip: Flip) -> Option<TextureRef<'_>> {
         match layer {
             Layer::Scene => Some(&self.color),
+            Layer::Surface => self.surface.as_ref(),
             Layer::Material => self.material.as_ref().map(|m| &m[flip.index()]),
             Layer::Occlusion => self.occlusion.as_ref(),
             _ => None,
@@ -308,17 +363,18 @@ impl<'a> SpriteDraw<'a> {
     }
 }
 
-/// The layers a batch draws into, in draw order, with the program of each.
-const TARGETS: [(Layer, usize); 3] = [
+/// The layers a batch draws into, in draw order (Chiaro's), with the program of each.
+const TARGETS: [(Layer, usize); 4] = [
     (Layer::Scene, 0),
+    (Layer::Surface, 1),
     (Layer::Material, 1),
     (Layer::Occlusion, 1),
 ];
 
 /// Bytes of one quad in the storage buffer (`struct Quad` of `sprite.vert.hlsl`).
 const QUAD_BYTES: usize = 32;
-/// Quads per draw: the one of the colour and the occlusion (mirrored by its texture
-/// coordinates), then the one of the material (its texture is mirrored already).
+/// Quads per draw: the one of the colour, the surface and the occlusion (mirrored by its
+/// texture coordinates), then the one of the material (its texture is mirrored already).
 const QUADS_PER_DRAW: usize = 2;
 
 /// Draws sprites into [`Layers`]. Per batch [`prepare`](Self::prepare) (may fail), then
@@ -417,7 +473,8 @@ impl<'d> SpriteBatch<'d> {
     }
 
     /// Records the prepared `draws` into `cmd`: the quad upload, then one render pass per layer
-    /// that a sprite writes and `layers` has (scene, material, occlusion), each in draw order.
+    /// that a sprite writes and `layers` has (scene, surface, material, occlusion), each in draw
+    /// order. Surface geometry drawn into the same layer before this call lies under it.
     /// A layer drawn into counts as drawn.
     ///
     /// # Errors

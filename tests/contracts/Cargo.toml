@@ -15,7 +15,7 @@ knorke-replay = { workspace = true }
 png = "0.17"
 
 [features]
-# GPU contracts (no_alloc_pass_plan, no_alloc_sprites): need a Vulkan device and the shader pack.
+# GPU contracts (no_alloc_pass_plan, no_alloc_sprites, no_alloc_surface): need a Vulkan device and the shader pack.
 gpu = ["knorke-gpu/sdl", "knorke-light2d/gpu", "knorke-integration/gpu"]
 # `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.
 sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]

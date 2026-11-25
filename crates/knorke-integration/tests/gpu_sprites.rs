@@ -1,7 +1,7 @@
 //! Sprites (P34) on Vulkan: the cases of Chiaro's `tests/gpu/SpriteTests.cpp` that apply to the
 //! GPU batch (material layer equals the converted map placed at the destination, also scaled
 //! and mirrored; flat entries without a normal map; the batch equals single draws; errors name
-//! the field), plus what the redesign adds (maps are not blended) and the checks of the
+//! the field; a standing sprite writes the entries of `encode_surface_sprite`), plus what the redesign adds (maps are not blended) and the checks of the
 //! crate's own shaders.
 //!
 //! The GPU tests need a Vulkan device and the shader pack of `cargo xtask shaders` with this
@@ -18,17 +18,24 @@ use knorke_integration::sprites::{
     Flip, SPRITE_INVALID, SPRITE_MISSING_LAYER, SPRITE_NOT_PREPARED, Sprite, SpriteBatch,
     SpriteDesc, SpriteDraw,
 };
+use knorke_light2d::Projection;
 use knorke_light2d::codec::{
     AlphaSource, Material, NormalMapFlags, NormalMapOptions, convert_normal_map,
 };
+use knorke_light2d::surface_geometry::{FaceKind, SpriteShape, SurfaceFace, encode_surface_sprite};
+use knorke_math::Vec2;
 
 const W: u32 = 32;
 const H: u32 = 24;
 /// Side of the test sprites.
 const S: u32 = 8;
+/// Height step of standing sprites.
+const STEP: f32 = 0.1;
 
 fn kinds() -> LayerSet {
-    LayerSet::of(Layer::Material).with(Layer::Occlusion)
+    LayerSet::of(Layer::Material)
+        .with(Layer::Occlusion)
+        .with(Layer::Surface)
 }
 
 /// Sprite colour: every texel different, a few of them transparent.
@@ -115,7 +122,7 @@ impl<'d> Rig<'d> {
 
     fn sprite(&self, desc: &SpriteDesc<'_>) -> Sprite<'d> {
         let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
-        let sprite = Sprite::new(self.gpu, &mut cmd, desc, kinds()).unwrap();
+        let sprite = Sprite::new(self.gpu, &mut cmd, desc, kinds(), STEP).unwrap();
         cmd.submit_and_wait().unwrap();
         sprite
     }
@@ -282,6 +289,45 @@ fn maps_replace_what_lies_under_them_and_a_shadow_caster_marks_the_occlusion_lay
 }
 
 #[test]
+fn a_standing_sprite_writes_the_entries_of_encode_surface_sprite() {
+    with_chiaro_pack(|gpu, pack| {
+        let mut rig = Rig::new(gpu, pack);
+        let color = color();
+        let world = 10.0;
+        let sprite = rig.sprite(&SpriteDesc {
+            standing: true,
+            standing_height: world,
+            casts_shadow: true,
+            ..SpriteDesc::new(S, S, &color)
+        });
+        assert!(sprite.texture(Layer::Material).is_none());
+        assert!(sprite.texture(Layer::Surface).is_some());
+        rig.draw(&[&[SpriteDraw::new(&sprite, [3.0, 2.0, 8.0, 8.0])]]);
+        let s = S as f32;
+        let shape = SpriteShape {
+            rgba: &color,
+            width: S,
+            height: S,
+            pitch: (S * 4) as usize,
+            foot: [Vec2::new(0.0, s), Vec2::new(s, s)],
+        };
+        let projection = Projection {
+            z_axis: Vec2::new(0.0, -s / world),
+            ..Projection::IDENTITY
+        };
+        let mut surface = vec![0u8; (S * S * 4) as usize];
+        let face = [SurfaceFace::new(FaceKind::Standing)];
+        encode_surface_sprite(&shape, &face, None, &projection, STEP, &mut surface).unwrap();
+        let mut want = empty();
+        place(&mut want, &surface, (3, 2), 1);
+        assert!(rig.read(Layer::Surface) == want);
+        // Heights rise from the bottom edge: the top row stands near `world`.
+        assert!(surface[7] == 255 && surface[4] > 90, "{:?}", &surface[4..8]); // texel (1, 0)
+        assert!(rig.read(Layer::Material) == empty());
+    });
+}
+
+#[test]
 fn a_batch_equals_single_draws() {
     with_chiaro_pack(|gpu, pack| {
         let mut rig = Rig::new(gpu, pack);
@@ -320,7 +366,7 @@ fn errors_name_the_field_and_the_missing_layer() {
         let good = SpriteDesc::new(S, S, &color);
         let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
         let mut refused = |desc: SpriteDesc<'_>, layers: LayerSet| {
-            let e = Sprite::new(gpu, &mut cmd, &desc, layers).unwrap_err();
+            let e = Sprite::new(gpu, &mut cmd, &desc, layers, STEP).unwrap_err();
             (e.code, e.message)
         };
         let shiny = SpriteDesc {
@@ -337,6 +383,13 @@ fn errors_name_the_field_and_the_missing_layer() {
         let (code, message) = refused(caster, Layer::Material.into());
         assert_eq!(code, SPRITE_MISSING_LAYER);
         assert!(message.contains("Occlusion"), "{message}");
+        let standing = SpriteDesc {
+            standing: true,
+            ..good
+        };
+        let (code, message) = refused(standing, Layer::Material.into());
+        assert_eq!(code, SPRITE_MISSING_LAYER);
+        assert!(message.contains("Surface"), "{message}");
         for (desc, field) in [
             (SpriteDesc::new(0, S, &[]), "empty"),
             (SpriteDesc::new(S, S, &color[4..]), "color"),
@@ -357,12 +410,19 @@ fn errors_name_the_field_and_the_missing_layer() {
                 },
                 "material.gloss",
             ),
+            (
+                SpriteDesc {
+                    standing_height: -1.0,
+                    ..good
+                },
+                "standing_height",
+            ),
         ] {
             let (code, message) = refused(desc, kinds());
             assert_eq!(code, SPRITE_INVALID, "{field}");
             assert!(message.contains(field), "{field}: {message}");
         }
-        let sprite = Sprite::new(gpu, &mut cmd, &good, kinds()).unwrap();
+        let sprite = Sprite::new(gpu, &mut cmd, &good, kinds(), STEP).unwrap();
         cmd.submit_and_wait().unwrap();
 
         let draws = [

@@ -56,7 +56,7 @@ fn steady_state_sprite_batch_allocates_nothing() {
         casts_shadow: true,
         ..SpriteDesc::new(16, 16, &color)
     };
-    let sprite = Sprite::new(gpu, &mut cmd, &desc, kinds).unwrap();
+    let sprite = Sprite::new(gpu, &mut cmd, &desc, kinds, 1.0).unwrap();
     cmd.submit_and_wait().unwrap();
     let draws = [
         SpriteDraw::new(&sprite, [2.0, 2.0, 16.0, 16.0]),
