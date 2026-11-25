@@ -31,6 +31,8 @@
 pub mod layers;
 #[cfg(feature = "gpu")]
 pub mod light2d;
+#[cfg(feature = "gpu")]
+pub mod medium;
 #[cfg(feature = "pixel")]
 pub mod pixel;
 #[cfg(feature = "gpu")]

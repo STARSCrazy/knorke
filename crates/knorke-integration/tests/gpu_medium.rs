@@ -12,7 +12,9 @@
 //!   box and a shadowed point light.
 //!
 //! The test plays the host (ADR 0002). It skips without a Vulkan device or the shader pack (a
-//! failure with `KNORKE_REQUIRE_GPU=1`). `KNORKE_SCENE_OUT=<dir>` writes each final image there.
+//! failure with `KNORKE_REQUIRE_GPU=1`). `KNORKE_SCENE_OUT=<dir>` writes each final image there;
+//! `KNORKE_SCENE_BENCH=<frames>` also times that many frames per scene (wall clock, prepare +
+//! record + submit + wait; the C++ side is `medium_stage_ref <outdir> <frames>`).
 #![cfg(feature = "gpu")]
 
 use std::path::PathBuf;
@@ -25,13 +27,16 @@ use knorke_gpu::test_support::{
     golden_bytes, queue_download, read_download, rgba16f_diff, sampled_rgba8, texture,
     vulkan_device_with_pack,
 };
-use knorke_gpu::{CommandBuffer, Gpu, LiveCounter, TextureRef};
+use knorke_gpu::{CommandBuffer, Gpu, LiveCounter, ShaderLibrary, TextureRef};
+use knorke_integration::layers::{Layer, LayerSet, Layers};
 use knorke_integration::light2d::{
     Light2dFrame, Light2dRenderer, Light2dSettings, post_projection,
 };
+use knorke_integration::medium::{MediumBatch, MediumItem};
 use knorke_light2d::ambient_zone::{AmbientZoneParams, ZoneShape, make_stored_zone};
 use knorke_light2d::ambient_zone_store::AmbientZoneStore;
 use knorke_light2d::light::{Height, LightDesc, LightType};
+use knorke_light2d::medium_draw::MediumDraw;
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassStages, SceneStores};
 use knorke_light2d::projection::Projection;
@@ -162,6 +167,8 @@ struct Scene {
     /// The buffers the reference wrote besides scatter, filtered, guides and final.
     polar: bool,
     sun: bool,
+    /// The medium layer is drawn with [`MediumBatch`] (the reference's `Smoke`).
+    smoke: bool,
 }
 
 impl Scene {
@@ -177,6 +184,7 @@ impl Scene {
             layer: None,
             polar: false,
             sun: false,
+            smoke: false,
         }
     }
 
@@ -281,6 +289,69 @@ fn ring() -> Scene {
     s
 }
 
+fn smoke() -> Scene {
+    let mut s = Scene::new("smoke", iso(), settings(0.0, true));
+    boxed(&mut s.obstacles, (14.0, 8.0), (4.0, 4.0), 8.0);
+    let x = Vec3::new(1.0, 0.0, 0.0);
+    s.light(light(
+        LightType::Point,
+        (10.0, 12.0),
+        Height::At(6.0),
+        30.0,
+        x,
+        2.0,
+        true,
+    ));
+    s.smoke = true;
+    s.polar = true;
+    s
+}
+
+/// `Puff()` of the reference: 16 x 16, alpha 1 - r over the radius, a colour that must not
+/// matter.
+fn puff() -> Vec<u8> {
+    let mut px = vec![0u8; 16 * 16 * 4];
+    for y in 0..16 {
+        for x in 0..16 {
+            let dx = (x as f32 + 0.5) / 8.0 - 1.0;
+            let dy = (y as f32 + 0.5) / 8.0 - 1.0;
+            let r = (dx * dx + dy * dy).sqrt();
+            let a = if r >= 1.0 {
+                0
+            } else {
+                ((1.0 - r) * 255.0 + 0.5) as u8
+            };
+            px[(y * 16 + x) * 4..][..4].copy_from_slice(&[10, 200, 30, a]);
+        }
+    }
+    px
+}
+
+/// The draws of the reference's `Smoke`: a flat slab of steam, two shaped puffs of smoke.
+fn smoke_draws(shape: TextureRef<'_>) -> [MediumItem<'_>; 3] {
+    let d = |rect, density, bottom, top, medium| MediumDraw {
+        rect,
+        density,
+        bottom,
+        top,
+        medium,
+    };
+    [
+        MediumItem {
+            draw: d([40.0, 30.0, 40.0, 14.0], 0.4, 0.0, 6.0, 3),
+            shape: None,
+        },
+        MediumItem {
+            draw: d([20.0, 10.0, 24.0, 24.0], 0.8, 2.0, 30.0, 1),
+            shape: Some(shape),
+        },
+        MediumItem {
+            draw: d([30.5, 18.25, 17.0, 13.0], 0.5, 6.0, 20.0, 1),
+            shape: Some(shape),
+        },
+    ]
+}
+
 /// Bytes of `t` after the frame (queued on `cmd`).
 struct Readback<'d> {
     name: &'static str,
@@ -332,6 +403,10 @@ fn medium_scenes_match_chiaro() {
     let fresh = || Light2dRenderer::new(gpu, pack.clone()).unwrap();
     let mut renderer = fresh();
     let out_dir = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
+    let bench = std::env::var("KNORKE_SCENE_BENCH")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0);
     let color = sampled_rgba8(gpu, W, H, &checker());
     let target = texture(
         gpu,
@@ -341,16 +416,43 @@ fn medium_scenes_match_chiaro() {
         None,
     );
     let mut failures = Vec::new();
-    for s in [shafts(), sun(), ring()] {
+    let shape = sampled_rgba8(gpu, 16, 16, &puff());
+    let mut shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
+    let mut batch = MediumBatch::new(gpu, &shaders).unwrap();
+    let kinds = LayerSet::of(Layer::Scene).with(Layer::Medium);
+    for s in [shafts(), sun(), ring(), smoke()] {
         renderer = fresh();
-        let layer = s.layer.as_ref().map(|px| sampled_rgba8(gpu, W, H, px));
+        let mut layers = None;
+        if s.smoke {
+            // The reference's first pass clears the layers, then CHI_DrawMediums.
+            let l = layers.insert(Layers::new(gpu, W, H, kinds).unwrap());
+            let items = smoke_draws(shape.texture_ref());
+            let step = s.settings.light.resolved_medium_height_step();
+            batch.prepare(&mut shaders, &items).unwrap();
+            let mut cmd = CommandBuffer::acquire(&device).unwrap();
+            drop(l.clear_pass(&mut cmd, kinds).unwrap());
+            batch.record(&mut cmd, l, step, &items).unwrap();
+            let down = queue_download(gpu, &mut cmd, l.texture(Layer::Medium).unwrap());
+            cmd.submit_and_wait().unwrap();
+            let want = golden_bytes("medium/stage", "smoke.layer.bin");
+            let (n, max) = diff(&read_download(down), &want, false);
+            eprintln!("smoke.layer: {n} differing (max {max})");
+            if n > 0 {
+                failures.push(format!("smoke.layer: {n} differing, max {max}"));
+            }
+        }
+        let uploaded = s.layer.as_ref().map(|px| sampled_rgba8(gpu, W, H, px));
+        let layer = uploaded
+            .as_ref()
+            .map(|t| t.texture_ref())
+            .or_else(|| layers.as_ref().and_then(|l| l.texture(Layer::Medium)));
         let mut list = ShockwaveList::default();
         list.set(&s.waves).unwrap();
         let post = post_projection(&s.projection);
         let mut waves = ShockwaveFrame::default();
         collect_shockwaves(&list, &post, W, H, &mut waves);
         let frame = Light2dFrame {
-            medium: layer.as_ref().map(|l| l.texture_ref()),
+            medium: layer,
             shockwaves: (!s.waves.is_empty()).then_some((&post, &waves)),
             ..Light2dFrame::new(color.texture_ref(), target.texture_ref(), &s.projection)
         };
@@ -410,6 +512,28 @@ fn medium_scenes_match_chiaro() {
                 failures.push(format!("{}.{}: {n} differing, max {max}", s.name, r.name));
             }
         }
+        // The host times frames (wall clock is a host tool, not simulation).
+        #[allow(clippy::disallowed_methods)]
+        if let Some(n) = bench {
+            let mut us = Vec::with_capacity(n);
+            for _ in 0..n {
+                let t0 = std::time::Instant::now();
+                let prepared = renderer.prepare(&frame, &stores, &s.settings).unwrap();
+                let mut cmd = CommandBuffer::acquire(&device).unwrap();
+                renderer
+                    .record(&mut cmd, &frame, &s.settings, prepared)
+                    .unwrap();
+                cmd.submit_and_wait().unwrap();
+                us.push(t0.elapsed().as_secs_f64() * 1e6);
+            }
+            us.sort_by(f64::total_cmp);
+            eprintln!(
+                "bench {} (Rust), {n} frames: median {:.1} us, p95 {:.1} us",
+                s.name,
+                us[n / 2],
+                us[n * 95 / 100]
+            );
+        }
     }
     // A frame without haze and medium layer: the stage records nothing and keeps no target.
     let s = shafts();
@@ -426,8 +550,8 @@ fn medium_scenes_match_chiaro() {
     assert!(!m.is_active() && m.scatter().is_none() && m.filtered().is_none());
     assert!(m.polar_atlas().is_none() && m.sun_heights().is_none());
 
-    drop(renderer);
-    drop((color, target));
+    drop((renderer, batch, shaders));
+    drop((color, target, shape));
     assert_eq!(counter.live(), 0, "GPU objects leaked");
     assert!(
         failures.is_empty(),

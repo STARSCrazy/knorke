@@ -1,6 +1,8 @@
 // P30 reference (Knorke Chiaro port): renders four scenes with haze and media through C++ Chiaro (9bc5b9b, C API)
 // and writes the medium stage's buffers and the final image as raw bytes.
-//   medium_stage_ref <outdir>
+//   medium_stage_ref <outdir> [frames]
+// With `frames` each scene is also timed for that many more frames (wall clock per frame, CHI_Render + submit +
+// wait), printed as median and p95; the Rust side is KNORKE_SCENE_BENCH of gpu_medium.rs.
 // Writes <outdir>/<scene>.<buffer>.bin:
 //  - scatter (RGBA16F, before the pre-filter), filtered (RGBA16F, what composite reads), guides (RG8),
 //    polar (RGBA16F, the light shaft atlas; only with shaft rows), sun (R16F, the sun height atlas; only with
@@ -34,12 +36,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <algorithm>
 #include <vector>
 
 using namespace chiaro::test;
 using chiaro::detail::Inspect;
 
 namespace {
+
+int g_bench = 0; // frames to time per scene (0: none)
 
 constexpr Uint32 kW = 96, kH = 64;
 constexpr SDL_GPUTextureFormat kRgba = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
@@ -193,6 +198,19 @@ void Render(const std::string &out, const char *name, CHI_Context *fx, const CHI
     std::printf("%s: %u medium lights, %zu shaft rows, %zu sun blocks\n", name, m.m_lightCount, m.m_rows.size(),
                 m.m_sunBlocks.size());
     Dump(base + ".final.bin", DownloadPixels(target, kW, kH));
+    if (g_bench > 0) {
+        std::vector<double> us;
+        for (int i = 0; i < g_bench; ++i) {
+            const Uint64 t0 = SDL_GetTicksNS();
+            SDL_GPUCommandBuffer *c = SDL_AcquireGPUCommandBuffer(TestDevice());
+            Check(CHI_Render(fx, c, &info), "render");
+            SubmitAndWait(c);
+            us.push_back(static_cast<double>(SDL_GetTicksNS() - t0) / 1000.0);
+        }
+        std::sort(us.begin(), us.end());
+        std::printf("bench %s (C++), %d frames: median %.1f us, p95 %.1f us\n", name, g_bench, us[us.size() / 2],
+                    us[us.size() * 95 / 100]);
+    }
     ReleaseTestTexture(scene);
     ReleaseTestTexture(target);
 }
@@ -321,6 +339,7 @@ int main(int argc, char **argv)
         return 2;
     }
     const std::string out = argv[1];
+    g_bench = argc > 2 ? std::atoi(argv[2]) : 0;
     Shafts(out);
     Sun(out);
     Ring(out);
