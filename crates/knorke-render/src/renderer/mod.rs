@@ -325,11 +325,6 @@ pub fn world_pos(view: &View, x: usize, y: usize, depth: f32) -> Vec3 {
     view.eye + r * (depth / r.dot(view.forward))
 }
 
-/// Colour 0xRRGGBB (sRGB) as linear 0..1 per channel times strength.
-pub(crate) fn color_scaled(c: u32, strength: f32) -> [f32; 3] {
-    crate::srgb::lin_of(c).map(|v| v / 255.0 * strength)
-}
-
 /// Step the light to `levels` steps by its strongest channel, keeping the hue. 0 levels = unchanged.
 pub(crate) fn step_light(l: [f32; 3], levels: u32) -> [f32; 3] {
     if levels == 0 {

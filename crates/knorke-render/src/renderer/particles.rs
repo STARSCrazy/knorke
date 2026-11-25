@@ -145,7 +145,7 @@ impl Renderer {
         let pid = self.particle_lights.len() as u32;
         self.particle_lights.push(ParticleLight {
             pos: p.position,
-            color: color_scaled(p.color, 1.0),
+            color: crate::srgb::lin_of(p.color).map(|v| v / 255.0),
             lit: self.options.lighting && p.flags & PARTICLE_EMISSIVE == 0,
         });
         let tex = tex_id.map(|t| &self.textures[t]);
