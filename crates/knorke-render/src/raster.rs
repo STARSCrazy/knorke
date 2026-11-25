@@ -350,17 +350,40 @@ fn fill(
     ];
     let inv_area = 1.0 / area as f32;
     let normal = m.normal;
+    // Edge values are affine in the pixel centre: step them per pixel and row instead of
+    // recomputing. Exact in i64, so coverage and barycentrics stay bit-identical.
+    let dx = [
+        -(t[2].y - t[1].y) * SUB,
+        -(t[0].y - t[2].y) * SUB,
+        -(t[1].y - t[0].y) * SUB,
+    ];
+    let dy = [
+        (t[2].x - t[1].x) * SUB,
+        (t[0].x - t[2].x) * SUB,
+        (t[1].x - t[0].x) * SUB,
+    ];
+    let (cx0, cy0) = (x0 * SUB + SUB / 2, y0 * SUB + SUB / 2);
+    let mut row_e = [
+        edge(&t[1], &t[2], cx0, cy0),
+        edge(&t[2], &t[0], cx0, cy0),
+        edge(&t[0], &t[1], cx0, cy0),
+    ];
     for py in y0..=y1 {
         let cy = py * SUB + SUB / 2;
         let row = py as usize * g.width;
+        let mut e = row_e;
+        for k in 0..3 {
+            row_e[k] += dy[k];
+        }
         for px in x0..=x1 {
-            let cx = px * SUB + SUB / 2;
-            let e0 = edge(&t[1], &t[2], cx, cy);
-            let e1 = edge(&t[2], &t[0], cx, cy);
-            let e2 = edge(&t[0], &t[1], cx, cy);
+            let [e0, e1, e2] = e;
+            for k in 0..3 {
+                e[k] += dx[k];
+            }
             if e0 < bias[0] || e1 < bias[1] || e2 < bias[2] {
                 continue;
             }
+            let cx = px * SUB + SUB / 2;
             let b0 = e0 as f32 * inv_area;
             let b1 = e1 as f32 * inv_area;
             let b2 = e2 as f32 * inv_area;
