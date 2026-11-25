@@ -1,0 +1,17 @@
+[package]
+name = "knorke-scene"
+description = "Authoring state of the Knorke Engine: a scene as text (entities with typed components), validated against a registry of component types and changed only through atomic, undoable change sets (ADR 0018)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knorke-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+
+[lints]
+workspace = true

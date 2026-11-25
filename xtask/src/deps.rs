@@ -162,6 +162,37 @@ const RULES: &[Rule] = &[
         through: &["knorke-gpu"],
         why: "the GPU profile of knorke-integration reaches SDL only through knorke-gpu (ADR 0014, ADR 0017)",
     },
+    // ADR 0018: text formats and schemas belong to authoring and the agent plane.
+    Rule {
+        from: &[
+            "knorke-ai",
+            "knorke-navigation",
+            "knorke-perception",
+            "knorke-grid",
+            "knorke-render",
+            "knorke-lighting",
+            "knorke-light2d",
+            "knorke-post",
+        ],
+        to: &["serde*", "schemars*", "knorke-scene"],
+        except: &[],
+        through: &["knorke-gpu"],
+        why: "domain modules exchange borrowed data, not text; scenes and schemas live in knorke-scene and above (ADR 0018)",
+    },
+    Rule {
+        from: &["knorke-scene"],
+        to: &["knorke-*"],
+        except: &["knorke-scene", "knorke-types"],
+        through: &[],
+        why: "the authoring state knows no module, runtime or agent plane (ADR 0018)",
+    },
+    Rule {
+        from: &["knorke-integration", "knorke-scene"],
+        to: DEV_PLANE,
+        except: &[],
+        through: &[],
+        why: "profiles and scenes ship with a game; the agent plane does not (ADR 0018)",
+    },
     Rule {
         from: &["knorke-runtime"],
         to: DEV_PLANE,

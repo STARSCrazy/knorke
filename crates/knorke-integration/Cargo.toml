@@ -21,11 +21,19 @@ knorke-exec = { workspace = true, optional = true }
 knorke-gpu = { workspace = true, optional = true }
 knorke-light2d = { workspace = true, optional = true }
 knorke-post = { workspace = true, optional = true }
+knorke-replay = { workspace = true, optional = true }
+knorke-runtime = { workspace = true, optional = true }
+knorke-scene = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 
 [features]
 default = ["ai", "pixel"]
 ai = ["dep:knorke-ai", "dep:knorke-grid", "dep:knorke-navigation", "dep:knorke-observe", "dep:knorke-perception"]
 pixel = ["dep:knorke-math", "dep:knorke-render", "dep:knorke-lighting", "dep:knorke-exec"]
+# Profile `stealth`: a yard with guards and an intruder, built from a scene (knorke-scene) and
+# run by the runtime (ADR 0018). Not in default: it brings the text formats along.
+stealth = ["ai", "dep:knorke-replay", "dep:knorke-runtime", "dep:knorke-scene", "dep:serde", "dep:schemars"]
 # GPU 2D light: the pass plan of knorke-light2d and the post pass of knorke-post (not in default).
 gpu = ["dep:knorke-gpu", "dep:knorke-math", "dep:knorke-light2d", "dep:knorke-post", "knorke-light2d/gpu", "knorke-post/gpu"]
 # `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.

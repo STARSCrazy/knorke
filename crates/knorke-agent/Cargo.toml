@@ -1,0 +1,25 @@
+[package]
+name = "knorke-agent"
+description = "The agent plane of the Knorke Engine: discover, inspect, validate, mutate and execute a scene, as typed operations and as the command line `knorke` that answers in JSON (ADR 0018)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "knorke"
+path = "src/main.rs"
+
+[dependencies]
+knorke-types = { workspace = true }
+knorke-scene = { workspace = true }
+knorke-runtime = { workspace = true }
+knorke-replay = { workspace = true }
+knorke-integration = { workspace = true, default-features = false, features = ["stealth"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+
+[lints]
+workspace = true

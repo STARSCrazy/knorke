@@ -9,7 +9,7 @@
 #![cfg(feature = "gpu")]
 
 // The example is shared with this test; its `pub` items are its public face as an example.
-#[allow(dead_code, unreachable_pub)]
+#[allow(dead_code, unreachable_pub, unused_imports)]
 #[path = "../examples/guard_scene_view.rs"]
 mod view;
 
@@ -17,7 +17,11 @@ use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, load_png_rgba8,
 use knorke_gpu::test_support::{vulkan_device_with_pack, workspace_root};
 use knorke_gpu::{Gpu, LiveCounter};
 use std::path::PathBuf;
-use view::{H, PX, Script, View, W};
+use view::{PX, Script, View};
+
+/// The picture of the built-in yard: 16 x 10 cells.
+const W: u32 = 16 * PX;
+const H: u32 = 10 * PX;
 
 /// Brightness of the middle of cell `(x, y)`.
 fn light_at(frame: &[u8], x: u32, y: u32) -> u32 {
@@ -45,11 +49,12 @@ fn the_lamp_lights_the_yard_and_poses_blend_between_ticks() {
         return;
     };
     let counter = LiveCounter::new();
-    let mut view = View::new(Gpu::new(&device, &counter), pack);
+    let mut view = View::new(Gpu::new(&device, &counter), pack, &view::yard());
+    assert_eq!(view.size(), (W, H));
     let out = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
     let mut frames = Vec::new();
     // Ticks 0..=20 at three frames per tick: the intruder walks in, is spotted, the chase starts.
-    view::play(&mut view, Script::BOLD, 63, |f, pixels| {
+    view::play(&mut view, view::start(), Script::BOLD, 63, |f, pixels| {
         if let Some(dir) = &out {
             std::fs::create_dir_all(dir).unwrap();
             save_png_rgba8(&dir.join(format!("guard_{f:03}.png")), pixels, W, H);

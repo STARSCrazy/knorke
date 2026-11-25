@@ -1,6 +1,6 @@
 # ADR 0004 – Schemas, Capabilities und Diagnosen
 
-**Status:** teilweise angenommen (Diagnosen) · Rest vorgeschlagen bis Phase 3
+**Status:** teilweise angenommen (Diagnosen; Schemaformat seit ADR 0018) · Capability-Manifest vorgeschlagen
 **Datum:** 2026-11-23
 
 ## Angenommen
@@ -14,5 +14,5 @@
 ## Vorgeschlagen (Entscheidung in Phase 3)
 
 - Capability-Manifest pro Modul (Plan 8.3): Modul-ID, SemVer, Komponenten-Schemas mit Einheiten/Bereichen, Operationen mit Vor-/Nachbedingungen und Fehlercodes.
-- Schemaformat: JSON Schema (Draft 2020-12) als Austauschformat für Agenten; in Rust aus Typen generiert, nicht von Hand gepflegt. Kandidat `schemars` – Abhängigkeit nur in Dev-Plane-/Manifest-Crates, nie in Fachmodulen.
+- Schemaformat: JSON Schema (Draft 2020-12) als Austauschformat für Agenten; in Rust aus Typen generiert, nicht von Hand gepflegt. Kandidat `schemars` – Abhängigkeit nur in Dev-Plane-/Manifest-Crates, nie in Fachmodulen. **Angenommen und umgesetzt mit ADR 0018** (`knorke_scene::Component`, `knorke discover`); `schemars` zusätzlich in `knorke-scene` und im Profil `stealth`, weiterhin nie in Fachmodulen.
 - Schema-Versionierung `…/<major>`; Minor-Änderungen nur additiv.

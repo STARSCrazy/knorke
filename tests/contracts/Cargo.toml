@@ -25,7 +25,8 @@ knorke-observe = { workspace = true, features = ["std"] }
 knorke-exec = { workspace = true }
 knorke-runtime = { workspace = true }
 knorke-render = { workspace = true }
-knorke-integration = { workspace = true }
+knorke-integration = { workspace = true, features = ["stealth"] }
+knorke-scene = { workspace = true }
 knorke-light2d = { workspace = true }
 knorke-post = { workspace = true }
 knorke-gpu = { workspace = true }

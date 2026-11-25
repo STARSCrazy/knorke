@@ -21,8 +21,9 @@ gpu = ["knorke-gpu/sdl", "knorke-light2d/gpu", "knorke-integration/gpu"]
 sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
 
 [dev-dependencies]
-# The guard scene joins navigation, perception and AI.
-knorke-integration = { workspace = true, default-features = false, features = ["ai"] }
+# The guard scene: the profile `stealth` builds it from a scene file.
+knorke-integration = { workspace = true, default-features = false, features = ["stealth"] }
+knorke-scene = { workspace = true }
 # Its picture (feature `gpu`).
 knorke-gpu = { workspace = true, features = ["test-support"] }
 knorke-light2d = { workspace = true }

@@ -3,6 +3,8 @@
 //!
 //! Each profile is a feature, so a host pulls in only the modules it joins:
 //! - feature `ai`: navigation, perception and AI (ADR 0012), see below.
+//! - feature `stealth` (not in `default`): [`stealth`], a yard with guards and an intruder
+//!   built from a `knorke-scene` scene and run by `knorke-runtime` (ADR 0018).
 //! - feature `pixel`: [`pixel`], software renderer (`knorke-render`) + light pass
 //!   (`knorke-lighting`), profile `scene.render.lighting` (ADR 0013).
 //! - feature `gpu` (not in `default`): [`light2d`], the pass plan of `knorke-light2d` followed
@@ -51,6 +53,8 @@ pub mod perception;
 pub mod prelude;
 #[cfg(feature = "ai")]
 pub mod rules;
+#[cfg(feature = "stealth")]
+pub mod stealth;
 #[cfg(feature = "ai")]
 pub mod walk;
 

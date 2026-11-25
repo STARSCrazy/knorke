@@ -21,3 +21,4 @@ Bindend für alle Änderungen (`CLAUDE.md`). Neue Grundsatzentscheidung → neue
 | [0014](0014-chiaro-port-split.md) | Chiaro-Port: Schnitt in `knorke-gpu`/`-post`/`-light2d`, Shader als getrennte Pakete pro Format (Vulkan Standard, D3D12 optional), GPU als Hauptweg | angenommen (`sdl3-sys`-Prüfung offen) |
 | [0015](0015-chiaro-gate-rust.md) | Chiaro-Gate bestanden: Rust wird Zielimplementierung, sichere Pass-API vor Welle 2 | angenommen |
 | [0017](0017-pass-plan-2d-licht.md) | Pass-Plan des 2D-Lichts, GPU-Profil in `knorke-integration` (P31) | vorgeschlagen |
+| [0018](0018-szene-und-agenten-cli.md) | Szene als Text, Profil `stealth`, Agenten-Kommandozeile | angenommen; Stufe 1 umgesetzt |

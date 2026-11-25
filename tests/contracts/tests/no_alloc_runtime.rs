@@ -5,14 +5,13 @@
 //! Own test binary with a single test because the allocation counter is process-wide.
 
 // The example is shared with this test; its `pub` items are its public face as an example.
-#[allow(dead_code, unreachable_pub)]
+#[allow(dead_code, unreachable_pub, unused_imports)]
 #[path = "../../../crates/knorke-runtime/examples/guard_scene.rs"]
 mod guard_scene;
 
-use guard_scene::{Command, HIDEOUT, Scene};
+use guard_scene::{Command, HIDEOUT, start};
 use knorke_contract_tests::counting_alloc::{Counting, allocations};
 use knorke_integration::Cell;
-use knorke_observe::NoProbe;
 use knorke_replay::{RecordOptions, Recorder, ReplayHeader};
 use knorke_runtime::{FixedStep, Runtime};
 use knorke_types::{Seed, Tick};
@@ -22,7 +21,7 @@ static GLOBAL: Counting = Counting;
 
 #[test]
 fn runtime_frames_allocate_nothing_in_steady_state() {
-    let scene = Scene::new(NoProbe);
+    let scene = start();
     let header = ReplayHeader {
         app: "contract".into(),
         seed: Seed(0),
