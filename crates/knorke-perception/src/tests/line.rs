@@ -2,20 +2,11 @@
 //! Exact sight lines: symmetry, a brute-force reference, corners, end
 //! cells, depth by length, levels, and the sound walk.
 
+use super::Rng;
 use crate::line::{sight_line_with, sound_cost};
 use crate::*;
 use knorke_grid::{Cell, Pos};
 use knorke_types::Seed;
-
-/// Seeded numbers from `mix`.
-struct Rng(u64);
-
-impl Rng {
-    fn below(&mut self, n: u64) -> u64 {
-        self.0 = self.0.wrapping_add(1);
-        Seed(self.0).derive(0).0 % n
-    }
-}
 
 /// A `size` x `size` map of cells `0..size` on both axes (square columns
 /// and rows, or axial q and r); everything outside is opaque. Edges can be

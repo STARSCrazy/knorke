@@ -72,6 +72,18 @@ fn has(out: &[Percept], kind: PerceptKind) -> bool {
     out.iter().any(|p| p.event == kind)
 }
 
+/// Opaque cells from a list.
+struct Walls(Vec<Cell>);
+
+impl SenseMap for Walls {
+    fn sight(&mut self, cell: Cell) -> Medium {
+        Medium {
+            opaque: self.0.contains(&cell),
+            ..Medium::default()
+        }
+    }
+}
+
 /// Seeded numbers from `mix`.
 struct Rng(u64);
 
