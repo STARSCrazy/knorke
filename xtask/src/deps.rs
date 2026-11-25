@@ -75,13 +75,6 @@ const RULES: &[Rule] = &[
         why: "2D light (ADR 0014) knows neither post-processing, the CPU light or renderer, nor AI crates; GPU access only through knorke-gpu",
     },
     Rule {
-        from: &["knorke-post"],
-        to: &["knorke-light2d"],
-        except: &[],
-        through: &[],
-        why: "post-processing and 2D light are independent; only knorke-integration joins them (ADR 0014)",
-    },
-    Rule {
         from: &["knorke-lighting", "knorke-render"],
         to: &["knorke-light2d"],
         except: &[],
@@ -89,23 +82,10 @@ const RULES: &[Rule] = &[
         why: "the frozen CPU light and the renderer do not know the GPU 2D light (ADR 0014)",
     },
     // The AI modules share only knorke-grid; knorke-integration joins them (ADR 0012).
+    // `from == to` is fine: the search skips the start crate itself.
     Rule {
-        from: &["knorke-navigation"],
-        to: &["knorke-perception", "knorke-ai"],
-        except: &[],
-        through: &[],
-        why: "navigation, perception and AI are independent; only knorke-integration joins them",
-    },
-    Rule {
-        from: &["knorke-perception"],
-        to: &["knorke-navigation", "knorke-ai"],
-        except: &[],
-        through: &[],
-        why: "navigation, perception and AI are independent; only knorke-integration joins them",
-    },
-    Rule {
-        from: &["knorke-ai"],
-        to: &["knorke-navigation", "knorke-perception"],
+        from: &["knorke-navigation", "knorke-perception", "knorke-ai"],
+        to: &["knorke-navigation", "knorke-perception", "knorke-ai"],
         except: &[],
         through: &[],
         why: "navigation, perception and AI are independent; only knorke-integration joins them",
