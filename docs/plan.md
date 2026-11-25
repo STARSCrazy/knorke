@@ -867,7 +867,7 @@ Aus P31 (Pass-Plan, Integration; 2026-11-24):
 - **ADR 0017** (Pass-Plan, GPU-Profil in `knorke-integration`, verschärfte Abhängigkeitsregeln) – **offen**: Status „vorgeschlagen“, Entscheidung Manuel.
 - **Sprite-Maske im Höhenmodus** (`occlusion_mask_height.frag`) – **offen**: gebaut, aber ohne Chiaro-Golden.
 - **Demo-Szenen aus P3** (10 Szenen, 1280×720) – **offen**: brauchen Layers/Sprites (P33–P35), teils Medium (P29/P30) und Ringlicht (P21); vier davon sind nicht deterministisch (Uhr/Maus).
-- **Leistung Pass-Plan gegen alten Spike** – **offen**: nicht gemessen (`KNORKE_SCENE_BENCH` vorhanden).
+- **Leistung Pass-Plan gegen alten Spike** – **offen**: Messung 2026-11-25 (AMD Radeon RX 6700 XT, Vulkan, Release, Wand-Uhr pro Frame inkl. Submit+Warten, `KNORKE_SCENE_BENCH`): `minimal_normal_map` Median 195–284 µs (3 × 3000 Frames) bzw. 180–241 µs (3 × 500); `gate_sprite_shadow` Median 478–610 µs (3 × 3000) bzw. 259–379 µs (3 × 500). Spike laut ADR 0015: 189–212 µs und 405–427 µs. **Nicht belastbar:** die Läufe streuen um mehr als Faktor 2, auf dem Rechner liefen währenddessen andere Agenten-Sitzungen. Die einfache Szene liegt im Bereich des Spikes; für die Schattenszene ist weder „gleich“ noch „langsamer“ belegt. Auf ruhigem Rechner wiederholen.
 - **`check_invariants` des Pass-Plans** ist eine Methode mit `Sink`, kein `knorke_observe::Invariants` (Lebensdauer `'d`) – **erledigt (bleibt so)**, bei P32 angesehen: `Invariants<W>` ist eine Regelliste des Hosts über seine Welt; der Plan liefert die Prüfung, der Host kann sie dort als Regel eintragen.
 
 Aus P32/P33 (Debug-Prüfung, Layers; 2026-11-25):
