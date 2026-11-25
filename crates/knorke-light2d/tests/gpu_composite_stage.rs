@@ -379,6 +379,7 @@ impl<'d> Host<'d> {
             shadows: None,
             profile_atlas: None,
             mask_atlas: None,
+            medium_map: None,
         };
         let result = self
             .lighting

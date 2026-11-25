@@ -528,6 +528,7 @@ fn record_without_prepare_fails() {
             shadows: None,
             profile_atlas: None,
             mask_atlas: None,
+            medium_map: None,
         };
         let mut cmd = CommandBuffer::acquire(host.gpu.device()).unwrap();
         let e = host

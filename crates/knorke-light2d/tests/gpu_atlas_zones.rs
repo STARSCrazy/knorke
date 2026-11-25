@@ -781,6 +781,7 @@ fn a_profiled_light_without_a_profile_atlas_is_refused() {
             shadows: None,
             profile_atlas: None,
             mask_atlas: None,
+            medium_map: None,
         };
         let e = host
             .lighting

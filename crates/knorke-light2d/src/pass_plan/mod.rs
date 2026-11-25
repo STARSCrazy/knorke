@@ -14,7 +14,8 @@
 //! | 1 | [`OccluderGeometry`](crate::occluder_raster::OccluderGeometry), [`TileOccluders`](crate::occluder_raster::TileOccluders) (P22) | obstacle store | vertex and cell buffers |
 //! | 2 | [`OcclusionMask`](crate::occlusion::OcclusionMask) (P23) | step 1, sprite mask | mask, height, distance field |
 //! | 3 | [`LightAtlases`](crate::atlas::LightAtlases) (P26) | profile and mask store | atlases |
-//! | 4 | [`LightingStage`](crate::lighting::LightingStage) with the zone pass (P25, P26) | light list, zone list, steps 2 and 3 | light, specular, direction, pure ambient |
+//! | 3b | [`MediumMapStage`](crate::medium_map::MediumMapStage) (P29, only with a medium layer and a light) | medium layer, media table, the mask's grid | medium world map |
+//! | 4 | [`LightingStage`](crate::lighting::LightingStage) with the zone pass (P25, P26) | light list, zone list, steps 2 to 3b | light, specular, direction, pure ambient |
 //! | 5 | [`CompositeStage`](crate::composite::CompositeStage) (P27) | scene buffers, step 4 | HDR buffer |
 //! | 6 | [`DebugCheckStage`](crate::debug_check::DebugCheckStage) (P32, opt-in) | surface and material buffer | findings of an earlier frame |
 //!
@@ -45,10 +46,11 @@
 //! - Pattern obstacles (P28) are part of the occlusion stage: [`SceneStores::patterns`] gives
 //!   the mask their mean opacities and, with a pattern obstacle in the domain, adds the pattern
 //!   atlas, the id texture and the `Pattern` shadow programs; without one nothing runs.
-//! - Not built (and not blocked): medium (P12, P29, P30), ring lights (P21). Their inputs are
-//!   fields still to come in
-//!   [`PassFrame`] and [`SceneStores`] and stages between steps 2 and 5; the stages already take
-//!   `None` for them.
+//! - The medium world map (P29) needs [`PassFrame::medium`] and a light in the store; it makes
+//!   every light draw a `*_medium` program. Without a layer nothing of it is created or bound.
+//! - Not built (and not blocked): the medium stage (P30, scattering), ring lights (P21). Their
+//!   inputs are fields still to come in [`PassFrame`] and [`SceneStores`] and stages between
+//!   steps 3b and 5; the stages already take `None` for them.
 
 #[cfg(feature = "gpu")]
 mod gpu;
@@ -81,6 +83,8 @@ impl PassStages {
     pub const COMPOSITE: Self = Self(16);
     /// GPU debug check (after the composite; only with `DebugChecks::LAYERS`).
     pub const DEBUG_CHECK: Self = Self(32);
+    /// Medium world map (step 3b).
+    pub const MEDIUM_MAP: Self = Self(64);
 
     /// `true` if every stage of `other` is in `self`.
     pub const fn contains(self, other: Self) -> bool {

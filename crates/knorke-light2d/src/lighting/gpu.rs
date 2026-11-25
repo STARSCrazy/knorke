@@ -49,6 +49,7 @@ use crate::light_program::{
     LightFeature, LightLayout, LightProgram, LightSampler, LightStorage, LightUniform,
     light_layout_of,
 };
+use crate::medium_map::MediumMapView;
 use crate::pattern_occluders::PatternMaps;
 use crate::projection::Projection;
 use crate::settings::LightSettings;
@@ -158,6 +159,9 @@ pub struct LightingFrame<'a> {
     pub profile_atlas: Option<TextureRef<'a>>,
     /// Mask atlas (P26); needed when a light has a mask.
     pub mask_atlas: Option<TextureRef<'a>>,
+    /// The medium world map (P29); `Some` makes every draw a `*_medium` program and every
+    /// directional light a per-pixel draw (cull the lights with `LightModes::medium_map`).
+    pub medium_map: Option<MediumMapView<'a>>,
 }
 
 impl LightingFrame<'_> {
@@ -358,7 +362,8 @@ impl<'d> LightingStage<'d> {
         self.ambient = list.ambient;
         let normal_mode = frame.normal_mode();
         let shadows = frame.shadows;
-        let draws = LightDraws::new(list, shadows.is_some(), shadows.is_some() || normal_mode);
+        let per_pixel = shadows.is_some() || normal_mode || frame.medium_map.is_some();
+        let draws = LightDraws::new(list, shadows.is_some(), per_pixel);
         let light_pass = draws.light_pass();
         let zones = zones.filter(ZoneInput::is_active);
         if zones.is_none() {
@@ -467,7 +472,7 @@ impl<'d> LightingStage<'d> {
             detail,
             normal_mode,
             shadow_height_mode: shadows.is_some_and(|s| s.height_mode),
-            medium_map: false,
+            medium_map: frame.medium_map.is_some(),
             patterns: shadows.is_some_and(|s| s.patterns.is_some()),
         };
         let mut programs = [None; PROGRAMS];
@@ -670,6 +675,10 @@ impl<'d> LightingStage<'d> {
             linear,
         );
         res.uniforms[LightUniform::Surface as usize] = Some(&surface_params);
+        if let Some(m) = &frame.medium_map {
+            res.set(LightSampler::MediumMap, Some(m.map), nearest);
+            res.uniforms[LightUniform::MediumMap as usize] = Some(m.params);
+        }
         let patterns = frame.shadows.and_then(|s| s.patterns.as_ref());
         if let Some(pm) = patterns {
             res.set(LightSampler::PatternIds, Some(pm.ids), nearest);

@@ -81,7 +81,7 @@ pub struct ProgramModes {
     pub normal_mode: bool,
     /// Shadows are active and in height mode (E22).
     pub shadow_height_mode: bool,
-    /// The frame builds a medium world map (P29; always `false` until then).
+    /// The frame builds a medium world map (P29).
     pub medium_map: bool,
     /// Shadows are active and pattern obstacles are in view (P28; `false` until then).
     pub patterns: bool,
