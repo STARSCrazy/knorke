@@ -769,10 +769,6 @@ impl Renderer {
     pub fn normals(&self) -> &[f32] {
         &self.normals_out
     }
-    /// True if a palette is set.
-    pub fn has_palette(&self) -> bool {
-        self.palette.is_some()
-    }
 }
 
 /// One band of rows for a parallel shading chunk.

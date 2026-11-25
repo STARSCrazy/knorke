@@ -8,7 +8,7 @@
 
 use knorke_observe::{NoopSink, Sink};
 
-use crate::dstar::{DStarLite, Heuristic, HexHeuristic};
+use crate::dstar::{Heuristic, HexHeuristic};
 use crate::formation::{Formation, FormationTrace, place_members_hex_traced, place_members_traced};
 use std::ops::RangeInclusive;
 
@@ -86,44 +86,6 @@ impl Topology {
             |a, b| self.line_clear(map, a, b, max_extra),
             sink,
         );
-    }
-
-    /// Tells `planner` that `cells` changed: every node it knows on or next
-    /// to one of them, on any level, is checked again. Returns how many.
-    pub fn cells_changed<G: Graph<Node = Cell>>(
-        &self,
-        planner: &mut DStarLite<Cell, Topology>,
-        graph: &mut G,
-        cells: &[Cell],
-        scratch: &mut Vec<Cell>,
-    ) -> usize {
-        // the columns round the changed cells, once; then each known node once
-        let mut around: Vec<(i32, i32)> = Vec::with_capacity(cells.len() * 9);
-        for c in cells {
-            match *self {
-                Self::Square(_) => {
-                    for dy in -1..=1 {
-                        for dx in -1..=1 {
-                            around.push((c.x + dx, c.y + dy));
-                        }
-                    }
-                }
-                Self::Hex { layout, .. } => {
-                    around.push((c.x, c.y));
-                    around.extend((0..6).map(|d| layout.neighbor(c.x, c.y, d)));
-                }
-            }
-        }
-        around.sort_unstable();
-        around.dedup();
-        scratch.clear();
-        scratch.extend(
-            planner
-                .known_nodes()
-                .filter(|n| around.binary_search(&(n.x, n.y)).is_ok()),
-        );
-        planner.nodes_changed(graph, scratch.iter().copied());
-        scratch.len()
     }
 
     /// Places a formation along the leader's path (see
