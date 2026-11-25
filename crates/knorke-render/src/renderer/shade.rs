@@ -101,11 +101,7 @@ pub(super) fn surface_h<L: Column<[f32; 3]>>(
         let l = s.light.get(sample).copied().unwrap_or([0.0; 3]);
         let l = l.map(|v| v * base_l);
         let l = step_light(l, o.light_levels).map(|v| v.clamp(0.0, 1.0));
-        let mut f = 1.0;
-        if fog_on {
-            let t = ((z - o.fog_start) / (o.fog_end - o.fog_start)).clamp(0.0, 1.0);
-            f = 1.0 - t * (1.0 - o.fog_min.clamp(0.0, 1.0));
-        }
+        let f = if fog_on { fog_blend(o, z) } else { 1.0 };
         let mut c = [0.0; 3];
         for k in 0..3 {
             c[k] = base[k] * l[k] * f + fog_c[k] * (1.0 - f);
@@ -117,11 +113,7 @@ pub(super) fn surface_h<L: Column<[f32; 3]>>(
             let lam = (-normal.dot(sun)).max(0.0);
             l *= 1.0 - o.sun_strength + o.sun_strength * lam;
         }
-        let mut f = 1.0;
-        if fog_on {
-            let t = ((z - o.fog_start) / (o.fog_end - o.fog_start)).clamp(0.0, 1.0);
-            f = 1.0 - t * (1.0 - o.fog_min.clamp(0.0, 1.0));
-        }
+        let mut f = if fog_on { fog_blend(o, z) } else { 1.0 };
         l = l.clamp(0.0, 1.0);
         let mut lf = l * f;
         if o.light_levels > 0 {
@@ -139,11 +131,18 @@ pub(super) fn surface_h<L: Column<[f32; 3]>>(
     }
 }
 
+/// Fog factor at depth z for active fog (`fog_end > fog_start`): 1 = no fog. Kept apart from
+/// `fog_factor` so the hot path can test the hoisted flag instead of comparing again.
+#[inline(always)]
+fn fog_blend(o: &Options, z: f32) -> f32 {
+    let t = ((z - o.fog_start) / (o.fog_end - o.fog_start)).clamp(0.0, 1.0);
+    1.0 - t * (1.0 - o.fog_min.clamp(0.0, 1.0))
+}
+
 /// Fog factor at depth z: 1 = no fog.
 pub(super) fn fog_factor(o: &Options, z: f32) -> f32 {
     if o.fog_end > o.fog_start {
-        let t = ((z - o.fog_start) / (o.fog_end - o.fog_start)).clamp(0.0, 1.0);
-        1.0 - t * (1.0 - o.fog_min.clamp(0.0, 1.0))
+        fog_blend(o, z)
     } else {
         1.0
     }
