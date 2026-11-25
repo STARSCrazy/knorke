@@ -585,8 +585,10 @@ fn direction_index(dx: i32, dy: i32) -> Option<usize> {
     DIRECTIONS.iter().position(|&d| d == (dx, dy))
 }
 
-impl CellMap for DenseGrid {
-    fn step(&mut self, from: Cell, dx: i32, dy: i32) -> Option<i32> {
+impl DenseGrid {
+    /// The cell a step from `from` by (dx, dy) lands on (a level link may change the level),
+    /// or `None` if a wall bit blocks the step. Whether that cell exists or is open is not checked.
+    fn step_target(&self, from: Cell, dx: i32, dy: i32) -> Option<Cell> {
         let dir = direction_index(dx, dy);
         if dir.is_some_and(|i| self.wall_bits_at(from) & (1 << i) != 0) {
             return None;
@@ -594,20 +596,19 @@ impl CellMap for DenseGrid {
         let level = dir
             .and_then(|i| self.link_of(from, i))
             .unwrap_or(from.level);
-        self.open_at(Cell::new(from.x + dx, from.y + dy, level))
-            .then_some(level)
+        Some(Cell::new(from.x + dx, from.y + dy, level))
+    }
+}
+
+impl CellMap for DenseGrid {
+    fn step(&mut self, from: Cell, dx: i32, dy: i32) -> Option<i32> {
+        let to = self.step_target(from, dx, dy)?;
+        self.open_at(to).then_some(to.level)
     }
 
     fn step_unblocked(&mut self, from: Cell, dx: i32, dy: i32) -> Option<i32> {
-        let dir = direction_index(dx, dy);
-        if dir.is_some_and(|i| self.wall_bits_at(from) & (1 << i) != 0) {
-            return None;
-        }
-        let level = dir
-            .and_then(|i| self.link_of(from, i))
-            .unwrap_or(from.level);
-        self.get_at(Cell::new(from.x + dx, from.y + dy, level))
-            .map(|_| level)
+        let to = self.step_target(from, dx, dy)?;
+        self.get_at(to).map(|_| to.level)
     }
 
     fn move_cost(&mut self, from: Cell, to: Cell) -> Option<Cost> {
