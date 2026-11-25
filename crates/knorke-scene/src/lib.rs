@@ -214,12 +214,7 @@ pub fn has_errors(diagnostics: &[Diagnostic]) -> bool {
 
 /// A diagnostic as JSON, for tools: `severity`, `code`, `message`, `path`.
 pub fn diagnostic_json(d: &Diagnostic) -> Value {
-    let severity = match d.severity {
-        Severity::Info => "info",
-        Severity::Warning => "warning",
-        Severity::Error => "error",
-    };
-    json!({ "severity": severity, "code": d.code.as_str(), "message": d.message, "path": d.path })
+    json!({ "severity": d.severity.as_str(), "code": d.code.as_str(), "message": d.message, "path": d.path })
 }
 
 impl Scene {
