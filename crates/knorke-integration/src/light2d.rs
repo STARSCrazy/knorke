@@ -19,12 +19,15 @@ use std::borrow::Cow;
 use knorke_gpu::{CommandBuffer, Gpu, TextureRef};
 use knorke_light2d::Projection;
 use knorke_light2d::composite::InputColorSpace;
+use knorke_light2d::frame_warnings::{Warning, WarningSet};
 use knorke_light2d::pass_plan::{PassFrame, PassPlan, PassPrepared, PassRecord, SceneStores};
 use knorke_light2d::settings::LightSettings;
 use knorke_post::pass::{PostFrame, PostRenderer, Prepared as PostPrepared};
 use knorke_post::settings::{ColorSpace, PostSettings};
 use knorke_post::shockwave::{Projection as PostProjection, ShockwaveFrame};
 use knorke_types::{Diagnostic, DiagnosticCode};
+
+use crate::layers::Layers;
 
 /// Recording without a successful [`Light2dRenderer::prepare`].
 pub const NOT_PREPARED: DiagnosticCode =
@@ -158,6 +161,17 @@ impl<'d> Light2dRenderer<'d> {
     /// The pass plan, mutably (debug checks, invalidate after a restore).
     pub fn plan_mut(&mut self) -> &mut PassPlan<'d> {
         &mut self.plan
+    }
+
+    /// Tells the light whether `layers` were cleared since the last frame; uncleared ones are
+    /// the warning `StaleLayers` of the next [`record`](Self::record) (debug check `LAYERS`).
+    /// Call it once per frame drawn from layers, before [`Layers::frame`] (the frame borrows
+    /// the layers).
+    pub fn note_layers(&mut self, layers: &mut Layers<'_>) {
+        if layers.take_stale() {
+            self.plan
+                .add_pending_warnings(WarningSet::of(Warning::StaleLayers));
+        }
     }
 
     /// The post pass.

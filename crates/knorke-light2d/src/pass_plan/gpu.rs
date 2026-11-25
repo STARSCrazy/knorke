@@ -701,6 +701,12 @@ impl<'d> PassPlan<'d> {
         self.stats
     }
 
+    /// Findings the host made between frames (stale layers); the next
+    /// [`record`](Self::record) reports them under their debug check.
+    pub fn add_pending_warnings(&mut self, warnings: WarningSet) {
+        self.warnings.add_pending(warnings);
+    }
+
     /// The frame warnings' state (which kinds were reported so far).
     pub fn warnings(&self) -> &FrameWarnings {
         &self.warnings

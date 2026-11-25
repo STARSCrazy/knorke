@@ -26,6 +26,8 @@
 //! everything trace related.
 
 #[cfg(feature = "gpu")]
+pub mod layers;
+#[cfg(feature = "gpu")]
 pub mod light2d;
 #[cfg(feature = "pixel")]
 pub mod pixel;
