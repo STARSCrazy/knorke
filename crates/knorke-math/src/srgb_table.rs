@@ -526,3 +526,28 @@ pub(crate) const SRGB_ENCODE_THRESHOLDS: [f32; 255] = [
     b(0x3F7C9671),
     b(0x3F7EDC0E),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::{SRGB_ENCODE_THRESHOLDS, SRGB_TO_LINEAR};
+
+    /// FNV-1a over the bit patterns of both tables, in order: any changed bit shows up.
+    fn fingerprint() -> u64 {
+        SRGB_TO_LINEAR
+            .iter()
+            .chain(&SRGB_ENCODE_THRESHOLDS)
+            .flat_map(|v| v.to_bits().to_le_bytes())
+            .fold(0xcbf2_9ce4_8422_2325, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3)
+            })
+    }
+
+    #[test]
+    fn tables_keep_their_bit_patterns() {
+        assert_eq!(
+            (SRGB_TO_LINEAR.len(), SRGB_ENCODE_THRESHOLDS.len()),
+            (256, 255)
+        );
+        assert_eq!(fingerprint(), 0x0ad9_0fda_e923_d79a);
+    }
+}
