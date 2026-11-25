@@ -50,7 +50,17 @@ Belegt durch: `crates/knorke-runtime/tests/guard_scene.rs` (beide Ausgänge der 
 ### Noch nicht umgesetzt
 
 - **Task-Graph-Scheduler** (Systeme nach Lese-/Schreibzugriff parallel) und explizite Reihenfolge-Abhängigkeiten („nach `navigation`“). Vier Systeme mit je wenigen Mikrosekunden Arbeit geben dafür keine Form her; die Reihenfolge ist die Tabelle. Auslöser: ein Tick, dessen Systeme gemessen parallel lohnen.
-- **Phasen 3 und 4** (Render vorbereiten, Render) und Pipelining: mit dem ersten Bild aus der Laufzeit.
+- **Pipelining** (Frame N rendern, während Tick N+1 simuliert): erst nach Messung.
+
+### Stufe 2 (2026-11-25): Phasen 3 und 4 auf der Host-Seite
+
+Die Wachmann-Szene wird über die Laufzeit gezeichnet (`crates/knorke-runtime/examples/guard_scene_view.rs`, Feature `gpu`). Die Laufzeit selbst bekommt dafür keinen Code und keine Abhängigkeit: Zeichnen ist Sache des Hosts (ADR 0002).
+
+- **Render vorbereiten:** Der Host liest nach den Ticks eines Frames eine `Pose` (reine Darstellungsdaten) aus der Simulation und mischt sie mit der Pose vor dem letzten Tick, Gewicht `Frame::alpha`. Die Simulation erfährt davon nichts; der Faktor fließt nie zurück.
+- **Render:** Der Host malt Farbe und Okklusionsmaske, das 2D-Licht (`Light2dRenderer`, ADR 0014/0017) legt die Lampe des Wachmanns darüber. Submit und Readback macht der Host.
+- **Eingabe:** Ein Command geht genau einmal hinein, unmittelbar bevor sein Tick an der Reihe ist – auch wenn mehrere Frames auf denselben Tick warten.
+
+Belegt durch `crates/knorke-runtime/tests/gpu_guard_scene.rs`: Lichtkegel heller als Umgebung und als der Schatten hinter der Mauer, Figur bewegt sich pro Frame um ein Drittel Feld (drei Frames pro Tick), ein Frame gegen ein eigenes Referenzbild (kein Chiaro-Bild), keine GPU-Objekte übrig.
 
 ## Entschiedene Fragen
 

@@ -275,7 +275,11 @@ dependencies = [
 name = "knorke-runtime"
 version = "0.0.1"
 dependencies = [
+ "knorke-contract-tests",
+ "knorke-gpu",
  "knorke-integration",
+ "knorke-light2d",
+ "knorke-math",
  "knorke-observe",
  "knorke-replay",
  "knorke-types",

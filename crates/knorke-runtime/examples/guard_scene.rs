@@ -92,7 +92,8 @@ pub struct Actors {
     goal: Cell,
     /// The guard's cell.
     pub guard: Cell,
-    facing: u8,
+    /// The guard's heading (0..=255, 0 = +x, 64 = +y).
+    pub facing: u8,
     /// The guard's state ([`POST`], [`CHASE`], [`RETURN`], [`CAUGHT`]).
     pub sm: StateMachine,
     aware: Awareness,

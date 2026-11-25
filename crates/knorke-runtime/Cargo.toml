@@ -12,9 +12,26 @@ knorke-types = { workspace = true }
 knorke-observe = { workspace = true }
 knorke-replay = { workspace = true }
 
+[features]
+# Draws the guard scene with the 2D GPU light (example `guard_scene_view`, test
+# `gpu_guard_scene`): needs a Vulkan device and the shader pack. The library itself has no
+# GPU code; the feature only switches the dev-dependencies on.
+gpu = ["knorke-gpu/sdl", "knorke-light2d/gpu", "knorke-integration/gpu"]
+# `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.
+sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
+
 [dev-dependencies]
 # The guard scene joins navigation, perception and AI.
 knorke-integration = { workspace = true, default-features = false, features = ["ai"] }
+# Its picture (feature `gpu`).
+knorke-gpu = { workspace = true, features = ["test-support"] }
+knorke-light2d = { workspace = true }
+knorke-math = { workspace = true }
+knorke-contract-tests = { path = "../../tests/contracts" }
+
+[[example]]
+name = "guard_scene_view"
+required-features = ["gpu"]
 
 [lints]
 workspace = true

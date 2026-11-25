@@ -558,6 +558,7 @@ Details in den ADRs unter `docs/adr/`, Inventuren unter `docs/inventory/`.
 | Vertragstests (keine Kopie, 0 Allokationen auf allen Threads, bitgleich über Executoren), Benchmarks | `knorke-contract-tests` | 0006, 0008 |
 | Abhängigkeitsregeln und Standalone-Builds in CI | `xtask` | 0001 |
 | Frame-Ablauf Stufe 1 (2026-11-25): `FixedStep` (Host-Zeit → Ticks + Interpolationsfaktor, gedeckelt), `Runtime` (Commands am Tick-Anfang, Ticks über `TickDriver`), Systeme als Tabelle in fester Reihenfolge mit `Probe`-Scope; erste Szene `guard_scene` (Navigation, Wahrnehmung, Zustandsautomat, `EventQueue`) mit Replay-Test und 0 Allokationen im Dauerbetrieb. `Attention` (Wahrnehmung) ist jetzt `SnapshotValue`. Task-Graph-Scheduler weiter offen | `knorke-runtime`, `knorke-perception` | 0009 |
+| Frame-Ablauf Stufe 2 (2026-11-25): die Wachmann-Szene als Bild über die Laufzeit (`guard_scene_view`, Feature `gpu`): Pose zwischen zwei Ticks gemischt (`Frame::alpha`), Hof und Maske vom Host gemalt, Lampe des Wachmanns als Spot über `Light2dRenderer`, Mauer wirft Schatten; Test mit Helligkeits-Orakel, Bewegung pro Frame und eigenem Referenzbild (bitgleich über Läufe, Vulkan, AMD RX 6700 XT) | `knorke-runtime` (Beispiel/Test), `knorke-integration` | 0009, 0002 |
 | Snapshot-Vertrag (`Snapshot`, `SnapshotBuf`, `SnapshotValue`), `Checksum` pro Modul-Abschnitt | `knorke-types` | 0010 |
 | Replay: `Recorder`/Flight Recorder, `verify` (Tick + Modul), `seek`, `minimize` (Delta-Debugging) | `knorke-replay` | 0010 |
 | Fehlererkennung: `Invariants`, `ProgressWatch`, Bildheuristiken (`frame_diff`, `flicker_score`, `non_finite`) | `knorke-observe` | 0010 |
@@ -595,7 +596,9 @@ Entscheidungen aus Gesprächen:
 |---|---|---|
 | **Snapshot/Restore des Simulationszustands** (Replays, Rollback-Netcode, Time-Travel-Debugging) | erledigt (Abschnitt 16, ADR 0010) | beim Sagax-Umbau: jedes neue Modul implementiert `Snapshot` |
 | **Task-Graph-Scheduler** (Systeme nach Lese-/Schreibzugriff parallel) | geplant | ADR 0009; die feste Tabelle (`run_systems`) reicht, bis ein Tick gemessen parallel lohnt |
-| **Wachmann-Szene mit Bild**: `guard_scene` über die Laufzeit zeichnen (GPU-2D-Licht, Phasen „Render vorbereiten“/„Render“ aus ADR 0009) | geplant | nächster Schritt Richtung Vertical Slice (Phase 4) |
+| **Wachmann-Szene mit Bild**: `guard_scene` über die Laufzeit zeichnen (GPU-2D-Licht, Phasen „Render vorbereiten“/„Render“ aus ADR 0009) | erledigt 2026-11-25 (Abschnitt 16) | – |
+| **Licht beeinflusst Wahrnehmung**: der Wachmann sieht in `guard_scene` unabhängig vom gezeichneten Licht; `SenseMap::light` aus den Lichtern der Szene speisen (CPU-Seite, deterministisch, nicht von der GPU zurücklesen) | offen | sobald Schleichen im Dunkeln gespielt werden soll |
+| **Fenster und Echtzeit-Host**: die Szene läuft offscreen und schreibt PNGs; Gerät und Shader-Pack kommen noch aus `knorke_gpu::test_support` | offen | mit dem ersten spielbaren Host (Phase 4) |
 | **`knorke-scene` und Agenten-CLI** (Phase 3): Szene als Daten statt als Rust-Code, `discover`/`inspect`/`mutate`/`validate` | geplant | nach der Szene mit Bild; `guard_scene` ist der erste Inhalt |
 | **Pipelining** Simulation Tick N+1 ∥ Render Frame N | geplant | nach erstem Vertical Slice messen |
 | **Handle-Reservierung aus parallelen Chunks** (atomarer Zähler in `Slots`) | offen | sobald ein System parallel spawnt |
