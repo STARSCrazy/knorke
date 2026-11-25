@@ -127,11 +127,13 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 name = "knorke-agent"
 version = "0.0.1"
 dependencies = [
+ "knorke-gpu",
  "knorke-integration",
  "knorke-replay",
  "knorke-runtime",
  "knorke-scene",
  "knorke-types",
+ "png",
  "schemars",
  "serde",
  "serde_json",
@@ -304,7 +306,6 @@ dependencies = [
  "knorke-contract-tests",
  "knorke-gpu",
  "knorke-integration",
- "knorke-light2d",
  "knorke-math",
  "knorke-observe",
  "knorke-replay",

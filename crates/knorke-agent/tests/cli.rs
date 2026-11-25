@@ -185,3 +185,79 @@ fn a_wrong_command_line_says_how_and_a_missing_file_where() {
     assert_eq!(answer["diagnostics"][0]["code"], "knorke.agent.io");
     assert_eq!(answer["diagnostics"][0]["path"], "no/such/file.json");
 }
+
+/// A picture of the scene, and a change to the lamp shows in it. Skips without a Vulkan
+/// device or the shader pack unless `KNORKE_REQUIRE_GPU=1`.
+#[cfg(feature = "gpu")]
+#[test]
+fn render_writes_a_picture_that_follows_the_scene() {
+    let dir = workspace("render");
+    let yard = path(&dir, "yard.json");
+    let shaders = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../target/shaders/knorke-chiaro.spirv.kpak"
+    );
+    let picture = |name: &str| -> Option<Vec<u8>> {
+        let out = path(&dir, name);
+        let (code, answer) = knorke(&["render", &yard, "--out", &out, "--shaders", shaders]);
+        if code != 0 {
+            let reason = answer["diagnostics"][0]["code"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let skippable = reason == "knorke.agent.no_gpu" || reason == "knorke.agent.no_shaders";
+            let required = std::env::var_os("KNORKE_REQUIRE_GPU").is_some_and(|v| v == "1");
+            assert!(skippable && !required, "render failed: {answer:#}");
+            eprintln!("skipped: {reason}");
+            return None;
+        }
+        assert_eq!(
+            (&answer["width"], &answer["height"], &answer["tick"]),
+            (&json!(256), &json!(160), &json!(0))
+        );
+        let mut reader = png::Decoder::new(std::fs::File::open(&out).unwrap())
+            .read_info()
+            .unwrap();
+        let mut pixels = vec![0; reader.output_buffer_size()];
+        reader.next_frame(&mut pixels).unwrap();
+        Some(pixels)
+    };
+    // Red, green and blue in the middle of cell (x, y), 16 pixels per cell.
+    let at = |pixels: &[u8], x: usize, y: usize| -> [u32; 3] {
+        let i = ((y * 16 + 8) * 256 + x * 16 + 8) * 4;
+        [0, 1, 2].map(|c| u32::from(pixels[i + c]))
+    };
+    let Some(warm) = picture("warm.png") else {
+        return;
+    };
+    // The lamp lights the cell in front of the guard, not the one behind the wall.
+    let (lit, shaded) = (at(&warm, 6, 5), at(&warm, 12, 5));
+    assert!(lit[0] > 2 * shaded[0], "lit {lit:?}, shaded {shaded:?}");
+    assert!(lit[0] > lit[2], "the lamp is warm: {lit:?}");
+
+    // The agent turns the lamp blue; the next picture shows it.
+    let changes = write(
+        &dir,
+        "blue.json",
+        &json!({ "base_revision": 0, "changes": [{
+            "kind": "component.set", "entity": "guard", "component": "knorke.stealth.lamp/1",
+            "value": { "radius": 9.0, "inner_angle": 28.0, "outer_angle": 45.0,
+                       "color": [0.3, 0.5, 1.0], "intensity": 1.6 },
+        }] }),
+    );
+    assert_eq!(knorke(&["mutate", &yard, &changes]).0, 0);
+    let blue = picture("blue.png").unwrap();
+    let lit = at(&blue, 6, 5);
+    assert!(lit[2] > lit[0], "the lamp is blue now: {lit:?}");
+    assert_eq!(at(&blue, 12, 5), shaded, "behind the wall nothing changed");
+}
+
+#[cfg(not(feature = "gpu"))]
+#[test]
+fn render_without_gpu_support_says_so() {
+    let dir = workspace("render_off");
+    let (yard, out) = (path(&dir, "yard.json"), path(&dir, "x.png"));
+    let (code, answer) = knorke(&["render", &yard, "--out", &out]);
+    assert_eq!(code, 1);
+    assert_eq!(answer["diagnostics"][0]["code"], "knorke.agent.no_gpu");
+}

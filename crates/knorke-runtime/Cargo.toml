@@ -16,7 +16,7 @@ knorke-replay = { workspace = true }
 # Draws the guard scene with the 2D GPU light (example `guard_scene_view`, test
 # `gpu_guard_scene`): needs a Vulkan device and the shader pack. The library itself has no
 # GPU code; the feature only switches the dev-dependencies on.
-gpu = ["knorke-gpu/sdl", "knorke-light2d/gpu", "knorke-integration/gpu"]
+gpu = ["knorke-gpu/sdl", "knorke-integration/stealth-view"]
 # `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.
 sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
 
@@ -26,7 +26,6 @@ knorke-integration = { workspace = true, default-features = false, features = ["
 knorke-scene = { workspace = true }
 # Its picture (feature `gpu`).
 knorke-gpu = { workspace = true, features = ["test-support"] }
-knorke-light2d = { workspace = true }
 knorke-math = { workspace = true }
 knorke-contract-tests = { path = "../../tests/contracts" }
 

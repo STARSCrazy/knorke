@@ -55,6 +55,8 @@ pub mod prelude;
 pub mod rules;
 #[cfg(feature = "stealth")]
 pub mod stealth;
+#[cfg(feature = "stealth-view")]
+pub mod stealth_view;
 #[cfg(feature = "ai")]
 pub mod walk;
 

@@ -25,7 +25,7 @@ Rust-first, agent-native, kompositionelle Game Engine. Fachmodule (Rendering, Be
 | `knorke-integration` | Verbindungscode zwischen den Modulen, Features je Profil: `ai` (Wahrnehmung → Gedächtnis → Navigation), `pixel` (Renderer + Licht) und `stealth` (Wachen und Eindringling, aus einer Szene gebaut); Prelude, Szenario- und Bildtests |
 | `knorke-runtime` | Laufzeit: fester Tick aus Host-Zeit (`FixedStep`), Frame-Ablauf um eine `Simulation` mit Commands am Tick-Anfang (`Runtime`), Systeme als Tabelle in fester Reihenfolge (ADR 0009) |
 | `knorke-scene` | Authoring: Szene als Text (`knorke.scene/1`), Komponenten als Rust-Typen mit JSON Schema, Änderungen nur als Change-Set (ganz oder gar nicht, mit Undo) (ADR 0018) |
-| `knorke-agent` | Agenten-Ebene: `discover`, `inspect`, `validate`, `mutate`, `execute` als Funktionen und als Kommandozeile `knorke`, Antworten in JSON (ADR 0018) |
+| `knorke-agent` | Agenten-Ebene: `discover`, `inspect`, `validate`, `mutate`, `execute`, `render` (PNG, Feature `gpu`) als Funktionen und als Kommandozeile `knorke`, Antworten in JSON (ADR 0018) |
 | `knorke-replay` | Replays: Aufzeichnung, Verifikation mit abweichendem Tick und Modul, Sprung zu Tick, Flight Recorder, Minimierung fehlerauslösender Commands |
 | `knorke-exec` | Executoren für `Parallel` auf Host-Seite: `Rayon` (Work-Stealing, Standard), `ScopedThreads` (ohne Abhängigkeit, nur für grobe Arbeit) |
 | `knorke-contract-tests` | crate-übergreifende Vertragstests (kein Kopieren, 0 Allokationen, Layouts), nicht ausgeliefert |

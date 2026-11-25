@@ -34,6 +34,8 @@ pixel = ["dep:knorke-math", "dep:knorke-render", "dep:knorke-lighting", "dep:kno
 # Profile `stealth`: a yard with guards and an intruder, built from a scene (knorke-scene) and
 # run by the runtime (ADR 0018). Not in default: it brings the text formats along.
 stealth = ["ai", "dep:knorke-replay", "dep:knorke-runtime", "dep:knorke-scene", "dep:serde", "dep:schemars"]
+# The stealth profile as a picture: `stealth_view` (needs `stealth` and `gpu`).
+stealth-view = ["stealth", "gpu"]
 # GPU 2D light: the pass plan of knorke-light2d and the post pass of knorke-post (not in default).
 gpu = ["dep:knorke-gpu", "dep:knorke-math", "dep:knorke-light2d", "dep:knorke-post", "knorke-light2d/gpu", "knorke-post/gpu"]
 # `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.

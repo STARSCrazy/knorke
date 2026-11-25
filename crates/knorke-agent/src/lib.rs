@@ -9,8 +9,14 @@
 //! - `mutate`: `knorke_scene::Scene::apply`: a change set, all or nothing, answered with its
 //!   undo.
 //! - [`execute`]: runs the scene headless for a number of ticks and reports what happened.
+//! - [`render`]: the same run, drawn after its last tick and written as a PNG (feature
+//!   `gpu`).
 //!
 //! For now the one profile is `knorke_integration::stealth`.
+
+mod render;
+
+pub use render::{DEFAULT_SHADERS, NO_GPU, NO_SHADERS, render};
 
 use std::path::Path;
 
@@ -37,7 +43,8 @@ pub const UNKNOWN_ENTITY: DiagnosticCode = DiagnosticCode::new("knorke.agent.unk
 pub const MAX_TICKS: u64 = 100_000;
 
 const USAGE_TEXT: &str = "knorke discover | inspect <scene> [entity] | validate <scene> | \
-    mutate <scene> <changes> [--undo <file>] | execute <scene> [--ticks <n>] [--orders <file>]";
+    mutate <scene> <changes> [--undo <file>] | execute <scene> [--ticks <n>] [--orders <file>] | \
+    render <scene> --out <file.png> [--ticks <n>] [--orders <file>] [--shaders <pack>]";
 
 /// One input of a run: at `tick` the intruder is told to walk to `goto`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -92,28 +99,39 @@ fn state_name(state: u32) -> &'static str {
         .unwrap_or("unknown")
 }
 
+/// The start of a headless run of `scene`: one tick per call.
+fn start(scene: &Scene) -> Result<Runtime<stealth::Sim>, Vec<Diagnostic>> {
+    let sim = stealth::build(scene)?;
+    Ok(Runtime::new(
+        sim,
+        NoRecord,
+        FixedStep::new(1, 1),
+        Tick::ZERO,
+    ))
+}
+
+/// Runs the next tick with the orders that name it.
+fn tick(rt: &mut Runtime<stealth::Sim>, orders: &[Order]) {
+    let now = rt.next_tick().0;
+    for order in orders.iter().filter(|o| o.tick == now) {
+        rt.submit(Command::Goto(Cell::new(order.goto[0], order.goto[1], 0)));
+    }
+    rt.tick();
+}
+
 /// Runs `scene` headless for `ticks` ticks with `orders` and reports the events, where
 /// everyone ended up and the checksum of the final state (equal runs have equal checksums).
 ///
 /// # Errors
 /// What `knorke_integration::stealth::build` reports for the scene.
 pub fn execute(scene: &Scene, orders: &[Order], ticks: u64) -> Result<Value, Vec<Diagnostic>> {
-    let sim = stealth::build(scene)?;
-    let names: Vec<String> = sim
-        .world
-        .actors
-        .guards
-        .iter()
-        .map(|g| g.name.clone())
-        .collect();
-    let mut rt = Runtime::new(sim, NoRecord, FixedStep::new(1, 1), Tick::ZERO);
+    let mut rt = start(scene)?;
+    let actors = &rt.sim.world.actors;
+    let names: Vec<String> = actors.guards.iter().map(|g| g.name.clone()).collect();
     let mut cursor = EventCursor::default();
     let mut events = Vec::new();
     for t in 0..ticks.min(MAX_TICKS) {
-        for order in orders.iter().filter(|o| o.tick == t) {
-            rt.submit(Command::Goto(Cell::new(order.goto[0], order.goto[1], 0)));
-        }
-        rt.tick();
+        tick(&mut rt, orders);
         let queue = &rt.sim.world.actors.events;
         for &e in queue.read(&mut cursor).since().unwrap_or_default() {
             events.push(match e {
@@ -205,17 +223,27 @@ fn operate(args: &[String]) -> Result<Value, Vec<Diagnostic>> {
             }
             Ok(json!({ "revision": scene.revision, "undo": undo }))
         }
-        (Some("execute"), Some(path)) => {
+        (Some(op @ ("execute" | "render")), Some(path)) => {
             let scene = read_scene(path).map_err(one)?;
-            let ticks = match option(args, "--ticks")? {
-                Some(n) => n.parse().map_err(|_| usage())?,
-                None => 60,
-            };
             let orders: Vec<Order> = match option(args, "--orders")? {
                 Some(file) => read_json(file).map_err(one)?,
                 None => Vec::new(),
             };
-            execute(&scene, &orders, ticks)
+            let ticks = option(args, "--ticks")?.map(|n| n.parse().map_err(|_| usage()));
+            if op == "execute" {
+                execute(&scene, &orders, ticks.transpose()?.unwrap_or(60))
+            } else {
+                let out = option(args, "--out")?.ok_or_else(usage)?;
+                let shaders = option(args, "--shaders")?;
+                // Without `--ticks` the picture shows the scene as it starts.
+                render(
+                    &scene,
+                    &orders,
+                    ticks.transpose()?.unwrap_or(0),
+                    shaders,
+                    out,
+                )
+            }
         }
         _ => Err(usage()),
     }

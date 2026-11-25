@@ -49,7 +49,7 @@ fn the_lamp_lights_the_yard_and_poses_blend_between_ticks() {
         return;
     };
     let counter = LiveCounter::new();
-    let mut view = View::new(Gpu::new(&device, &counter), pack, &view::yard());
+    let mut view = View::new(Gpu::new(&device, &counter), pack, &view::yard()).unwrap();
     assert_eq!(view.size(), (W, H));
     let out = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
     let mut frames = Vec::new();

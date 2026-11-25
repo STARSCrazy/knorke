@@ -20,6 +20,14 @@ knorke-integration = { workspace = true, default-features = false, features = ["
 serde = { workspace = true }
 serde_json = { workspace = true }
 schemars = { workspace = true }
+knorke-gpu = { workspace = true, optional = true }
+png = { version = "0.17", optional = true }
+
+[features]
+# `knorke render`: draws on a Vulkan device (needs the shader pack of `cargo xtask shaders`).
+gpu = ["dep:knorke-gpu", "knorke-gpu/sdl", "dep:png", "knorke-integration/stealth-view"]
+# `gpu` with SDL3 built from source and linked statically (needs CMake), as in knorke-gpu.
+sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
 
 [lints]
 workspace = true

@@ -62,10 +62,17 @@ Nichts davon wird von Hand doppelt gepflegt. Damit ist der in ADR 0004 vorgeschl
 - Ein Snapshot passt nur zu der Szene, aus der die Simulation gebaut wurde: Was die Szene festlegt (Mauern, Posten, Namen), steht nicht im Snapshot. `restore` lehnt eine andere Zahl von Wachen und Positionen außerhalb des Hofs ab. Eine Kennung der Szene im Replay-Kopf fehlt noch.
 - Diagnose-Codes dieser Stufe sind Vertrag: `knorke.scene.*` (malformed, unknown_schema, unknown_component, invalid_component, revision_mismatch, unknown_entity, duplicate_entity, missing_component), `knorke.stealth.*` (yard_count, yard_size, intruder_count, off_grid, in_wall, lamp_range), `knorke.agent.*` (io, malformed, usage, unknown_entity).
 
-## Bewusst nicht in Stufe 1
+## Stufe 2 (2026-11-25): `render`
+
+- `knorke render <scene> --out <bild.png> [--ticks n] [--orders datei] [--shaders pack]` spielt die Szene wie `execute` und schreibt das Bild nach dem letzten Tick als PNG (ohne `--ticks`: die Szene, wie sie startet). Antwort: Pfad, Breite, Höhe, Tick.
+- Das Zeichnen liegt als Bibliothek in `knorke_integration::stealth_view` (Features `stealth` + `gpu`, zusammen `stealth-view`); vorher war es Beispielcode. Die Kommandozeile spielt den Host (ADR 0002): Sie legt das Gerät an, submitted und liest zurück.
+- GPU ist ein Cargo-Feature von `knorke-agent` (`gpu`, `sdl-build-static`). Ohne das Feature, ohne Vulkan-Gerät oder ohne Shader-Paket antwortet `render` mit `knorke.agent.no_gpu` bzw. `knorke.agent.no_shaders`; alle anderen Operationen laufen ohne GPU.
+- Das Shader-Paket kommt aus `--shaders`, sonst aus `KNORKE_SHADERS`, sonst aus `target/shaders/knorke-chiaro.spirv.kpak` (`cargo xtask shaders`). Es ist SPIR-V, also wird ein Vulkan-Gerät verlangt.
+- Neue Codes: `knorke.agent.no_gpu`, `knorke.agent.no_shaders`, `knorke.stealth.view.invalid_scene`.
+
+## Bewusst nicht umgesetzt
 
 - **Mehrere Profile / Registrierung durch Module.** `knorke-agent` kennt fest das Profil `stealth`. Sobald es ein zweites gibt, melden Profile sich an (Capability-Manifest, ADR 0004).
-- **`render` als Operation.** Das Bild gibt es über das Beispiel `guard_scene_view`, das jetzt eine Szenen-Datei annimmt. Die Kommandozeile bleibt ohne GPU.
 - **`query`, `observe`, `verify`, `checkpoint`/`diff`** (Plan 8.1), Replay-Operationen (`replay.verify`, `replay.seek`), Agenten-Skripte als ein Batch.
 - **Prefabs, Assets, Referenzen zwischen Entities**, Migration zwischen Schema-Versionen.
 - **Änderungen an einer laufenden Simulation** (Hot-Reload): heute baut `execute` die Simulation jedes Mal neu aus der Szene.
