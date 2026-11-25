@@ -5,21 +5,9 @@ use super::squad::DangerReport;
 use super::test_support::*;
 use super::*;
 use crate::memory::Metric;
+use crate::test_util::{load_into, save};
 use knorke_grid::HexLayout;
-use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
-
-fn save<T: SnapshotValue>(v: &T) -> Vec<u8> {
-    let mut out = Vec::new();
-    v.put(&mut Writer::new(&mut out));
-    out
-}
-
-fn load_into<T: SnapshotValue>(v: &mut T, bytes: &[u8]) -> Result<(), SnapshotError> {
-    let mut r = Reader::new(bytes);
-    v.get_into(&mut r)?;
-    assert_eq!(r.remaining(), 0, "the whole snapshot is read");
-    Ok(())
-}
+use knorke_types::{Reader, SnapshotError, SnapshotValue};
 
 fn load<T: SnapshotValue>(bytes: &[u8]) -> Result<T, SnapshotError> {
     T::get(&mut Reader::new(bytes))
