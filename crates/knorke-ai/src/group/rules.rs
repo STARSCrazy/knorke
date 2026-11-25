@@ -113,7 +113,7 @@ use super::orders::{Channel, Status};
 use super::spots::{Spot, SpotPick, SpotTrace};
 use super::squad::{Goal, PlanError, PlanId, Squad, SquadTrace};
 use super::tactic::{Abort, Place, Tactic, Trigger};
-use crate::memory::{Area, Distance, Fact, Message, Metric, Pos, distance};
+use crate::memory::{Area, Distance, Fact, Message, Metric, Pos, dist_pos, distance, limit};
 use knorke_grid::HexLayout;
 use knorke_observe::{MapSink, NoopSink, Sink};
 
@@ -359,11 +359,8 @@ pub(super) fn walk_dist(
     b: Pos,
 ) -> Option<i128> {
     match rules.walk() {
-        None => Some(super::squad::dist(metric, a, b)),
-        Some(w) => w.distance(a, b).map(|c| {
-            let c = i128::from(c);
-            if metric == Metric::Euclid { c * c } else { c }
-        }),
+        None => Some(dist_pos(metric, a, b)),
+        Some(w) => w.distance(a, b).map(|c| limit(metric, c)),
     }
 }
 
@@ -716,11 +713,7 @@ pub(super) fn rank_spots<S: Sink<SpotTrace>>(
     sink: &mut S,
 ) -> SpotPick {
     let (skip, metric, radius) = at;
-    let limit = if metric == Metric::Euclid {
-        i128::from(radius) * i128::from(radius)
-    } else {
-        i128::from(radius)
-    };
+    let limit = limit(metric, radius);
     keys.clear();
     for (index, spot) in spots.iter().enumerate() {
         if radius < 0 || taken.get(index).copied().unwrap_or(false) {

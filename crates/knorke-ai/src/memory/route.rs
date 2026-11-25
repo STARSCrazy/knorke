@@ -61,6 +61,22 @@ pub fn distance(metric: Metric, dx: i64, dy: i64) -> i128 {
     }
 }
 
+/// The largest [`distance`] within radius `r` of `metric`: `r²` for
+/// [`Metric::Euclid`] (whose distance is squared), else `r`.
+pub(crate) fn limit(metric: Metric, r: impl Into<i128>) -> i128 {
+    let r = r.into();
+    if metric == Metric::Euclid { r * r } else { r }
+}
+
+/// [`distance`] from `a` to `b`.
+pub(crate) fn dist_pos(metric: Metric, a: Pos, b: Pos) -> i128 {
+    distance(
+        metric,
+        i64::from(b[0]) - i64::from(a[0]),
+        i64::from(b[1]) - i64::from(a[1]),
+    )
+}
+
 /// Picks recipients from `candidates` `(id, x, y)` for a message sent from
 /// `origin`, writing their ids to `out` (cleared first).
 ///
@@ -104,10 +120,7 @@ pub fn route(
             if r < 0 {
                 return;
             }
-            let limit = match metric {
-                Metric::Euclid => i128::from(r) * i128::from(r),
-                _ => i128::from(r),
-            };
+            let limit = limit(metric, r);
             out.extend(
                 candidates
                     .iter()

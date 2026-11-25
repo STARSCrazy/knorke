@@ -4,12 +4,7 @@
 use knorke_types::{Reader, SnapshotValue, Writer};
 
 use super::*;
-
-fn save<T: SnapshotValue>(v: &T) -> Vec<u8> {
-    let mut b = Vec::new();
-    Writer::new(&mut b).put(v);
-    b
-}
+use crate::test_util::save;
 
 fn load<T: SnapshotValue>(b: &[u8]) -> Result<T, knorke_types::SnapshotError> {
     let mut r = Reader::new(b);

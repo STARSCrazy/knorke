@@ -3,7 +3,7 @@
 //! mission scores them when a plan breaks or ends.
 
 use super::{Activity, Hooks, Mission, View};
-use crate::memory::{Fact, Metric, Pos, distance};
+use crate::memory::{Fact, Metric, Pos, dist_pos};
 use crate::mission::rules::{MissionRules, PlanCtx};
 use crate::mission::types::{
     Action, MissionConfig, MissionError, MissionEvent, MissionTrace, MotiveKind, Plan, Step,
@@ -539,11 +539,7 @@ impl Mission {
     /// The [`IN_DIST`] column from `at` to `to` (internal coordinates).
     fn dist_column(&self, at: Pos, to: Pos) -> i32 {
         let metric = self.config.metric;
-        let d = distance(
-            metric,
-            i64::from(to[0]) - i64::from(at[0]),
-            i64::from(to[1]) - i64::from(at[1]),
-        );
+        let d = dist_pos(metric, at, to);
         let d = if metric == Metric::Euclid {
             (d as u128).isqrt() as i128
         } else {
@@ -660,12 +656,7 @@ impl Mission {
             })
             .min_by_key(|f| {
                 let p = self.pos_in(f.pos);
-                let d = distance(
-                    self.config.metric,
-                    i64::from(p[0]) - i64::from(view.pos[0]),
-                    i64::from(p[1]) - i64::from(view.pos[1]),
-                );
-                (d, f.subject)
+                (dist_pos(self.config.metric, view.pos, p), f.subject)
             })
     }
 }

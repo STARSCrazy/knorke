@@ -3,22 +3,10 @@
 use super::*;
 use crate::memory::{Evict, Fact, Knowledge};
 use crate::mission::types::{Detour, Step};
-use knorke_types::{Reader, SnapshotError, SnapshotValue, Writer};
+use crate::test_util::{load_into, save};
+use knorke_types::{Reader, SnapshotError, SnapshotValue};
 
 const KIND: u32 = 0;
-
-fn bytes(m: &Mission) -> Vec<u8> {
-    let mut out = Vec::new();
-    Writer::new(&mut out).put(m);
-    out
-}
-
-fn restore(into: &mut Mission, data: &[u8]) -> Result<(), SnapshotError> {
-    let mut r = Reader::new(data);
-    into.get_into(&mut r)?;
-    assert_eq!(r.remaining(), 0);
-    Ok(())
-}
 
 fn fresh() -> Mission {
     Mission::new(MissionConfig::default(), Motive::guard_place([0, 0, 0])).unwrap()
@@ -78,7 +66,7 @@ fn drive(m: &mut Mission, k: &mut Knowledge, pos: &mut Pos, from: u32, to: u32) 
                 pos[2],
             ];
         }
-        out.push((action, events, bytes(m)));
+        out.push((action, events, save(m)));
     }
     out
 }
@@ -93,11 +81,11 @@ fn round_trip_at_every_tick_continues_identically() {
         let mut pos = [0, 0, 0];
         drive(&mut m, &mut k, &mut pos, 0, split);
         saw_detour |= matches!(m.activity, Activity::Detour | Activity::Returning);
-        let saved = bytes(&m);
+        let saved = save(&m);
 
         let mut copy = fresh();
-        restore(&mut copy, &saved).unwrap();
-        assert_eq!(bytes(&copy), saved, "split {split}");
+        load_into(&mut copy, &saved).unwrap();
+        assert_eq!(save(&copy), saved, "split {split}");
 
         let (mut k2, mut pos2) = (k.clone(), pos);
         let a = drive(&mut m, &mut k, &mut pos, split, END);
@@ -113,7 +101,7 @@ fn restore_into_a_used_mission_reuses_its_buffers() {
     let mut k = Knowledge::new(8, Evict::Oldest).unwrap();
     let mut pos = [0, 0, 0];
     drive(&mut src, &mut k, &mut pos, 0, 9);
-    let saved = bytes(&src);
+    let saved = save(&src);
 
     let mut dst = guard();
     let mut k2 = Knowledge::new(8, Evict::Oldest).unwrap();
@@ -122,24 +110,24 @@ fn restore_into_a_used_mission_reuses_its_buffers() {
     let caps = dst.capacities();
     let plan_ptr = dst.plan.steps().as_ptr();
     let events_ptr = dst.events.as_ptr();
-    restore(&mut dst, &saved).unwrap();
+    load_into(&mut dst, &saved).unwrap();
     assert_eq!(dst.capacities(), caps);
     assert_eq!(dst.plan.steps().as_ptr(), plan_ptr);
     assert_eq!(dst.events.as_ptr(), events_ptr);
-    assert_eq!(bytes(&dst), saved);
+    assert_eq!(save(&dst), saved);
 }
 
 #[test]
 fn get_builds_a_default_config_mission() {
     let m = guard();
-    let saved = bytes(&m);
+    let saved = save(&m);
     let got = Mission::get(&mut Reader::new(&saved)).unwrap();
-    assert_eq!(bytes(&got), saved);
+    assert_eq!(save(&got), saved);
 }
 
 /// `bad` is refused with `Invalid`, and the target is left without a plan and still ticks.
 fn assert_refused(bad: &[u8], mut into: Mission) {
-    let err = restore(&mut into, bad).unwrap_err();
+    let err = load_into(&mut into, bad).unwrap_err();
     assert!(matches!(err, SnapshotError::Invalid(_)), "{err:?}");
     assert!(into.plan().is_none());
     assert!(into.events.is_empty());
@@ -159,19 +147,19 @@ fn running() -> Mission {
 fn step_index_out_of_range_is_refused() {
     let mut m = running();
     m.step.index = 3;
-    assert_refused(&bytes(&m), guard());
+    assert_refused(&save(&m), guard());
 }
 
 #[test]
 fn too_many_steps_is_refused() {
     let mut m = running();
     m.plan.set_steps(&[Step::pause(); 17], true);
-    assert_refused(&bytes(&m), guard());
+    assert_refused(&save(&m), guard());
 }
 
 #[test]
 fn bad_tag_is_refused() {
-    let mut data = bytes(&running());
+    let mut data = save(&running());
     data[0] = 9; // the motive kind
     assert_refused(&data, guard());
 }
@@ -181,28 +169,28 @@ fn too_many_events_are_refused() {
     let mut m = running();
     m.events.clear();
     m.events.extend([MissionEvent::Looped; MAX_EVENTS + 1]);
-    assert_refused(&bytes(&m), guard());
+    assert_refused(&save(&m), guard());
 }
 
 #[test]
 fn search_point_out_of_range_is_refused() {
     let mut m = running();
     m.step.search_point = m.search_points();
-    assert_refused(&bytes(&m), guard());
+    assert_refused(&save(&m), guard());
 }
 
 #[test]
 fn resume_into_a_detour_is_refused() {
     let mut m = running();
     m.detour.resume = Activity::Detour;
-    assert_refused(&bytes(&m), guard());
+    assert_refused(&save(&m), guard());
 }
 
 #[test]
 fn plan_activity_without_plan_is_refused() {
     let mut m = running();
     m.has_plan = false;
-    assert_refused(&bytes(&m), guard());
+    assert_refused(&save(&m), guard());
 }
 
 #[test]
@@ -212,15 +200,15 @@ fn other_playbook_size_is_refused() {
         ..MissionConfig::default()
     };
     let other = Mission::new(config, Motive::guard_place([0, 0, 0])).unwrap();
-    assert_refused(&bytes(&running()), other);
+    assert_refused(&save(&running()), other);
 }
 
 #[test]
 fn truncated_input_is_refused_safely() {
-    let data = bytes(&running());
+    let data = save(&running());
     for len in 0..data.len() {
         let mut into = guard();
-        assert!(restore(&mut into, &data[..len]).is_err());
+        assert!(load_into(&mut into, &data[..len]).is_err());
         assert!(into.plan().is_none());
     }
 }

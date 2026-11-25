@@ -204,48 +204,35 @@ impl Knowledge {
         }
     }
 
-    /// Renews the time of a fact (`seen_at = now`). False if unknown.
-    pub fn touch(&mut self, subject: u32, kind: u32, now: u32) -> bool {
+    /// Applies `f` to the fact if known; false if unknown.
+    fn update(&mut self, subject: u32, kind: u32, f: impl FnOnce(&mut Fact)) -> bool {
         match self.find(subject, kind) {
             Some(i) => {
-                self.items[i].seen_at = now;
+                f(&mut self.items[i]);
                 true
             }
             None => false,
         }
+    }
+
+    /// Renews the time of a fact (`seen_at = now`). False if unknown.
+    pub fn touch(&mut self, subject: u32, kind: u32, now: u32) -> bool {
+        self.update(subject, kind, |f| f.seen_at = now)
     }
 
     /// Sets the place of a fact. False if unknown.
     pub fn set_pos(&mut self, subject: u32, kind: u32, pos: Pos) -> bool {
-        match self.find(subject, kind) {
-            Some(i) => {
-                self.items[i].pos = pos;
-                true
-            }
-            None => false,
-        }
+        self.update(subject, kind, |f| f.pos = pos)
     }
 
     /// Sets the `data` of a fact. False if unknown.
     pub fn set_data(&mut self, subject: u32, kind: u32, data: u32) -> bool {
-        match self.find(subject, kind) {
-            Some(i) => {
-                self.items[i].data = data;
-                true
-            }
-            None => false,
-        }
+        self.update(subject, kind, |f| f.data = data)
     }
 
     /// Sets the `strength` of a fact. False if unknown.
     pub fn set_strength(&mut self, subject: u32, kind: u32, strength: u32) -> bool {
-        match self.find(subject, kind) {
-            Some(i) => {
-                self.items[i].strength = strength;
-                true
-            }
-            None => false,
-        }
+        self.update(subject, kind, |f| f.strength = strength)
     }
 
     /// Forgets one fact. False if unknown.

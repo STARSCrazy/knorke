@@ -11,7 +11,7 @@ use super::rules::{
 };
 use super::spots::Spot;
 use super::squad::{Goal, PlanError, PlanId, Squad, SquadConfig, SquadTrace};
-use crate::memory::{Area, Distance, Fact, Message, Metric, Pos, distance};
+use crate::memory::{Area, Distance, Fact, Message, Metric, Pos, dist_pos, limit};
 use knorke_grid::HexLayout;
 use knorke_observe::{MapSink, NoopSink, Sink};
 
@@ -852,18 +852,7 @@ impl Crew {
                 .distance(from, to)
                 .is_some_and(|d| d <= self.arrive_radius);
         }
-        let d = distance(
-            self.metric,
-            i64::from(spot[0]) - i64::from(at[0]),
-            i64::from(spot[1]) - i64::from(at[1]),
-        );
-        let r = i128::from(self.arrive_radius);
-        let limit = if self.metric == Metric::Euclid {
-            r * r
-        } else {
-            r
-        };
-        d <= limit
+        dist_pos(self.metric, at, spot) <= limit(self.metric, self.arrive_radius)
     }
 
     fn pos_in(&self, p: Pos) -> Pos {

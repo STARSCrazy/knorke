@@ -130,13 +130,8 @@ impl SnapshotValue for Decider {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::save;
     use crate::{INPUT_COUNT_OPTION, INPUT_SINCE_OPTION, ONE};
-
-    fn save<T: SnapshotValue>(v: &T) -> Vec<u8> {
-        let mut b = Vec::new();
-        Writer::new(&mut b).put(v);
-        b
-    }
 
     fn decider() -> Decider {
         let mut d = Decider::new();

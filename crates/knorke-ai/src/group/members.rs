@@ -1,5 +1,5 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax-decide/src/group/members.rs.
-use crate::memory::{Metric, Pos, ZeroCapacity, distance};
+use crate::memory::{Metric, Pos, ZeroCapacity, dist_pos, limit};
 
 /// What a member currently does for the group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -167,19 +167,13 @@ pub fn gather(
     if radius < 0 || max == 0 {
         return;
     }
-    let limit = if metric == Metric::Euclid {
-        i128::from(radius) * i128::from(radius)
-    } else {
-        i128::from(radius)
-    };
+    let limit = limit(metric, radius);
     let mut hits: Vec<(i128, u32)> = Vec::with_capacity(candidates.len());
     for c in candidates {
         if c.faction != faction || (free_only && !c.free) {
             continue;
         }
-        let dx = i64::from(c.pos[0]) - i64::from(initiator[0]);
-        let dy = i64::from(c.pos[1]) - i64::from(initiator[1]);
-        let d = distance(metric, dx, dy);
+        let d = dist_pos(metric, initiator, c.pos);
         if d <= limit {
             hits.push((d, c.id));
         }
