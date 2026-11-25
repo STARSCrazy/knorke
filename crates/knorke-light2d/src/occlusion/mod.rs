@@ -41,7 +41,8 @@
 //! - The application sprite mask (`occlusion_mask.frag`, E21) is drawn by
 //!   [`OcclusionMask::record_with_sprite`] after the obstacles, into the scene rectangle of the
 //!   mask (since P31; the plan redraws that rectangle every frame).
-//! - Not ported yet: the caster class masks of filtered shadows (E53), open in the plan.
+//! - The caster class masks of filtered shadows (E53, [`OcclusionMask::prepare_casters`]) are
+//!   drawn fully every frame, as in Chiaro (E76: an incremental caster field only if measured).
 //! - The stage has no snapshot (it is a cache of GPU contents); after a restore call
 //!   [`OcclusionMask::invalidate`].
 

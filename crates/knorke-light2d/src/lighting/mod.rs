@@ -23,8 +23,8 @@
 //!   world map and pattern obstacles (P28, P29). Their programs exist; the stage sets neither
 //!   `Medium` nor `Pattern`.
 //! - Shadowed lights with a caster filter (E53) need the caster maps of their class in
-//!   `ShadowMaps::casters`. The occlusion stage (P23) does not build them yet; such frames fail
-//!   with a diagnostic instead of drawing with the wrong shadows.
+//!   `ShadowMaps::casters` (built by `OcclusionMask::prepare_casters`); without them the frame
+//!   fails with a diagnostic instead of drawing with the wrong shadows.
 
 mod params;
 mod plan;

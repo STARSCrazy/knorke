@@ -40,8 +40,10 @@
 //! - Communication is the fixed order of the stages, each one's result passed on as a value; no
 //!   event bus and no callbacks. Frame warnings ([`frame_warnings`](crate::frame_warnings)) are
 //!   evaluated in `record` and returned with it.
-//! - Not built (and not blocked): medium (P12, P29, P30), patterns (P15, P28), caster class masks
-//!   (E53), ring lights (P21). Their inputs are fields still to come in
+//! - The caster class masks of filtered shadows (E53) are part of the occlusion stage: no
+//!   extra input, nothing extra without a visible filtered light.
+//! - Not built (and not blocked): medium (P12, P29, P30), patterns (P15, P28), ring lights
+//!   (P21). Their inputs are fields still to come in
 //!   [`PassFrame`] and [`SceneStores`] and stages between steps 2 and 5; the stages already take
 //!   `None` for them.
 

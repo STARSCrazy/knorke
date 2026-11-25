@@ -1,15 +1,19 @@
 // P22 reference (Knorke Chiaro port): renders two obstacle scenes with C++ Chiaro (9bc5b9b) and writes the
-// occlusion mask (R8G8_UNORM, 192x128) and, for the second scene, the height texture (RGBA16F) as raw bytes.
+// occlusion mask (R8G8_UNORM, 192x128) and, for the scenes in height mode, the height texture (RGBA16F) as raw
+// bytes. The third scene adds the application's sprite mask (CHI_Frame::buffers.occlusion) in height mode
+// (occlusion_mask_height.frag).
 //   mask_ref <outdir>
-// Writes <outdir>/mask_scene.mask.bin, <outdir>/height_scene.mask.bin, <outdir>/height_scene.height.bin.
+// Writes <outdir>/mask_scene.mask.bin, <outdir>/height_scene.mask.bin, <outdir>/height_scene.height.bin,
+// <outdir>/sprite_height.mask.bin, <outdir>/sprite_height.height.bin.
 // Uses Chiaro's internal context and test harness (like tests/gpu/OcclusionTests.cpp). Build (MSVC x64, against an
 // out-of-tree Chiaro 9bc5b9b Release build <b> of source tree <c>; nothing in <c> is changed):
 //   cl /O2 /std:c++20 /EHsc /utf-8 /MD /I<c>\src /I<c>\include /I<b>\generated /I<b>\_deps\sdl3-build\include-revision
 //      /I<b>\_deps\sdl3-src\include /I<c>\tests\gpu mask_ref.cpp <c>\tests\gpu\GpuTestHarness.cpp
 //      /link <b>\chiaro_core.dir\Release\chiaro_core.lib <b>\lib\Release\Chiaro.lib <b>\lib\Release\SDL3.lib
 // Run next to Chiaro.dll and SDL3.dll with CHIARO_TEST_GPU_DRIVER=vulkan. Captured 2026-11-24 on an AMD Radeon
-// RX 6700 XT (Vulkan). The scenes are mirrored in crates/knorke-light2d/tests/gpu_occluder_raster.rs
-// (`scene_mask`, `scene_height`); change both together.
+// RX 6700 XT (Vulkan); sprite_height added 2026-11-25 on the same machine. The scenes are mirrored in
+// crates/knorke-light2d/tests/gpu_occluder_raster.rs (`scene_mask`, `scene_height`) and
+// crates/knorke-light2d/tests/gpu_occlusion_mask.rs (`sprite_height`); change both together.
 
 #include "GpuTestHarness.hpp"
 #include "core/Context.hpp"
@@ -77,9 +81,15 @@ struct Scene
         }
     }
 
-    void Render()
+    /** sprite: optional RGBA8 occlusion buffer of the scene size (alpha at or above 0.5 occludes). */
+    void Render(const std::vector<Uint8> *sprite = nullptr)
     {
         const Uint32 w = 128, h = 64;
+        SDL_GPUTexture *occlusion = nullptr;
+        if (sprite) {
+            occlusion = CreateTestTexture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+            UploadPixels(occlusion, w, h, *sprite);
+        }
         SDL_GPUTexture *scene = CreateTestTexture(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
                                                   SDL_GPU_TEXTUREUSAGE_SAMPLER);
         SDL_GPUTexture *target = CreateTestTexture(
@@ -92,6 +102,9 @@ struct Scene
         info.scene = CHI_Texture{scene, nullptr, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, w, h};
         info.target = CHI_Texture{target, nullptr, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, w, h};
         info.projection = &projection;
+        if (occlusion) {
+            info.buffers.occlusion = CHI_Texture{occlusion, nullptr, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, w, h};
+        }
         if (!ctx->Render(cmd, info)) {
             std::fprintf(stderr, "render failed: %s\n", SDL_GetError());
             std::abort();
@@ -101,6 +114,9 @@ struct Scene
         SDL_ReleaseGPUFence(TestDevice(), fence);
         ReleaseTestTexture(scene);
         ReleaseTestTexture(target);
+        if (occlusion) {
+            ReleaseTestTexture(occlusion);
+        }
     }
 
     void Dump(const std::string &path, const std::vector<Uint8> &bytes) const
@@ -203,6 +219,27 @@ int main(int argc, char **argv)
         s.Render();
         s.DumpMask(out + "/height_scene.mask.bin");
         s.DumpHeight(out + "/height_scene.height.bin");
+    }
+    {
+        // sprite_height: a finite obstacle switches on height mode; the sprite mask has an opaque block, a block
+        // at alpha 128 (occludes) and one at alpha 127 (does not), one of them over the obstacle.
+        Scene s;
+        s.Light();
+        s.Polygon({10, 10, 30, 10, 30, 30, 10, 30}, 0, 0, 0, 1.0f, 0, 3.0f, 1.0f);
+        std::vector<Uint8> sprite(static_cast<size_t>(128) * 64 * 4, 0);
+        const auto block = [&](Uint32 x0, Uint32 y0, Uint32 x1, Uint32 y1, Uint8 alpha) {
+            for (Uint32 y = y0; y < y1; ++y) {
+                for (Uint32 x = x0; x < x1; ++x) {
+                    sprite[(static_cast<size_t>(y) * 128 + x) * 4 + 3] = alpha;
+                }
+            }
+        };
+        block(20, 20, 40, 34, 255);
+        block(60, 8, 72, 40, 128);
+        block(90, 30, 110, 50, 127);
+        s.Render(&sprite);
+        s.DumpMask(out + "/sprite_height.mask.bin");
+        s.DumpHeight(out + "/sprite_height.height.bin");
     }
     ShutdownTestDevice();
     return 0;

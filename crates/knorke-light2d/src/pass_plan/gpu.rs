@@ -268,7 +268,7 @@ impl ShadowState {
             any_partial: self.any_partial,
             shadow_top: self.shadow_top,
             scene_max_top: self.scene_max_top,
-            casters: [None, None],
+            casters: [mask.caster_maps(0), mask.caster_maps(1)],
         })
     }
 }
@@ -490,6 +490,7 @@ impl<'d> PassPlan<'d> {
                 &input,
                 height_mode,
             )?;
+            self.occlusion.prepare_casters(self.lights.caster_classes)?;
             if update != MaskUpdate::Reused {
                 let min_radius = thin_circle_radius(frame.projection, &input.domain);
                 self.geometry.prepare(

@@ -1,6 +1,7 @@
 //! P23 on a real GPU: the occlusion mask cache and its jump flooding distance field
 //! (`knorke_light2d::occlusion::OcclusionMask`), read back and compared with C++ Chiaro
-//! (chiaro @ 9bc5b9b, dumps of `tests/golden/chiaro/field/field_ref.cpp`, zlib license) and
+//! (chiaro @ 9bc5b9b, dumps of `tests/golden/chiaro/field/field_ref.cpp` and, for the sprite mask
+//! in height mode, `occluder/mask_ref.cpp`; zlib license) and
 //! with full rebuilds of the same state.
 //!
 //! The scene is `scene_mask` of P22 (128x64 scene, 32-texel margin band, so the mask is
@@ -13,9 +14,10 @@ mod common;
 
 use common::{at, polygon, programs, rect_xy, scene_mask_into};
 use knorke_gpu::test_support::{
-    assert_same_bytes, golden_bytes, half_to_f32, queue_download, read_download, with_chiaro_pack,
+    assert_same_bytes, golden_bytes, half_to_f32, queue_download, read_download, sampled_rgba8,
+    with_chiaro_pack,
 };
-use knorke_gpu::{CommandBuffer, Filter, Gpu, PipelineCache, Samplers, ShaderLibrary};
+use knorke_gpu::{CommandBuffer, Filter, Gpu, PipelineCache, Samplers, ShaderLibrary, TextureRef};
 use knorke_light2d::obstacle::ObstacleCommon;
 use knorke_light2d::occluder_raster::{
     NoPatterns, OCCLUDER_PROGRAMS, OccluderGeometry, OccluderPrograms, TileOccluders,
@@ -76,7 +78,18 @@ impl<'d> Host<'d> {
     }
 
     fn frame(&mut self, store: &ObstacleStore, height_mode: bool) -> Out {
-        let input = MaskPlanInput::new(store, &self.projection, 128, 64, 1.0);
+        self.frame_with_sprite(store, height_mode, None)
+    }
+
+    /// A frame with the application's sprite mask `sprite` (scene size) drawn after the obstacles.
+    fn frame_with_sprite(
+        &mut self,
+        store: &ObstacleStore,
+        height_mode: bool,
+        sprite: Option<TextureRef<'_>>,
+    ) -> Out {
+        let mut input = MaskPlanInput::new(store, &self.projection, 128, 64, 1.0);
+        input.sprite = sprite.is_some();
         let update = self
             .occlusion
             .prepare(&mut self.shaders, &mut self.pipelines, &input, height_mode)
@@ -106,12 +119,13 @@ impl<'d> Host<'d> {
         }
         let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
         self.occlusion
-            .record(
+            .record_with_sprite(
                 &mut cmd,
                 &self.pipelines,
                 self.samplers.sampler(Filter::Nearest),
                 &mut self.geometry,
                 &mut self.tiles,
+                sprite,
             )
             .unwrap();
         self.occlusion.commit();
@@ -202,6 +216,50 @@ fn the_full_frame_matches_cpp_chiaro_texel_for_texel() {
 
 /// The frames of `field_ref.cpp`: full, reused, a whole-pixel pan with the bar moved, a
 /// fractional pan.
+/// `sprite_height` of `tests/golden/chiaro/occluder/mask_ref.cpp`: a finite obstacle (height
+/// mode) and a sprite mask with an opaque block over it, a block at alpha 128 (occludes) and one
+/// at alpha 127 (does not).
+#[test]
+fn the_sprite_mask_in_height_mode_matches_cpp_chiaro_texel_for_texel() {
+    with_host(|host, _| {
+        let mut store = ObstacleStore::new();
+        polygon(
+            &mut store,
+            &rect_xy(10.0, 10.0, 30.0, 30.0),
+            ObstacleCommon {
+                height: 3.0,
+                base_height: 1.0,
+                ..Default::default()
+            },
+        );
+        let mut px = vec![0u8; 128 * 64 * 4];
+        let blocks = [
+            (20, 20, 40, 34, 255),
+            (60, 8, 72, 40, 128),
+            (90, 30, 110, 50, 127),
+        ];
+        for (x0, y0, x1, y1, alpha) in blocks {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    px[(y * 128 + x) * 4 + 3] = alpha;
+                }
+            }
+        }
+        let sprite = sampled_rgba8(host.gpu, 128, 64, &px);
+        let out = host.frame_with_sprite(&store, true, Some(sprite.texture_ref()));
+        assert_same_bytes(
+            "sprite_height mask",
+            &out.mask,
+            &golden_bytes("occluder", "sprite_height.mask.bin"),
+        );
+        assert_same_bytes(
+            "sprite_height height",
+            &out.height,
+            &golden_bytes("occluder", "sprite_height.height.bin"),
+        );
+    });
+}
+
 #[test]
 fn the_cached_sequence_matches_cpp_chiaro_texel_for_texel() {
     with_host(|host, _| {

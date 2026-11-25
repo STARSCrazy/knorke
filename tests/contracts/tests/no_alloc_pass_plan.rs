@@ -1,8 +1,8 @@
 //! Contract: the pass plan of `knorke-light2d` (P31) allocates nothing on the heap in the steady
 //! state: once warm, `PassPlan::prepare` and `PassPlan::record` of an unchanged scene with
-//! lights, a shadow-casting light over an obstacle, ambient zones, a sprite mask and every debug
-//! check (the GPU one with its readback included) make no Rust
-//! allocation (ADR 0006). Command buffer acquire and submit are the host's and stay outside.
+//! lights, a shadow-casting light over an obstacle, one with a caster filter (E53), ambient
+//! zones, a sprite mask and every debug check (the GPU one with its readback included) make no
+//! Rust allocation (ADR 0006). Command buffer acquire and submit are the host's and stay outside.
 //!
 //! Needs the feature `gpu` of this crate, a Vulkan device and the shader pack of
 //! `cargo xtask shaders`; skips without them (a failure with `KNORKE_REQUIRE_GPU=1`).
@@ -24,7 +24,7 @@ use knorke_gpu::{
 use knorke_light2d::ambient_zone::{AmbientZoneParams, ZoneShape, make_stored_zone};
 use knorke_light2d::ambient_zone_store::AmbientZoneStore;
 use knorke_light2d::frame_warnings::DebugChecks;
-use knorke_light2d::light::{LightDesc, LightType};
+use knorke_light2d::light::{LightDesc, LightType, ShadowFilter};
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassFrame, PassPlan, SceneStores};
 use knorke_light2d::settings::LightSettings;
@@ -78,11 +78,17 @@ fn steady_state_pass_plan_allocates_nothing() {
     let (w, h) = (96u32, 48u32);
 
     let mut lights = LightStore::new();
-    for (x, shadows) in [(30.0, false), (70.0, true)] {
+    // The third light shadows with static casters only: its caster class mask and field (E53).
+    for (x, shadows, filter) in [
+        (30.0, false, ShadowFilter::All),
+        (70.0, true, ShadowFilter::All),
+        (50.0, true, ShadowFilter::StaticOnly),
+    ] {
         let mut d = LightDesc::new(LightType::Point);
         d.position = At::new(Vec2::new(x, 14.0));
         d.radius = 30.0;
         d.cast_shadows = shadows;
+        d.shadow_filter = filter;
         lights.create(&d, &NoResources).unwrap();
     }
     let mut obstacles = ObstacleStore::new();

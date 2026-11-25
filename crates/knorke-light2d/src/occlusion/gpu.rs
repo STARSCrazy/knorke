@@ -1,6 +1,7 @@
 // Origin: chiaro @ 9bc5b9b, src/rendering/OcclusionMask.hpp and OcclusionMask.cpp (Begin, Plan,
 // PreparePipelines, RecordMask, RecordShiftCopy, Commit), src/rendering/SdfShadows.hpp and
-// SdfShadows.cpp (Prepare, Record, RecordPasses, FieldPass, DrawTexelRects) and
+// SdfShadows.cpp (Prepare, Record, RecordPasses, FieldPass, DrawTexelRects), the caster classes
+// of E53 (OcclusionMask.cpp PrepareCasters, RecordCasters, RecordCaster) and
 // src/gpu/PipelineCache.cpp (the program table entries MaskClearRects, MaskClearRectsHeight,
 // JfaSeed, JfaStep, JfaDistance, JfaSeedRects, JfaStepRects, JfaDistanceRects, OcclusionMask,
 // OcclusionMaskHeight); the sprite mask of OcclusionMask.cpp (PreparePipelines, DrawSources,
@@ -15,6 +16,7 @@
 //! buffer; nothing here submits, presents or reads back.
 
 use super::{JfaParams, RectParams, ShiftCopy, UPDATE_LIMITS, jfa_steps};
+use crate::lighting::CasterMaps;
 use crate::occluder_raster::{
     DomainParams, HEIGHT_FORMAT, INFINITE_TOP, MASK_FORMAT, OccluderGeometry, TileOccluders,
 };
@@ -170,8 +172,36 @@ pub struct MaskRecord {
     pub uploads: u32,
     /// Draws of obstacle sources into the mask.
     pub draws: u32,
-    /// Field texels the distance pass wrote.
+    /// Field texels the distance passes wrote (the caster fields included).
     pub field_texels: u64,
+    /// Caster class fields built (E53): 0, 1 or 2.
+    pub caster_fields: u32,
+}
+
+/// The mask, field and height targets of one caster class (E53).
+#[derive(Debug)]
+struct CasterTargets<'d> {
+    mask: RenderTarget<'d>,
+    field: RenderTarget<'d>,
+    height: RenderTarget<'d>,
+}
+
+impl CasterTargets<'_> {
+    fn release(&mut self) {
+        self.mask.release();
+        self.field.release();
+        self.height.release();
+    }
+}
+
+/// The sources one mask pass draws: obstacles of the chosen sets and, with the static set, the
+/// tile grids and the sprite mask.
+struct Sources<'a, 'd> {
+    geometry: &'a OccluderGeometry<'d>,
+    tiles: &'a TileOccluders<'d>,
+    sprite: Option<TextureRef<'a>>,
+    static_set: bool,
+    dynamic_set: bool,
 }
 
 /// One target of a ping-pong pair or the seeds.
@@ -233,11 +263,15 @@ pub struct OcclusionMask<'d> {
     height_recorded: bool,
     domain: OcclusionDomain,
     params: DomainParams,
-    rects: RectParams,
     /// The prepared frame draws the application's sprite mask (E21).
     sprite: bool,
     /// The anchor remainder of the prepared frame, for the sprite rectangle.
     remainder: [f32; 2],
+    /// Caster classes `[Static, Dynamic]` (E53): own masks and fields, each drawn fully every
+    /// frame from the sources of its class; released while no visible light uses the class.
+    casters: [CasterTargets<'d>; 2],
+    /// The caster classes of the prepared frame (bit 0 static, bit 1 dynamic).
+    caster_classes: u32,
 }
 
 impl<'d> OcclusionMask<'d> {
@@ -261,9 +295,14 @@ impl<'d> OcclusionMask<'d> {
             height_recorded: false,
             domain: OcclusionDomain::new(1, 1, 1.0),
             params: DomainParams::default(),
-            rects: RectParams::new(),
             sprite: false,
             remainder: [0.0; 2],
+            casters: [(); 2].map(|()| CasterTargets {
+                mask: RenderTarget::new(gpu),
+                field: RenderTarget::new(gpu),
+                height: RenderTarget::new(gpu),
+            }),
+            caster_classes: 0,
         }
     }
 
@@ -300,6 +339,7 @@ impl<'d> OcclusionMask<'d> {
         self.prepared = None;
         self.recorded = false;
         self.last_update = MaskUpdate::Full;
+        self.caster_classes = 0;
         let d = input.domain;
         let mut reallocated = false;
         for i in 0..2 {
@@ -342,6 +382,39 @@ impl<'d> OcclusionMask<'d> {
         }
         self.prepared = Some(update);
         Ok(update)
+    }
+
+    /// Filtered shadows (E53), after [`prepare`](Self::prepare): ensures the mask, field and (in
+    /// height mode) height targets of every caster class in `classes`
+    /// ([`LightList::caster_classes`](crate::light_culling::LightList::caster_classes): bit 0
+    /// static, bit 1 dynamic) and releases the others, so a frame without filtered lights holds
+    /// and draws nothing extra. The classes draw with the pipelines of the full mask.
+    ///
+    /// # Errors
+    /// Not prepared, or creating a texture failed.
+    pub fn prepare_casters(&mut self, classes: u32) -> Result<(), Diagnostic> {
+        if self.prepared.is_none() {
+            return Err(Diagnostic::error(
+                NOT_PREPARED,
+                "prepare_casters needs a prepared frame",
+            ));
+        }
+        let d = self.domain;
+        for (c, t) in self.casters.iter_mut().enumerate() {
+            if classes & (1 << c) == 0 {
+                t.release();
+                continue;
+            }
+            t.mask.ensure(d.width, d.height, MASK_FORMAT)?;
+            t.field.ensure(d.width, d.height, FIELD_FORMAT)?;
+            if self.height_mode {
+                t.height.ensure(d.width, d.height, HEIGHT_FORMAT)?;
+            } else {
+                t.height.release();
+            }
+        }
+        self.caster_classes = classes & 3;
+        Ok(())
     }
 
     /// The domain parameters of the prepared frame, for the obstacle stages (the same values
@@ -401,6 +474,8 @@ impl<'d> OcclusionMask<'d> {
         }
         let mut out = MaskRecord::default();
         if update == MaskUpdate::Reused {
+            // The sources of the frame that built the mask still hold (Chiaro OcclusionStage).
+            self.record_casters(cmd, pipelines, nearest, geometry, tiles, sprite, &mut out)?;
             self.recorded = true;
             return Ok(out);
         }
@@ -435,34 +510,88 @@ impl<'d> OcclusionMask<'d> {
             }
         }
 
-        out.draws = self.record_mask(cmd, pipelines, nearest, geometry, tiles, sprite, local)?;
-        out.field_texels = self.record_field(cmd, pipelines, nearest, local)?;
+        let t = self.target;
+        let mask = view(&self.mask[t], "mask")?;
+        let height = self
+            .height_mode
+            .then(|| view(&self.height[t], "height"))
+            .transpose()?;
+        let sources = Sources {
+            geometry,
+            tiles,
+            sprite,
+            static_set: true,
+            dynamic_set: true,
+        };
+        out.draws = self.record_mask(cmd, pipelines, nearest, &sources, mask, height, local)?;
+        let field = view(&self.field[t], "field")?;
+        out.field_texels = self.record_field(cmd, pipelines, nearest, mask, field, local)?;
+        self.record_casters(cmd, pipelines, nearest, geometry, tiles, sprite, &mut out)?;
         self.recorded = true;
         Ok(out)
     }
 
-    #[allow(clippy::too_many_arguments)] // the mask pass draws every source: all of it is needed
-    fn record_mask(
-        &mut self,
+    /// Chiaro `RecordCasters`: every prepared caster class gets its mask cleared and drawn from
+    /// the sources of its class (static: static shapes, tile grids, the sprite mask; dynamic:
+    /// dynamic shapes) and its field rebuilt with fullscreen passes.
+    #[allow(clippy::too_many_arguments)] // the caster passes draw every source: all of it is needed
+    fn record_casters(
+        &self,
         cmd: &mut CommandBuffer<'_>,
         pipelines: &PipelineCache<'_>,
         nearest: SamplerRef<'_>,
         geometry: &OccluderGeometry<'_>,
         tiles: &TileOccluders<'_>,
         sprite: Option<TextureRef<'_>>,
+        out: &mut MaskRecord,
+    ) -> Result<(), Diagnostic> {
+        for (c, t) in self.casters.iter().enumerate() {
+            if self.caster_classes & (1 << c) == 0 {
+                continue;
+            }
+            let mask = view(&t.mask, "caster mask")?;
+            let height = self
+                .height_mode
+                .then(|| view(&t.height, "caster height"))
+                .transpose()?;
+            let sources = Sources {
+                geometry,
+                tiles,
+                sprite,
+                static_set: c == 0,
+                dynamic_set: c == 1,
+            };
+            out.draws +=
+                self.record_mask(cmd, pipelines, nearest, &sources, mask, height, false)?;
+            let field = view(&t.field, "caster field")?;
+            out.field_texels += self.record_field(cmd, pipelines, nearest, mask, field, false)?;
+            out.caster_fields += 1;
+        }
+        Ok(())
+    }
+
+    /// One mask pass into `mask` (and `height`): local (clear the changed rectangles, keep the
+    /// rest) or full (clear everything), then the sources.
+    #[allow(clippy::too_many_arguments)] // one pass over every source: all of it is needed
+    fn record_mask(
+        &self,
+        cmd: &mut CommandBuffer<'_>,
+        pipelines: &PipelineCache<'_>,
+        nearest: SamplerRef<'_>,
+        sources: &Sources<'_, '_>,
+        mask: TextureRef<'_>,
+        height: Option<TextureRef<'_>>,
         local: bool,
     ) -> Result<u32, Diagnostic> {
-        let t = self.target;
         let (mask_load, height_load) = if local {
             (Load::Load, Load::Load)
         } else {
             (Load::Clear([0.0; 4]), Load::Clear([-INFINITE_TOP; 4]))
         };
-        let mask = ColorTarget::new(view(&self.mask[t], "mask")?, mask_load).cycled(!local);
+        let mask = ColorTarget::new(mask, mask_load).cycled(!local);
         let targets_buf;
-        let targets: &[ColorTarget<'_>] = if self.height_mode {
-            let height =
-                ColorTarget::new(view(&self.height[t], "height")?, height_load).cycled(!local);
+        let targets: &[ColorTarget<'_>] = if let Some(height) = height {
+            let height = ColorTarget::new(height, height_load).cycled(!local);
             targets_buf = [mask, height];
             &targets_buf
         } else {
@@ -471,7 +600,8 @@ impl<'d> OcclusionMask<'d> {
         let mut pass = cmd.render_pass(targets)?;
         if local {
             // Clear the changed rectangles, then draw every source unclipped.
-            let n = self.rects.write(
+            let mut rects = RectParams::new();
+            let n = rects.write(
                 self.plan.mask_rects(),
                 self.domain.width,
                 self.domain.height,
@@ -482,7 +612,7 @@ impl<'d> OcclusionMask<'d> {
                     self.programs.clear(self.height_mode),
                     MASK_FORMAT,
                 )?;
-                let rects: &[u8] = self.rects.bytes();
+                let rects: &[u8] = rects.bytes();
                 let bindings = Bindings {
                     vertex: StageBindings {
                         uniforms: &[rects],
@@ -494,9 +624,21 @@ impl<'d> OcclusionMask<'d> {
                 pass.draw_instanced(6, n)?;
             }
         }
-        let mut draws = geometry.record_draws(&mut pass, pipelines, &self.params, true, true)?;
-        draws += tiles.record_draws(&mut pass, pipelines, nearest, &self.params)?;
-        if let Some(sprite) = sprite {
+        let s = sources;
+        let mut draws = s.geometry.record_draws(
+            &mut pass,
+            pipelines,
+            &self.params,
+            s.static_set,
+            s.dynamic_set,
+        )?;
+        if s.static_set {
+            draws += s
+                .tiles
+                .record_draws(&mut pass, pipelines, nearest, &self.params)?;
+        }
+        // The sprite mask is the occlusion layer: a static caster (Chiaro DrawSources).
+        if let Some(sprite) = s.sprite.filter(|_| s.static_set) {
             // Last, like Chiaro's DrawSources: the scissor stays set for the rest of the pass.
             let program = pipeline(
                 pipelines,
@@ -571,12 +713,15 @@ impl<'d> OcclusionMask<'d> {
         }
     }
 
-    /// Seed pass, step passes and distance pass (E19); returns the field texels written.
+    /// Seed pass, step passes and distance pass (E19) from `mask` into `field`; returns the
+    /// field texels written.
     fn record_field(
-        &mut self,
+        &self,
         cmd: &mut CommandBuffer<'_>,
         pipelines: &PipelineCache<'_>,
         nearest: SamplerRef<'_>,
+        mask: TextureRef<'_>,
+        field: TextureRef<'_>,
         local: bool,
     ) -> Result<u64, Diagnostic> {
         let (w, h) = (self.domain.width, self.domain.height);
@@ -599,18 +744,10 @@ impl<'d> OcclusionMask<'d> {
         if local && field_area.is_some_and(|(_, n)| n == 0) {
             return Ok(0); // a pan alone: the shifted field is complete
         }
-        let t = self.target;
         let seeds = [view(&self.seeds[0], "seed")?, view(&self.seeds[1], "seed")?];
         // The ping-pong seeds are rewritten several times per frame: no cycling.
         Self::field_pass(
-            cmd,
-            seeds[0],
-            seed,
-            view(&self.mask[t], "mask")?,
-            nearest,
-            &params,
-            seed_area,
-            false,
+            cmd, seeds[0], seed, mask, nearest, &params, seed_area, false,
         )?;
         let mut current = 0;
         for k in jfa_steps() {
@@ -629,7 +766,7 @@ impl<'d> OcclusionMask<'d> {
         // A full rebuild overwrites the whole field (cycle); a local one keeps the shifted rest.
         Self::field_pass(
             cmd,
-            view(&self.field[t], "field")?,
+            field,
             distance,
             seeds[current],
             nearest,
@@ -677,6 +814,17 @@ impl<'d> OcclusionMask<'d> {
         }
     }
 
+    /// The mask, field and heights of caster class `c` (0 static, 1 dynamic; E53), `None` while
+    /// the last prepared frame does not use that class.
+    pub fn caster_maps(&self, c: usize) -> Option<CasterMaps<'_>> {
+        let t = self.casters.get(c)?;
+        Some(CasterMaps {
+            mask: t.mask.texture_ref()?,
+            field: t.field.texture_ref()?,
+            height: t.height.texture_ref(),
+        })
+    }
+
     /// How the last prepared frame updated the textures.
     pub fn last_update(&self) -> MaskUpdate {
         self.last_update
@@ -689,9 +837,14 @@ impl<'d> OcclusionMask<'d> {
 
     /// Textures (re)allocated over the stage's lifetime; constant in the steady state.
     pub fn allocations(&self) -> u32 {
+        let casters = self
+            .casters
+            .iter()
+            .flat_map(|t| [&t.mask, &t.field, &t.height]);
         [&self.mask, &self.field, &self.height, &self.seeds]
             .iter()
             .flat_map(|pair| pair.iter())
+            .chain(casters)
             .map(RenderTarget::recreated)
             .sum()
     }
