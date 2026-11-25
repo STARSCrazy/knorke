@@ -19,7 +19,9 @@
 //! - Uniform blocks are `#[repr(C)]` structs with byte writers; their layouts are pinned by
 //!   tests against Chiaro's structs and against the member offsets in the SPIR-V of the
 //!   shaders (`tests/light_uniform_layouts.rs`).
-//! - Not ported here: the ring lights of shockwaves and the medium world map (P29). Its programs
+//! - The ring lights of shockwaves (P21) are their own pass after the lights
+//!   ([`ring_light`](crate::ring_light)), from `LightingFrame::ring_lights`.
+//! - Not ported here: the medium world map (P29). Its programs
 //!   exist; the stage does not set `Medium`. Pattern obstacles come in `ShadowMaps::patterns`
 //!   and set `Pattern` on the shadow programs.
 //! - Shadowed lights with a caster filter (E53) need the caster maps of their class in

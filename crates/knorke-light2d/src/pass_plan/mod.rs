@@ -14,7 +14,7 @@
 //! | 1 | [`OccluderGeometry`](crate::occluder_raster::OccluderGeometry), [`TileOccluders`](crate::occluder_raster::TileOccluders) (P22) | obstacle store | vertex and cell buffers |
 //! | 2 | [`OcclusionMask`](crate::occlusion::OcclusionMask) (P23) | step 1, sprite mask | mask, height, distance field |
 //! | 3 | [`LightAtlases`](crate::atlas::LightAtlases) (P26) | profile and mask store | atlases |
-//! | 4 | [`LightingStage`](crate::lighting::LightingStage) with the zone pass (P25, P26) | light list, zone list, steps 2 and 3 | light, specular, direction, pure ambient |
+//! | 4 | [`LightingStage`](crate::lighting::LightingStage) with the zone pass (P25, P26) and the ring light pass (P21) | light list, zone list, ring lights, steps 2 and 3 | light, specular, direction, pure ambient |
 //! | 5 | [`CompositeStage`](crate::composite::CompositeStage) (P27) | scene buffers, step 4 | HDR buffer |
 //! | 6 | [`DebugCheckStage`](crate::debug_check::DebugCheckStage) (P32, opt-in) | surface and material buffer | findings of an earlier frame |
 //!
@@ -45,10 +45,11 @@
 //! - Pattern obstacles (P28) are part of the occlusion stage: [`SceneStores::patterns`] gives
 //!   the mask their mean opacities and, with a pattern obstacle in the domain, adds the pattern
 //!   atlas, the id texture and the `Pattern` shadow programs; without one nothing runs.
-//! - Not built (and not blocked): medium (P12, P29, P30), ring lights (P21). Their inputs are
-//!   fields still to come in
-//!   [`PassFrame`] and [`SceneStores`] and stages between steps 2 and 5; the stages already take
-//!   `None` for them.
+//! - Ring lights of shockwaves (P21) come culled in [`PassFrame::ring_lights`] (the waves and
+//!   their culling are `knorke-post`'s); step 4 draws them after the lights.
+//! - Not built (and not blocked): medium (P12, P29, P30). Its inputs are fields still to come
+//!   in [`PassFrame`] and [`SceneStores`] and stages between steps 2 and 5; the stages already
+//!   take `None` for them.
 
 #[cfg(feature = "gpu")]
 mod gpu;
