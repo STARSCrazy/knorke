@@ -9,9 +9,7 @@ pub(crate) struct Palette {
     cache: Vec<u8>,
 }
 
-/// 4x4 Bayer matrix, values 0..15.
-pub(crate) const BAYER4: [[u8; 4]; 4] =
-    [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+pub(crate) use knorke_math::BAYER4;
 
 impl Palette {
     pub(crate) fn new(rgb: &[u8]) -> Option<Palette> {

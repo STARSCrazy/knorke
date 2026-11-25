@@ -213,6 +213,26 @@ impl Vec3 {
     }
 }
 
+/// Normalization that only a length of exactly zero stops (the renderer's reference images
+/// depend on it). [`Vec3::normalize_or_zero`] treats lengths up to `f32::EPSILON` as zero,
+/// which would change the pixels of tiny vectors.
+pub trait Vec3Ext {
+    /// Divides by the length unless it is exactly zero; the zero vector stays zero.
+    fn normalized(self) -> Vec3;
+}
+
+impl Vec3Ext for Vec3 {
+    #[inline]
+    fn normalized(self) -> Vec3 {
+        let l = self.length();
+        if l > 0.0 {
+            self * (1.0 / l)
+        } else {
+            Vec3::new(0.0, 0.0, 0.0)
+        }
+    }
+}
+
 impl IVec2 {
     /// Converts to `f32` (exact for |v| ≤ 2²⁴).
     #[inline]

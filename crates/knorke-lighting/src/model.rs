@@ -208,20 +208,7 @@ pub fn flickered_strength(l: &PointLight, time: f64) -> f32 {
     l.strength * (1.0 - l.flicker.clamp(0.0, 1.0) * noise(time, l.seed))
 }
 
-/// Alpha in steps of 1/8 (rounded to the nearest step), clamped to 0..1; NaN counts as 0.
-/// Same steps as the renderer's blending (pixelraum `blend::step_alpha`), so a stippled shadow
-/// covers the share its caster shows on screen.
-#[inline]
-pub(crate) fn step_alpha(a: f32) -> f32 {
-    if a.is_nan() || a <= 0.0 {
-        return 0.0;
-    }
-    (a.min(1.0) * 8.0).round() / 8.0
-}
-
-/// 4x4 ordered dither matrix (Bayer), the same one the renderer dithers colours with.
-pub(crate) const BAYER4: [[u8; 4]; 4] =
-    [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+pub(crate) use knorke_math::{BAYER4, step_alpha};
 
 #[cfg(test)]
 mod tests {

@@ -29,8 +29,8 @@ pub mod uniform;
 mod vector;
 
 pub use bytemuck;
-pub use color::{LinearRgba, Srgba8};
+pub use color::{BAYER4, LinearRgba, Srgba8, step_alpha};
 pub use geometry::{Aabb2, Capsule2, Circle, Ray2, Segment2};
 pub use space::{At, Screen, Space, Tile, Transform2, World2};
 pub use transform::{Affine2, Mat4};
-pub use vector::{IVec2, IVec3, Vec2, Vec3, Vec4};
+pub use vector::{IVec2, IVec3, Vec2, Vec3, Vec3Ext, Vec4};
