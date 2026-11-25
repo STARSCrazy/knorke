@@ -4,8 +4,8 @@
 //! of the obstacle store, the pixel and normal-map codecs, collecting the lights of a frame (with
 //! animations, masks, flicker and caster filters) into a reused list, and snapshot round trips
 //! of the animation and mask stores, the shadow cache plan deciding incremental mask updates, and
-//! the obstacle raster collecting triangles, laying out the buffer and staging tile cells
-//! and the light pass splitting the list into its draws, writing the light and mask buffer
+//! the obstacle raster collecting triangles, laying out the buffer and staging tile cells,
+//! the lights and suns of the medium stage, and the light pass splitting the list into its draws, writing the light and mask buffer
 //! bytes and its uniform blocks, filling the profile and mask atlas bytes, and culling the
 //! ambient zones, writing their records, vertex texels and uniform blocks (ADR 0006, ADR 0010).
 //!
@@ -36,6 +36,9 @@ use knorke_light2d::lighting::{
     ProgramModes, ShadowDomain, SurfaceParams, SurfaceShadowParams, program_for,
 };
 use knorke_light2d::mask::{MaskPreset, MaskShape};
+use knorke_light2d::medium_culling::{
+    MediumLightList, MediumSun, collect_medium_lights, collect_medium_suns,
+};
 use knorke_light2d::obstacle::{ShapeDesc, TileGridDesc};
 use knorke_light2d::occluder_raster::{
     NoPatterns, TileSet, TriangleSet, write_cell_texels, write_triangle_buffer,
@@ -107,6 +110,8 @@ fn steady_state_light2d_paths_allocate_nothing() {
         scene.set_frame_lights(&frame[..], &res).unwrap();
     }
     let mut list = LightList::default();
+    let mut medium_list = MediumLightList::default();
+    let mut medium_suns: Vec<MediumSun> = Vec::new();
     let mut anim_snap = SnapshotBuf::new();
     let mut mask_snap = SnapshotBuf::new();
     let poly = [
@@ -279,6 +284,18 @@ fn steady_state_light2d_paths_allocate_nothing() {
             &modes,
             &mut list,
         );
+        // The lights and suns of the medium stage.
+        collect_medium_lights(
+            &scene,
+            &Projection::IDENTITY,
+            128,
+            64,
+            20.0,
+            f64::from(i) / 60.0,
+            &modes,
+            &mut medium_list,
+        );
+        collect_medium_suns(&scene, f64::from(i) / 60.0, &modes, &mut medium_suns);
         // The light pass: split, buffer bytes, programs and uniform blocks of the frame.
         let draws = LightDraws::new(&list, i.is_multiple_of(3), true);
         draws.write_lights(&list, &mut light_bytes);

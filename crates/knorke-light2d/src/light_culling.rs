@@ -152,7 +152,7 @@ impl MaskedLights {
         self.lights.is_empty()
     }
 
-    fn push(&mut self, light: GpuLight, mask: GpuMask) {
+    pub(crate) fn push(&mut self, light: GpuLight, mask: GpuMask) {
         self.lights.push(light);
         self.masks.push(mask);
     }
