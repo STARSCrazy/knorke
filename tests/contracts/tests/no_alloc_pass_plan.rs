@@ -1,8 +1,9 @@
 //! Contract: the pass plan of `knorke-light2d` (P31) allocates nothing on the heap in the steady
 //! state: once warm, `PassPlan::prepare` and `PassPlan::record` of an unchanged scene with
 //! lights, a shadow-casting light over an obstacle, one with a caster filter (E53), ambient
-//! zones, a sprite mask and every debug check (the GPU one with its readback included) make no
-//! Rust allocation (ADR 0006). Command buffer acquire and submit are the host's and stay outside.
+//! zones, a shockwave ring light (P21), a sprite mask and every debug check (the GPU one with
+//! its readback included) make no Rust allocation (ADR 0006). Command buffer acquire and submit
+//! are the host's and stay outside.
 //!
 //! Needs the feature `gpu` of this crate, a Vulkan device and the shader pack of
 //! `cargo xtask shaders`; skips without them (a failure with `KNORKE_REQUIRE_GPU=1`).
@@ -27,6 +28,7 @@ use knorke_light2d::frame_warnings::DebugChecks;
 use knorke_light2d::light::{LightDesc, LightType, ShadowFilter};
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassFrame, PassPlan, SceneStores};
+use knorke_light2d::ring_light::RingLight;
 use knorke_light2d::settings::LightSettings;
 use knorke_light2d::{LightStore, NoResources, ObstacleStore, Projection};
 use knorke_math::{At, Vec2, Vec3};
@@ -131,9 +133,16 @@ fn steady_state_pass_plan_allocates_nothing() {
     // An empty material buffer, so the GPU debug check has something to read.
     let material = texture(gpu, w, h, &vec![0u8; (w * h * 4) as usize]);
     let projection = Projection::IDENTITY;
+    // One shockwave ring light (P21): the ring pass runs every frame, too.
+    let rings = [RingLight {
+        scene_rect: [10.0, 10.0, 40.0, 40.0],
+        ring: [24.0, 24.0, 10.0, 0.5],
+        color: [1.0, 0.5, 0.2, 0.0],
+    }];
     let frame = PassFrame {
         occlusion: Some(sprite.texture_ref()),
         material: Some(material.texture_ref()),
+        ring_lights: &rings,
         ..PassFrame::new(scene.texture_ref(), &projection)
     };
     let stores = SceneStores {

@@ -43,6 +43,7 @@ use crate::pattern_occluders::{PATTERN_PROGRAMS, PatternOccluders, PatternProgra
 use crate::pattern_store::PatternStore;
 use crate::profile_store::ProfileStore;
 use crate::projection::Projection;
+use crate::ring_light::RingLight;
 use crate::settings::LightSettings;
 use crate::shadow::{MaskAnchor, MaskPlanInput, MaskUpdate, OcclusionDomain};
 use crate::zone_pass::ZoneInput;
@@ -104,6 +105,8 @@ pub struct PassFrame<'a> {
     /// Encoding of the scene and glow colours; the host feeds it from the same setting as the
     /// output's scene colour space.
     pub input_space: InputColorSpace,
+    /// Ring lights of the frame's shockwaves, culled by the host (P21); empty: no ring pass.
+    pub ring_lights: &'a [RingLight],
 }
 
 impl<'a> PassFrame<'a> {
@@ -118,6 +121,7 @@ impl<'a> PassFrame<'a> {
             projection,
             time: 0.0,
             input_space: InputColorSpace::Srgb,
+            ring_lights: &[],
         }
     }
 
@@ -311,6 +315,7 @@ fn lighting_frame<'a>(
         shadows,
         profile_atlas: atlases.profiles.texture(),
         mask_atlas: atlases.masks.texture(),
+        ring_lights: frame.ring_lights,
     }
 }
 

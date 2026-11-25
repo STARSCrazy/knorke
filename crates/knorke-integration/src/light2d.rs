@@ -6,8 +6,8 @@
 //! 1. [`Light2dRenderer::prepare`]: `PassPlan::prepare` (culls lights and zones, decides every
 //!    stage, creates what the frame needs), then `PostRenderer::prepare` on the plan's HDR
 //!    buffer. Everything that can fail fails here.
-//! 2. [`Light2dRenderer::record`]: `PassPlan::record` (occlusion, atlases, zones and lights,
-//!    composite), then `PostRenderer::record` (bloom, tonemap, grade, CRT, shockwaves) into the
+//! 2. [`Light2dRenderer::record`]: `PassPlan::record` (occlusion, atlases, zones, lights and
+//!    the ring lights of the shockwaves, composite), then `PostRenderer::record` (bloom, tonemap, grade, CRT, shockwaves) into the
 //!    target. The host submits and presents.
 //!
 //! One host setting feeds both crates: the scene colour space of the output settings
@@ -21,10 +21,11 @@ use knorke_light2d::Projection;
 use knorke_light2d::composite::InputColorSpace;
 use knorke_light2d::frame_warnings::{Warning, WarningSet};
 use knorke_light2d::pass_plan::{PassFrame, PassPlan, PassPrepared, PassRecord, SceneStores};
+use knorke_light2d::ring_light::{MAX_RING_LIGHTS, RingLight};
 use knorke_light2d::settings::LightSettings;
 use knorke_post::pass::{PostFrame, PostRenderer, Prepared as PostPrepared};
 use knorke_post::settings::{ColorSpace, PostSettings};
-use knorke_post::shockwave::{Projection as PostProjection, ShockwaveFrame};
+use knorke_post::shockwave::{MAX_SHOCKWAVES, Projection as PostProjection, ShockwaveFrame};
 use knorke_types::{Diagnostic, DiagnosticCode};
 
 use crate::layers::Layers;
@@ -80,7 +81,8 @@ pub struct Light2dFrame<'a> {
     /// Animation time in seconds, from the host's tick.
     pub time: f64,
     /// The shockwaves culled for this frame (`knorke_post::shockwave::collect_shockwaves`) with
-    /// the projection they were culled under ([`post_projection`] of `projection`).
+    /// the projection they were culled under ([`post_projection`] of `projection`): the
+    /// distortion goes to the post pass, the ring lights into the light buffer.
     pub shockwaves: Option<(&'a PostProjection, &'a ShockwaveFrame)>,
 }
 
@@ -92,6 +94,23 @@ pub fn post_projection(p: &Projection) -> PostProjection {
         y_axis: p.y_axis,
         z_axis: p.z_axis,
     }
+}
+
+// Both crates size their wave arrays by the same Chiaro constant.
+const _: () = assert!(MAX_SHOCKWAVES == MAX_RING_LIGHTS);
+
+/// The ring lights of `frame` as the light crate's type (the crates share no type, ADR 0014),
+/// in the culled order; returns how many of `out` are set.
+pub fn ring_lights(frame: &ShockwaveFrame, out: &mut [RingLight; MAX_RING_LIGHTS]) -> usize {
+    let n = frame.ring_count.min(MAX_RING_LIGHTS);
+    for (o, r) in out.iter_mut().zip(&frame.rings[..n]) {
+        *o = RingLight {
+            scene_rect: r.scene_rect,
+            ring: r.ring,
+            color: r.color,
+        };
+    }
+    n
 }
 
 impl<'a> Light2dFrame<'a> {
@@ -121,6 +140,7 @@ impl<'a> Light2dFrame<'a> {
             projection: self.projection,
             time: self.time,
             input_space: settings.input_space(),
+            ring_lights: &[],
         }
     }
 }
@@ -138,6 +158,8 @@ pub struct Light2dPrepared {
 pub struct Light2dRenderer<'d> {
     plan: PassPlan<'d>,
     post: PostRenderer<'d>,
+    // The frame's ring lights, converted in place (no allocation per frame).
+    rings: [RingLight; MAX_RING_LIGHTS],
 }
 
 impl<'d> Light2dRenderer<'d> {
@@ -150,6 +172,7 @@ impl<'d> Light2dRenderer<'d> {
         Ok(Self {
             plan: PassPlan::new(gpu, pack.clone())?,
             post: PostRenderer::new(gpu, pack)?,
+            rings: [RingLight::default(); MAX_RING_LIGHTS],
         })
     }
 
@@ -189,9 +212,14 @@ impl<'d> Light2dRenderer<'d> {
         stores: &SceneStores<'_>,
         settings: &Light2dSettings,
     ) -> Result<Light2dPrepared, Diagnostic> {
-        let light = self
-            .plan
-            .prepare(&frame.pass(settings), stores, &settings.light)?;
+        let n = frame
+            .shockwaves
+            .map_or(0, |(_, waves)| ring_lights(waves, &mut self.rings));
+        let pass = PassFrame {
+            ring_lights: &self.rings[..n],
+            ..frame.pass(settings)
+        };
+        let light = self.plan.prepare(&pass, stores, &settings.light)?;
         let hdr = self
             .plan
             .hdr()
@@ -212,9 +240,13 @@ impl<'d> Light2dRenderer<'d> {
         settings: &Light2dSettings,
         prepared: Light2dPrepared,
     ) -> Result<PassRecord, Diagnostic> {
-        let out = self
-            .plan
-            .record(cmd, &frame.pass(settings), &settings.light)?;
+        // The rings converted by prepare (same frame).
+        let n = frame.shockwaves.map_or(0, |(_, waves)| waves.ring_count);
+        let pass = PassFrame {
+            ring_lights: &self.rings[..n.min(MAX_RING_LIGHTS)],
+            ..frame.pass(settings)
+        };
+        let out = self.plan.record(cmd, &pass, &settings.light)?;
         let hdr = self
             .plan
             .hdr()
@@ -231,5 +263,47 @@ fn post_frame<'a>(frame: &Light2dFrame<'a>, hdr: TextureRef<'a>) -> PostFrame<'a
         overlay: frame.overlay,
         target: frame.target,
         shockwaves: frame.shockwaves,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use knorke_math::LinearRgba;
+    use knorke_post::shockwave::{Shockwave, ShockwaveList, collect_shockwaves};
+
+    fn wave(x: f32, light_intensity: f32, strength: f32) -> Shockwave {
+        Shockwave {
+            x,
+            y: 20.0,
+            radius: 8.0,
+            width: 4.0,
+            strength,
+            light: LinearRgba::new(1.0, 0.5, 0.25, 1.0),
+            light_intensity,
+        }
+    }
+
+    #[test]
+    fn only_waves_with_light_in_view_become_ring_lights_in_list_order() {
+        let mut list = ShockwaveList::default();
+        list.set(&[
+            wave(20.0, 2.0, 0.0),
+            wave(30.0, 0.0, 1.0),   // distorts only
+            wave(-500.0, 2.0, 0.0), // out of view
+            wave(60.0, 1.0, 0.5),
+        ])
+        .unwrap();
+        let p = post_projection(&Projection::default());
+        let mut frame = ShockwaveFrame::default();
+        collect_shockwaves(&list, &p, 128, 96, &mut frame);
+        let mut out = [RingLight::default(); MAX_RING_LIGHTS];
+        assert_eq!(ring_lights(&frame, &mut out), 2);
+        assert_eq!(out[0].ring, [20.0, 20.0, 8.0, 0.5]);
+        assert_eq!(out[0].color, [2.0, 1.0, 0.5, 0.0]);
+        assert_eq!(out[1].ring[0], 60.0);
+        // The torus box (outer radius 10 around (20, 20), height 2 projects to nothing in a
+        // top-down view) plus one pixel.
+        assert_eq!(out[0].scene_rect, [9.0, 9.0, 31.0, 31.0]);
     }
 }

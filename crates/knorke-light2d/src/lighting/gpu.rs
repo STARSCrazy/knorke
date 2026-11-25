@@ -1,6 +1,6 @@
 // Ported from Chiaro (https://github.com/STARSCrazy/chiaro), revision 9bc5b9b,
 // src/rendering/LightingStage.hpp, src/rendering/LightingStage.cpp (Prepare, Record without the
-// ambient zone pass, the ring pass, the medium map and pattern obstacles),
+// ambient zone pass, the medium map and pattern obstacles),
 // src/rendering/LightAtlases.hpp (atlases as optional inputs) and src/gpu/ProgramBinding.hpp
 // (ProgramResources, BindProgram).
 //
@@ -51,6 +51,7 @@ use crate::light_program::{
 };
 use crate::pattern_occluders::PatternMaps;
 use crate::projection::Projection;
+use crate::ring_light::{RingLight, RingLightPass};
 use crate::settings::LightSettings;
 use crate::shadow::OcclusionDomain;
 use crate::zone_pass::{AmbientZonePass, ZoneInput};
@@ -158,6 +159,9 @@ pub struct LightingFrame<'a> {
     pub profile_atlas: Option<TextureRef<'a>>,
     /// Mask atlas (P26); needed when a light has a mask.
     pub mask_atlas: Option<TextureRef<'a>>,
+    /// Ring lights of the frame's shockwaves (P21), at most
+    /// [`MAX_RING_LIGHTS`](crate::ring_light::MAX_RING_LIGHTS); empty: no ring pass.
+    pub ring_lights: &'a [RingLight],
 }
 
 impl LightingFrame<'_> {
@@ -219,9 +223,11 @@ pub struct LightingRecord {
     pub lights_drawn: u32,
     /// Ambient zones drawn (instances of the zone pass).
     pub zones_drawn: u32,
+    /// Ring lights drawn (instances of the ring pass, P21).
+    pub rings_drawn: u32,
     /// Of them shadowed.
     pub shadow_lights: u32,
-    /// Draw calls, the zone pass's included.
+    /// Draw calls, the zone and ring passes' included.
     pub draws: u32,
 }
 
@@ -279,6 +285,7 @@ pub struct LightingStage<'d> {
     lights: UploadBuffer<'d>,
     masks: UploadBuffer<'d>,
     zones: AmbientZonePass<'d>,
+    rings: RingLightPass<'d>,
     draws: LightDraws,
     programs: [Option<LightProgram>; PROGRAMS],
     detail: DetailMode,
@@ -307,6 +314,7 @@ impl<'d> LightingStage<'d> {
                 "mask",
             ),
             zones: AmbientZonePass::new(gpu),
+            rings: RingLightPass::default(),
             draws: LightDraws::default(),
             programs: [None; PROGRAMS],
             detail: DetailMode::None,
@@ -366,7 +374,10 @@ impl<'d> LightingStage<'d> {
             // go, so a frame without a visible zone holds what a scene without zones holds.
             self.zones.release();
         }
-        if !light_pass && zones.is_none() {
+        // Ring lights (P21) also need the light buffer; they are added after the light pass.
+        self.rings.prepare(shaders, frame.ring_lights)?;
+        let rings = self.rings.is_active();
+        if !light_pass && zones.is_none() && !rings {
             // No light pass, so no material target either.
             self.specular.release();
             self.direction.release();
@@ -400,14 +411,17 @@ impl<'d> LightingStage<'d> {
                 dual,
             )?;
             result.ambient_zones = true;
-            result.pure_ambient = match (dual, light_pass) {
+            // Ring lights add into the light buffer like the lights: then it is not the pure
+            // ambient any more.
+            result.pure_ambient = match (dual, light_pass || rings) {
                 (true, _) => PureAmbient::Separate,
                 (false, false) => PureAmbient::LightBuffer,
                 (false, true) => PureAmbient::None,
             };
         }
         if !light_pass {
-            // Zones without lights: the light buffer holds the ambient; no material target.
+            // Zones or ring lights without lights: the light buffer holds the ambient (and the
+            // rings); no material target.
             self.specular.release();
             self.direction.release();
             self.draws = draws;
@@ -573,7 +587,8 @@ impl<'d> LightingStage<'d> {
         }
         let d = &self.draws;
         let zones = self.zones.is_active();
-        if !d.light_pass() && !zones {
+        let rings = self.rings.is_active();
+        if !d.light_pass() && !zones && !rings {
             return Ok(LightingRecord::default());
         }
         let count = d.count();
@@ -603,6 +618,7 @@ impl<'d> LightingStage<'d> {
             record.draws += 1;
         }
         if !d.light_pass() {
+            self.record_rings(cmd, samplers, frame, light, zones, &mut record)?;
             return Ok(record);
         }
         let second = match self.detail {
@@ -793,9 +809,29 @@ impl<'d> LightingStage<'d> {
             }
         }
         drop(pass);
+        // Ring lights on top of the lights.
+        self.record_rings(cmd, samplers, frame, light, true, &mut record)?;
         record.lights_drawn = count;
         record.shadow_lights = d.shadow_lights();
         Ok(record)
+    }
+
+    fn record_rings(
+        &self,
+        cmd: &mut CommandBuffer<'_>,
+        samplers: &Samplers<'_>,
+        frame: &LightingFrame<'_>,
+        light: TextureRef<'_>,
+        load: bool,
+        record: &mut LightingRecord,
+    ) -> Result<(), Diagnostic> {
+        if self.rings.is_active() {
+            self.rings
+                .record_pass(cmd, samplers, frame, self.ambient, light, load)?;
+            record.rings_drawn = self.rings.ring_count();
+            record.draws += 1;
+        }
+        Ok(())
     }
 }
 

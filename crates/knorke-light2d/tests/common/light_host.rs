@@ -481,6 +481,7 @@ impl<'d> Host<'d> {
             shadows: maps.as_ref(),
             profile_atlas: self.atlases.profiles.texture(),
             mask_atlas: self.atlases.masks.texture(),
+            ring_lights: &[],
         };
         let zones = ZoneInput {
             store: &s.zones,
