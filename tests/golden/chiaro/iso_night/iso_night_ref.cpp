@@ -1,23 +1,28 @@
 // iso_night reference (Knorke Chiaro port): the scene of examples/iso_night_demo of Chiaro @ 9bc5b9b at --time 5,
-// in the two variants without media, rendered once like the demo's --screenshot frame:
+// in the five variants of the P3 goldens, rendered once like the demo's --screenshot frame:
 //   plain: --no-heights --no-surface --no-haze --no-fog --no-moon-shadows      hard: --hard --no-haze
-//   iso_night_ref <plain|hard> <out_dir>
+//   t5: no arguments      cutaway: --cutaway      grade_crt: --grade look --crt subtle --dither
+//   iso_night_ref <plain|hard|t5|cutaway|grade_crt> <out_dir>
 // writes <out_dir>/<variant>.txt (the resolved scene: lights, frame lights, obstacles, patterns and their sheet,
-// the ambient zone, mask, profiles, animations and their samples at t = 5), the renderer layers after End as raw
-// RGBA8 (640x360, row-major, no header: scene.rgba, glow.rgba, surface.rgba) and frame.rgba (the 1280x720
-// R8G8B8A8_UNORM frame, compared with tests/golden/chiaro/iso_night_<variant>.png outside the HUD rect).
+// the ambient zone, mask, profiles, animations and their samples at t = 5, the ground fog's medium draws, the
+// output grade; format: crates/knorke-integration/tests/common/demo_scene.rs), the renderer layers after End as raw RGBA8 (640x360, row-major, no header: scene.rgba, glow.rgba,
+// surface.rgba, medium.rgba), the eight fog puff shapes (puffs.rgba, 128x1024, variant k in rows 128k ...) and
+// frame.rgba (the 1280x720 R8G8B8A8_UNORM frame, compared with tests/golden/chiaro/iso_night_<variant>.png outside
+// the HUD rect).
 // The demo's Scene.cpp is compiled into this file unchanged, straight from the Chiaro tree; `private` is opened
 // for it to read the scene's descs. main() repeats what the demo's main.cpp sets up for these variants; change
 // both together. The HUD overlay is left out: the golden is compared outside its rect (manifest.toml).
 // Build (MSVC x64, against an out-of-tree Chiaro 9bc5b9b build <b>), from a directory outside the repo:
-//   cl /O2 /EHsc /std:c++20 /I <chiaro>\include /I <chiaro>\examples\iso_night_demo /I <b>\_deps\sdl3-src\include
-//      iso_night_ref.cpp /link /LIBPATH:<b>\lib\Release Chiaro.lib SDL3.lib
+//   cl /O2 /EHsc /std:c++20 /I <chiaro>\include /I <chiaro>\examples\iso_night_demo /I <chiaro>\examples\common
+//      /I <b>\_deps\sdl3-src\include iso_night_ref.cpp /link /LIBPATH:<b>\lib\Release Chiaro.lib SDL3.lib
+// (build.bat next to this file does that for every variant).
 // and run it next to Chiaro.dll and SDL3.dll of <b>\bin\Release (Vulkan: SDL_GPU_DRIVER=vulkan). The layer dumps
 // become the PNG fixtures next to this file (Pillow: Image.frombytes("RGBA", ...).save): scene.png and glow.png
-// (byte-identical in both variants) and surface.png (hard; plain draws no surface), read by
-// crates/knorke-integration/tests/gpu_iso_night.rs together with <variant>.txt.
+// (byte-identical in every variant but cutaway: scene_cutaway.png), surface.png (hard, t5, grade_crt; plain draws no
+// surface; cutaway: surface_cutaway.png), medium.png (the fog of t5, cutaway and grade_crt; the same in all three)
+// and ../medium/puffs.png, read by crates/knorke-integration/tests/gpu_iso_night.rs together with <variant>.txt.
 //
-// Origin: chiaro @ 9bc5b9b, examples/iso_night_demo/main.cpp (setup) and Scene.cpp (the animation descs of
+// Origin: chiaro @ 9bc5b9b, examples/iso_night_demo/main.cpp (setup, ApplyGrade, ApplyCrt, the fog patch) and Scene.cpp (the animation descs of
 // CreateAnimatedLights, the profile shapes and pattern descs of Create, copied below because they are locals).
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any express or
 // implied warranty; the origin must not be misrepresented; altered source versions must be plainly marked as such
@@ -26,6 +31,7 @@
 
 // Every header Scene.cpp and Scene.hpp use comes first, so that opening `private` touches only the scene.
 #include <Chiaro/Chiaro.hpp>
+#include "SmokePuffs.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -113,6 +119,12 @@ namespace {
 constexpr int kW = 640;
 constexpr int kH = 360;
 constexpr float kTime = 5.0f;
+constexpr Uint32 kMediumFog = 4; ///< main.cpp: entry of the media table (CHI_MEDIUM_FOG)
+
+std::vector<chiaro::MediumDraw> g_fogDraws;
+CHI_CrtSettings g_crt = chiaro::Crt(CHI_CRT_OFF); ///< the CRT settings of the frame
+bool g_graded = false;                           ///< grade_crt: --grade look --crt subtle --dither ///< the ground fog of the frame (t5, cutaway, grade_crt)
+demo::PuffSet g_puffs;                      ///< its shapes
 
 std::vector<Uint8> Download(SDL_GPUDevice *device, SDL_GPUTexture *tex, Uint32 w, Uint32 h);
 SDL_GPUTexture *GpuTexture(SDL_Texture *t);
@@ -158,7 +170,7 @@ void WriteShape(FILE *f, const CHI_ShapeDesc &d, bool heights, Uint32 pattern)
                  finite ? d.base_height : 0.0f, d.opacity, d.radius, d.width, d.depth, pattern);
 }
 
-/** The resolved scene for the Knorke test; see crates/knorke-integration/tests/gpu_iso_night.rs for the format. */
+/** The resolved scene for the Knorke test; see crates/knorke-integration/tests/common/demo_scene.rs for the format. */
 bool WriteScene(SDL_GPUDevice *device, chiaro::Context &fx, const night::NightScene &s, const std::string &path)
 {
     FILE *f = std::fopen(path.c_str(), "w");
@@ -285,6 +297,28 @@ bool WriteScene(SDL_GPUDevice *device, chiaro::Context &fx, const night::NightSc
             std::fprintf(f, "%s\n", line.c_str());
         }
     }
+    // The ground fog: one line per medium draw, the shape as the index of its puff (1-based, 0 = none).
+    for (const chiaro::MediumDraw &d : g_fogDraws) {
+        Uint32 puff = 0;
+        for (Uint32 k = 0; k < 8 && puff == 0; ++k) {
+            puff = d.texture == g_puffs.Pick(k) ? k + 1 : 0;
+        }
+        std::fprintf(f, "medium_draw %.9g %.9g %.9g %.9g %.9g %.9g %.9g %u %u\n", d.rect.x, d.rect.y, d.rect.w,
+                     d.rect.h, d.density, d.bottom, d.top, d.medium, puff);
+    }
+    // The output grade (CHI_OutputSettings after ApplyGrade; the tint is CHI_Kelvin's) and the CRT settings, when
+    // graded (plain and hard keep their text of before).
+    if (!g_graded) {
+        return std::fclose(f) == 0;
+    }
+    const chiaro::Settings st = fx.GetSettings();
+    const CHI_OutputSettings &o = st.output;
+    std::fprintf(f, "output %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g %u\n", o.saturation, o.contrast,
+                 o.tint.r, o.tint.g, o.tint.b, o.vignette, o.vignette_radius, o.vignette_softness, o.vignette_color.r,
+                 o.vignette_color.g, o.vignette_color.b, (o.flags & CHI_OUTPUT_DITHER) ? 1u : 0u);
+    const CHI_CrtSettings &c = g_crt;
+    std::fprintf(f, "crt %u %.9g %.9g %.9g %.9g %.9g %.9g %.9g\n", c.flags, c.curvature, c.corner_radius, c.scanlines,
+                 c.scanline_period, c.mask, c.mask_pitch, c.brightness);
     const bool ok = std::fclose(f) == 0;
     return ok;
 }
@@ -337,6 +371,25 @@ SDL_GPUTexture *GpuTexture(SDL_Texture *t)
         SDL_GetPointerProperty(SDL_GetTextureProperties(t), SDL_PROP_TEXTURE_GPU_TEXTURE_POINTER, nullptr));
 }
 
+/** The eight puff shapes one below the other (128 x 1024 RGBA8). */
+bool DumpPuffs(SDL_GPUDevice *device, const std::string &path)
+{
+    std::vector<Uint8> all;
+    for (Uint32 k = 0; k < 8; ++k) {
+        const std::vector<Uint8> px = Download(device, GpuTexture(g_puffs.Pick(k)->renderer_texture), 128, 128);
+        if (px.empty()) {
+            return false;
+        }
+        all.insert(all.end(), px.begin(), px.end());
+    }
+    FILE *f = std::fopen(path.c_str(), "wb");
+    if (!f) {
+        return false;
+    }
+    const bool ok = std::fwrite(all.data(), 1, all.size(), f) == all.size();
+    return std::fclose(f) == 0 && ok;
+}
+
 /** The GPU texture behind a renderer layer; fails unless it is R8G8B8A8_UNORM (bytes as Knorke's layers). */
 SDL_GPUTexture *LayerGpuTexture(const chiaro::Layers &layers, Uint32 kind)
 {
@@ -352,20 +405,25 @@ SDL_GPUTexture *LayerGpuTexture(const chiaro::Layers &layers, Uint32 kind)
 
 int main(int argc, char **argv)
 {
-    if (argc != 3 || (std::strcmp(argv[1], "plain") != 0 && std::strcmp(argv[1], "hard") != 0)) {
-        SDL_Log("usage: %s <plain|hard> <out_dir>", argv[0]);
+    const std::string variant = argc == 3 ? argv[1] : "";
+    const bool plain = variant == "plain", hard = variant == "hard";
+    g_graded = variant == "grade_crt";
+    if (!plain && !hard && !g_graded && variant != "t5" && variant != "cutaway") {
+        SDL_Log("usage: %s <plain|hard|t5|cutaway|grade_crt> <out_dir>", argv[0]);
         return 1;
     }
-    const bool plain = std::strcmp(argv[1], "plain") == 0;
     const std::string out = argv[2];
+    // plain and hard run without haze and fog (--no-haze), the others with both.
+    const bool haze = !plain && !hard;
     night::Toggles toggles;
     if (plain) {
         toggles.heights = false;
         toggles.surface = false;
         toggles.moonShadows = false;
-    } else {
+    } else if (hard) {
         toggles.soft = false;
     }
+    toggles.cutaway = variant == "cutaway";
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         return 1;
     }
@@ -385,18 +443,32 @@ int main(int argc, char **argv)
     }
     std::optional<chiaro::Layers> layers =
         fx->CreateLayers(renderer, kW, kH, chiaro::Layer::Surface | chiaro::Layer::Glow | chiaro::Layer::Medium);
-    // main.cpp: integer nearest scaling, custom quality (shadow 0.5, light 1, medium the preset's), haze off
-    // (--no-haze) with the demo's haze colour; grade off and CRT off are the defaults.
+    // main.cpp: integer nearest scaling, custom quality (shadow 0.5, light 1, medium the preset's), haze 0.012 with
+    // shafts or off (--no-haze) with the demo's haze colour; grade and CRT as ApplyGrade and ApplyCrt set them.
     fx->SetScaling(CHI_SCALE_INTEGER, CHI_FILTER_NEAREST);
-    const bool configured = layers && fx->Edit([](chiaro::Settings &s) {
+    const bool configured = layers && g_puffs.Create(renderer) && fx->Edit([&](chiaro::Settings &s) {
         s.quality.preset = CHI_QUALITY_CUSTOM;
         s.quality.medium_filter = CHI_FILTER_LINEAR;
         s.quality.shadow_resolution = 0.5f;
         s.quality.light_resolution = 1.0f;
-        s.haze.density = 0.0f;
+        s.haze.density = haze ? 0.012f : 0.0f;
         s.haze.flags = 0u;
         s.haze.color = chiaro::Color(0.8f, 0.85f, 1.0f);
+        if (g_graded) { // ApplyGrade(Grade::Look, dither on) on the defaults
+            s.output.flags |= CHI_OUTPUT_DITHER;
+            s.output.saturation = 0.8f;
+            s.output.contrast = 1.15f;
+            s.output.tint = chiaro::Color::Kelvin(8000.0f);
+            s.output.vignette = 0.6f;
+        }
     });
+    if (g_graded) { // ApplyCrt(subtle, flat)
+        g_crt = chiaro::Crt(CHI_CRT_SUBTLE);
+    }
+    if (!fx->SetCrt(chiaro::CrtSettings(g_crt))) {
+        SDL_Log("crt failed: %s", chiaro::GetError());
+        return 1;
+    }
     std::optional<night::NightScene> scene(std::in_place);
     if (!configured || !scene->Create(*fx)) {
         SDL_Log("scene failed: %s", chiaro::GetError());
@@ -419,6 +491,11 @@ int main(int argc, char **argv)
     failures += scene->SetFrameLights(*fx) ? 0 : 1;
     g_surfaceLayer = layers->GetRendererTexture(chiaro::Layer::Surface);
     bool drawn = layers->Begin() && scene->Draw(renderer, static_cast<chiaro::RecLayers &>(*layers), projection);
+    if (drawn && haze) {
+        // main.cpp: the ground fog in front of the construction site.
+        demo::AddFogPatch(g_fogDraws, projection, g_puffs, 38.0f, 18.0f, 4.5f, 150, kTime, kMediumFog);
+        drawn = layers->DrawMediums(g_fogDraws);
+    }
     drawn = layers->End() && drawn;
     failures += drawn ? 0 : 1;
     SDL_RenderPresent(renderer);
@@ -431,16 +508,21 @@ int main(int argc, char **argv)
     SDL_SubmitGPUCommandBuffer(cmd);
 
     const std::pair<Uint32, const char *> dumps[] = {
-        {chiaro::Layer::Scene, "scene"}, {chiaro::Layer::Glow, "glow"}, {chiaro::Layer::Surface, "surface"}};
+        {chiaro::Layer::Scene, "scene"},
+        {chiaro::Layer::Glow, "glow"},
+        {chiaro::Layer::Surface, "surface"},
+        {chiaro::Layer::Medium, "medium"}};
     for (const auto &[kind, name] : dumps) {
         SDL_GPUTexture *t = LayerGpuTexture(*layers, kind);
         failures += t && DumpRaw(device, t, kW, kH, out + "/" + name + ".rgba") ? 0 : 1;
     }
+    failures += DumpPuffs(device, out + "/puffs.rgba") ? 0 : 1;
     failures += DumpRaw(device, shotTex, 1280, 720, out + "/frame.rgba") ? 0 : 1;
     failures += WriteScene(device, *fx, *scene, out + "/" + argv[1] + ".txt") ? 0 : 1;
     SDL_Log("%d failures", failures);
 
     scene.reset();
+    g_puffs.Reset();
     layers.reset();
     fx.reset();
     SDL_ReleaseGPUTexture(device, shotTex);
