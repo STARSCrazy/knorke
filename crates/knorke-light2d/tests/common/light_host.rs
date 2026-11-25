@@ -483,6 +483,7 @@ impl<'d> Host<'d> {
             mask_atlas: self.atlases.masks.texture(),
             ring_lights: &[],
             medium_map: None,
+            medium_runs: false,
         };
         let zones = ZoneInput {
             store: &s.zones,

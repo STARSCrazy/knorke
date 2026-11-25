@@ -381,6 +381,7 @@ impl<'d> Host<'d> {
             mask_atlas: None,
             ring_lights: &[],
             medium_map: None,
+            medium_runs: false,
         };
         let result = self
             .lighting

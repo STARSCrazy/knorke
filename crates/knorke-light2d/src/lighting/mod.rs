@@ -47,3 +47,5 @@ pub use gpu::{
     LIGHTING_INPUT_MISSING, LIGHTING_NOT_PREPARED, LightingFrame, LightingRecord, LightingResult,
     LightingStage, PureAmbient, ShadowMaps,
 };
+#[cfg(feature = "gpu")]
+pub(crate) use gpu::{Resources, bind_named};

@@ -73,6 +73,7 @@ pub mod mask_store;
 pub mod material;
 pub mod medium_culling;
 pub mod medium_map;
+pub mod medium_stage;
 pub mod medium_table;
 pub mod obstacle;
 pub mod occluder_raster;
