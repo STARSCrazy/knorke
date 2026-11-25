@@ -9,7 +9,7 @@ use super::types::{
     Action, BreakReason, Fail, Leeway, MAX_EVENTS, MissionConfig, MissionError, MissionEvent,
     MissionTrace, Motive, Plan, StepKind, Where,
 };
-use crate::memory::{Fact, Knowledge, Metric, Pos, distance, points_around};
+use crate::memory::{Fact, Knowledge, Metric, Pos, dist_pos, limit, points_around};
 
 #[path = "detour.rs"]
 mod detour;
@@ -692,13 +692,7 @@ impl Mission {
             return false;
         }
         let metric = self.config.metric;
-        let d = distance(
-            metric,
-            i64::from(spot[0]) - i64::from(at[0]),
-            i64::from(spot[1]) - i64::from(at[1]),
-        );
-        let r = i128::from(radius);
-        d <= if metric == Metric::Euclid { r * r } else { r }
+        dist_pos(metric, at, spot) <= limit(metric, radius)
     }
 
     /// Capacities of all storage, to check that ticking allocates nothing.

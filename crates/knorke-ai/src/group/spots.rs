@@ -1,6 +1,6 @@
 // Ported from Sagax (https://github.com/STARSCrazy/sagax), revision fab00c0, crates/sagax-decide/src/group/spots.rs.
 use super::tactic::{Place, Side};
-use crate::memory::{Metric, Pos, distance};
+use crate::memory::{Metric, Pos, dist_pos, limit};
 use knorke_observe::{NoopSink, Sink};
 
 /// A candidate position with tag bits (cover, high, hidden, choke, ... as
@@ -261,16 +261,10 @@ pub fn pick_spot_traced<S: Sink<SpotTrace>>(
     radius: i64,
     sink: &mut S,
 ) -> SpotPick {
-    let limit = if metric == Metric::Euclid {
-        i128::from(radius) * i128::from(radius)
-    } else {
-        i128::from(radius)
-    };
+    let limit = limit(metric, radius);
     let key = |i: usize, s: &Spot| {
         let miss = s.tags & want_tags != want_tags;
-        let dx = i64::from(s.pos[0]) - i64::from(wish[0]);
-        let dy = i64::from(s.pos[1]) - i64::from(wish[1]);
-        (miss, distance(metric, dx, dy), i)
+        (miss, dist_pos(metric, wish, s.pos), i)
     };
     // Select rank by rank, each the smallest key above the previous one;
     // no allocation, and `skip` is small.

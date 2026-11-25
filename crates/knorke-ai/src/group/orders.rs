@@ -6,12 +6,12 @@ use super::rules::{
 };
 use super::spots::Spot;
 use super::squad::{
-    Active, DangerReport, Goal, PlanError, PlanId, Scratch, Squad, SquadTrace, dist, plain_dist,
+    Active, DangerReport, Goal, PlanError, PlanId, Scratch, Squad, SquadTrace, plain_dist,
 };
 use super::tactic::{Slot, Start, Trigger};
 use crate::ONE;
 use crate::memory::{
-    Area, AreasTrace, Fact, Message, Metric, Pos, SOURCE_OWN, SOURCE_TOLD, arrival,
+    Area, AreasTrace, Fact, Message, Metric, Pos, SOURCE_OWN, SOURCE_TOLD, arrival, dist_pos, limit,
 };
 use knorke_observe::{MapSink, NoopSink, Sink};
 
@@ -130,12 +130,7 @@ impl Channel {
                 if range < 0 {
                     return None;
                 }
-                let limit = if metric == Metric::Euclid {
-                    i128::from(range) * i128::from(range)
-                } else {
-                    i128::from(range)
-                };
-                (dist(metric, from, to) <= limit).then(|| arrival(now, 0, d, 1))
+                (dist_pos(metric, from, to) <= limit(metric, range)).then(|| arrival(now, 0, d, 1))
             }
             Self::Radio { base, per_unit } => Some(arrival(now, base, d, per_unit)),
             Self::None | Self::Custom(_) => None,
@@ -939,18 +934,14 @@ impl Squad {
                     || active.all(|(m, _)| a.arrived.contains(m)))
             }
             Trigger::TargetInRadius(r) => {
-                let limit = if self.metric == Metric::Euclid {
-                    i128::from(r) * i128::from(r)
-                } else {
-                    i128::from(r)
-                };
+                let limit = limit(self.metric, r);
                 let target = a
                     .plan
                     .target
                     .and_then(|id| self.knowledge.get(id, self.target_kind));
                 r >= 0
                     && target.is_some_and(|f| match rules.walk() {
-                        None => dist(self.metric, centre, f.pos) <= limit,
+                        None => dist_pos(self.metric, centre, f.pos) <= limit,
                         // The same measure as `IN_TARGET_DIST`.
                         Some(_) => {
                             let d = self.target_dist(&mut *rules, centre, f.pos);

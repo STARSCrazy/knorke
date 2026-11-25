@@ -10,7 +10,7 @@ use super::spots::{Spot, SpotPick, SpotTrace, heading, wish_point};
 use super::tactic::{Abort, GoalKind, Place, Slot, Start, Tactic};
 use crate::memory::{
     Area, Areas, AreasTrace, Evict, Fact, Inbox, Knowledge, KnowledgeTrace, Message, MessageTrace,
-    Metric, Pos, ZeroCapacity, distance,
+    Metric, Pos, ZeroCapacity, dist_pos,
 };
 use crate::{Candidate, DecideTrace, Decider, INPUT_SINCE_OPTION, choose};
 use knorke_observe::{MapSink, Sink};
@@ -232,19 +232,9 @@ fn clamp_i32(v: i128) -> i32 {
     v.clamp(0, i128::from(i32::MAX)) as i32
 }
 
-/// Distance in the metric between two points (x, y); for Euclid the
-/// squared value, as [`distance`].
-pub(super) fn dist(metric: Metric, a: Pos, b: Pos) -> i128 {
-    distance(
-        metric,
-        i64::from(b[0]) - i64::from(a[0]),
-        i64::from(b[1]) - i64::from(a[1]),
-    )
-}
-
 /// Plain distance for a row: the root for Euclid.
 pub(super) fn plain_dist(metric: Metric, a: Pos, b: Pos) -> i32 {
-    let d = dist(metric, a, b);
+    let d = dist_pos(metric, a, b);
     let d = if metric == Metric::Euclid {
         (d as u128).isqrt() as i128
     } else {
@@ -1658,7 +1648,7 @@ impl Squad {
     /// never picked).
     fn friend_key(&self, rules: &mut dyn SquadRules, target: Pos, other: Pos) -> i128 {
         match rules.walk() {
-            None => dist(self.metric, target, other),
+            None => dist_pos(self.metric, target, other),
             Some(_) => walk_dist(self.metric, rules, other, target).unwrap_or(i128::MAX),
         }
     }
@@ -1666,7 +1656,7 @@ impl Squad {
     /// The nearest known target to `centre`, else the nearest danger area's
     /// centre; ties to the earlier one.
     fn nearest_threat(&self, centre: Pos, targets: &[Fact]) -> Option<Pos> {
-        let near = |p: Pos| dist(self.metric, centre, p);
+        let near = |p: Pos| dist_pos(self.metric, centre, p);
         let by_index = |(i, p): (usize, Pos)| (near(p), i);
         targets
             .iter()
