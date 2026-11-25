@@ -25,7 +25,7 @@
 //! - The layers do not know a renderer. A frame is a value built from them, so "a buffer entry
 //!   overrides its layer" is struct update syntax and `skip_layers` is an argument.
 //! - Sprites, surface geometry and medium clouds are not methods here; they draw into the
-//!   layers from outside (P34, P35).
+//!   layers from outside through [`Layers::draw_pass`] ([`sprites`](crate::sprites), P35).
 
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
@@ -43,8 +43,7 @@ use crate::light2d::Light2dFrame;
 /// Format of every layer.
 pub const LAYER_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
-/// [`Layers::clear_pass`] with no created layer among the kinds, or with more than a render
-/// pass takes.
+/// A pass on layers that were not created, or on more layers than a render pass takes.
 pub const LAYER_TARGETS: DiagnosticCode = DiagnosticCode::new("knorke.integration.layers.targets");
 
 /// One layer (`CHI_LayerKind`).
@@ -239,6 +238,24 @@ impl<'d> Layers<'d> {
             targeted
         };
         self.cleared = true;
+        Ok(pass)
+    }
+
+    /// Opens a render pass on `layer` that keeps its content, for drawing on top of what is
+    /// there (sprites, surface geometry), and records the layer as drawn.
+    ///
+    /// # Errors
+    /// The layer was not created ([`LAYER_TARGETS`]), or the pass could not be opened.
+    pub fn draw_pass<'c>(
+        &mut self,
+        cmd: &'c mut CommandBuffer<'_>,
+        layer: Layer,
+    ) -> Result<RenderPass<'c>, Diagnostic> {
+        let texture = self.texture(layer).ok_or_else(|| {
+            Diagnostic::error(LAYER_TARGETS, format!("the layers have no {layer:?} layer"))
+        })?;
+        let pass = cmd.render_pass(&[ColorTarget::new(texture, Load::Load)])?;
+        self.drawn = self.drawn.with(layer);
         Ok(pass)
     }
 

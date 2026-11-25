@@ -1,13 +1,22 @@
 //! `cargo xtask shaders`: builds shader packs (`.kpak`, ADR 0014 §3) from compiled shader
-//! blobs and their shadercross reflection JSON.
+//! blobs and their reflection JSON, and compiles Knorke's own HLSL with DXC.
 //!
 //! Input directory layout (what shadercross writes, e.g. Chiaro's `shaders/compiled`):
 //! `<name>.<stage>.json` plus `<name>.<stage>.spv|msl|dxil` per program, stage `vert` or
-//! `frag`. Output: `<out>/<pack>.<format>.kpak` for each requested format.
+//! `frag`. Several `--src` directories go into one pack. Output:
+//! `<out>/<pack>.<format>.kpak` for each requested format; a program without a blob of a
+//! format is left out of that format's pack (Knorke's own shaders have no MSL yet).
 //!
 //! The source checksum in the pack header is taken over the shader sources (every file of
-//! `--sources`, default `<src>/../src` if it exists, sorted by name); without sources it is
-//! taken over the inputs themselves. Compiling HLSL with shadercross is a later step.
+//! `--sources`, default `<src>/../src` of each `--src` that has one, sorted by name); without
+//! sources it is taken over the inputs themselves.
+//!
+//! `--compile <dir>` compiles every `<dir>/src/<name>.<vert|frag>.hlsl` into
+//! `<dir>/compiled/<name>.<stage>.spv` and `.dxil` with DXC (`--dxc <exe>`, else the
+//! environment variable `KNORKE_DXC`, else `dxc` on the PATH; it must be a build with SPIR-V
+//! support, the one of the Windows SDK has none). The reflection JSON (four counts) is written
+//! by hand next to the blobs and checked by the tests of the crate that owns the shaders;
+//! `compiled/sources.sum` records the checksum of the sources the blobs were built from.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -16,12 +25,15 @@ use knorke_gpu::kpak::{
     ProgramSource, Reflection, ShaderFormat, Stage, source_checksum, write_pack,
 };
 
-const USAGE: &str = "usage: cargo xtask shaders --src <compiled dir> [--name <pack>] [--out <dir>]\n\
-     \x20                           [--sources <hlsl dir>] [--only a.frag,b.vert] [--formats spirv,msl,dxil]\n\n\
+const USAGE: &str = "usage: cargo xtask shaders --src <compiled dir> [--src <more>] [--name <pack>] [--out <dir>]\n\
+     \x20                           [--sources <hlsl dir>] [--only a.frag,b.vert] [--formats spirv,msl,dxil]\n\
+     \x20      cargo xtask shaders --compile <dir with src/> [--dxc <dxc.exe>]\n\n\
      defaults: --name knorke-chiaro, --out target/shaders, --sources <src>/../src, all programs, all formats";
 
 struct Args {
-    src: PathBuf,
+    src: Vec<PathBuf>,
+    compile: Option<PathBuf>,
+    dxc: Option<PathBuf>,
     name: String,
     out: PathBuf,
     sources: Option<PathBuf>,
@@ -30,7 +42,9 @@ struct Args {
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
-    let mut src = None;
+    let mut src = Vec::new();
+    let mut compile = None;
+    let mut dxc = None;
     let mut name = "knorke-chiaro".to_owned();
     let mut out = PathBuf::from("target/shaders");
     let mut sources = None;
@@ -40,7 +54,9 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
     while let Some(flag) = it.next() {
         let mut value = || it.next().cloned().ok_or(format!("{flag} needs a value"));
         match flag.as_str() {
-            "--src" => src = Some(PathBuf::from(value()?)),
+            "--src" => src.push(PathBuf::from(value()?)),
+            "--compile" => compile = Some(PathBuf::from(value()?)),
+            "--dxc" => dxc = Some(PathBuf::from(value()?)),
             "--name" => name = value()?,
             "--out" => out = PathBuf::from(value()?),
             "--sources" => sources = Some(PathBuf::from(value()?)),
@@ -59,8 +75,13 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
+    if src.is_empty() && compile.is_none() {
+        return Err("--src or --compile is required".to_owned());
+    }
     Ok(Args {
-        src: src.ok_or("--src is required")?,
+        src,
+        compile,
+        dxc,
         name,
         out,
         sources,
@@ -119,12 +140,17 @@ fn checksum_of(files: &[PathBuf]) -> Result<u64, String> {
 }
 
 fn build(args: &Args) -> Result<(), String> {
-    let mut programs: Vec<(String, Stage, Reflection)> = Vec::new();
+    // Name, stage, reflection and the directory of the blobs.
+    let mut programs: Vec<(String, Stage, Reflection, &Path)> = Vec::new();
     let mut inputs = Vec::new();
-    for path in sorted_files(&args.src)? {
+    let mut files = Vec::new();
+    for dir in &args.src {
+        files.extend(sorted_files(dir)?.into_iter().map(|f| (dir.as_path(), f)));
+    }
+    for (dir, path) in files {
         let fname = file_name(&path);
         let Some(name) = fname.strip_suffix(".json") else {
-            continue;
+            continue; // blobs, sources.sum
         };
         if args
             .only
@@ -142,10 +168,10 @@ fn build(args: &Args) -> Result<(), String> {
                 "{fname}: unsupported stage (expected .vert or .frag)"
             ));
         };
-        programs.push((name.to_owned(), stage, reflection(&path)?));
+        programs.push((name.to_owned(), stage, reflection(&path)?, dir));
         inputs.push(path.clone());
         for f in ShaderFormat::ALL {
-            let blob = args.src.join(format!("{name}.{}", f.blob_extension()));
+            let blob = dir.join(format!("{name}.{}", f.blob_extension()));
             if blob.is_file() {
                 inputs.push(blob);
             }
@@ -154,35 +180,41 @@ fn build(args: &Args) -> Result<(), String> {
     if let Some(only) = &args.only
         && let Some(missing) = only.iter().find(|n| !programs.iter().any(|p| &p.0 == *n))
     {
-        return Err(format!(
-            "--only: no program '{missing}' in {}",
-            args.src.display()
-        ));
+        return Err(format!("--only: no program '{missing}'"));
     }
     if programs.is_empty() {
-        return Err(format!(
-            "no reflection files (*.json) in {}",
-            args.src.display()
-        ));
+        return Err("no reflection files (*.json) in the --src directories".to_owned());
     }
 
-    let sources = args.sources.clone().or_else(|| {
-        args.src
-            .parent()
-            .map(|p| p.join("src"))
-            .filter(|p| p.is_dir())
-    });
-    let checksum = match &sources {
-        Some(dir) => checksum_of(&sorted_files(dir)?)?,
-        None => checksum_of(&inputs)?,
+    let sources: Vec<PathBuf> = match &args.sources {
+        Some(dir) => vec![dir.clone()],
+        None => args
+            .src
+            .iter()
+            .filter_map(|d| d.parent().map(|p| p.join("src")).filter(|p| p.is_dir()))
+            .collect(),
+    };
+    let checksum = if sources.is_empty() {
+        checksum_of(&inputs)?
+    } else {
+        let mut files = Vec::new();
+        for dir in &sources {
+            files.extend(sorted_files(dir)?);
+        }
+        files.sort_by_key(|p| file_name(p));
+        checksum_of(&files)?
     };
 
     std::fs::create_dir_all(&args.out).map_err(|e| format!("{}: {e}", args.out.display()))?;
     for &format in &args.formats {
         let list = programs
             .iter()
-            .map(|(name, stage, reflection)| {
-                let blob = args.src.join(format!("{name}.{}", format.blob_extension()));
+            .filter(|(name, _, _, dir)| {
+                dir.join(format!("{name}.{}", format.blob_extension()))
+                    .is_file()
+            })
+            .map(|(name, stage, reflection, dir)| {
+                let blob = dir.join(format!("{name}.{}", format.blob_extension()));
                 let code = std::fs::read(&blob).map_err(|e| format!("{}: {e}", blob.display()))?;
                 Ok(ProgramSource {
                     name: name.clone(),
@@ -197,18 +229,76 @@ fn build(args: &Args) -> Result<(), String> {
         let path = args.out.join(format.pack_file_name(&args.name));
         std::fs::write(&path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
         eprintln!(
-            "wrote {} ({} programs, {} bytes, sources {checksum:#018x})",
+            "wrote {} ({} of {} programs, {} bytes, sources {checksum:#018x})",
             path.display(),
             list.len(),
+            programs.len(),
             bytes.len()
         );
     }
     Ok(())
 }
 
+/// Compiles `<dir>/src/*.{vert,frag}.hlsl` into `<dir>/compiled` as SPIR-V and DXIL.
+fn compile(dir: &Path, dxc: Option<&Path>) -> Result<(), String> {
+    let dxc = dxc
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::var_os("KNORKE_DXC").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("dxc"));
+    let out = dir.join("compiled");
+    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let mut compiled = 0;
+    for path in sorted_files(&dir.join("src"))? {
+        let fname = file_name(&path);
+        let Some(name) = fname.strip_suffix(".hlsl") else {
+            continue; // includes (.hlsli)
+        };
+        let profile = if name.ends_with(".vert") {
+            "vs_6_0"
+        } else if name.ends_with(".frag") {
+            "ps_6_0"
+        } else {
+            return Err(format!(
+                "{fname}: expected <name>.vert.hlsl or <name>.frag.hlsl"
+            ));
+        };
+        // `-spirv` alone is what shadercross passes: Chiaro's blobs come out byte for byte.
+        for (ext, extra) in [("spv", Some("-spirv")), ("dxil", None)] {
+            let target = out.join(format!("{name}.{ext}"));
+            let status = std::process::Command::new(&dxc)
+                .args(["-T", profile, "-E", "main"])
+                .args(extra)
+                .arg(&path)
+                .arg("-Fo")
+                .arg(&target)
+                .status()
+                .map_err(|e| format!("running {}: {e}", dxc.display()))?;
+            if !status.success() {
+                return Err(format!("{}: dxc failed for {ext}", path.display()));
+            }
+        }
+        if !out.join(format!("{name}.json")).is_file() {
+            return Err(format!("{name}.json is missing in {}", out.display()));
+        }
+        compiled += 1;
+    }
+    // What the blobs were built from, for the owning crate's test that they are up to date.
+    let sum = checksum_of(&sorted_files(&dir.join("src"))?)?;
+    let sum_file = out.join("sources.sum");
+    std::fs::write(&sum_file, format!("{sum:016x}\n"))
+        .map_err(|e| format!("{}: {e}", sum_file.display()))?;
+    eprintln!("compiled {compiled} shaders into {}", out.display());
+    Ok(())
+}
+
 /// Entry point of `cargo xtask shaders`.
 pub(crate) fn run(args: &[String]) -> ExitCode {
-    let result = parse_args(args).and_then(|a| build(&a));
+    let result = parse_args(args).and_then(|a| {
+        if let Some(dir) = &a.compile {
+            compile(dir, a.dxc.as_deref())?;
+        }
+        if a.src.is_empty() { Ok(()) } else { build(&a) }
+    });
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
