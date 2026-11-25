@@ -600,6 +600,7 @@ Entscheidungen aus Gesprächen:
 | **Task-Graph-Scheduler** (Systeme nach Lese-/Schreibzugriff parallel) | geplant | ADR 0009; die feste Tabelle (`run_systems`) reicht, bis ein Tick gemessen parallel lohnt |
 | **Wachmann-Szene mit Bild**: `guard_scene` über die Laufzeit zeichnen (GPU-2D-Licht, Phasen „Render vorbereiten“/„Render“ aus ADR 0009) | erledigt 2026-11-25 (Abschnitt 16) | – |
 | **Licht beeinflusst Wahrnehmung**: der Wachmann sieht in `guard_scene` unabhängig vom gezeichneten Licht; `SenseMap::light` aus den Lichtern der Szene speisen (CPU-Seite, deterministisch, nicht von der GPU zurücklesen) | offen | sobald Schleichen im Dunkeln gespielt werden soll |
+| **Leistung der Medium-Lichtstreifen**: Szene `shafts` ist in Knorke in drei von drei Läufen langsamer als in Chiaro (Median etwa +34 %, bei ±25 % Streuung pro Seite; Messwerte in `docs/chiaro-port/ABLAUF.md`, 2026-11-25) | offen | Pässe und Zielwechsel im Polar-/Scatter-Pfad gegen Chiaro zählen, dann messen |
 | **Fenster und Echtzeit-Host**: die Szene läuft offscreen und schreibt PNGs; Gerät und Shader-Pack kommen noch aus `knorke_gpu::test_support` | offen | mit dem ersten spielbaren Host (Phase 4) |
 | **`knorke-scene` und Agenten-CLI** (Phase 3): Szene als Daten statt als Rust-Code, `discover`/`inspect`/`mutate`/`validate`/`execute` | Stufe 1 erledigt 2026-11-25 (Abschnitt 16, ADR 0018) | – |
 | **Agenten-Ebene Stufe 2**: `render` als Operation (Bild aus der Kommandozeile) | erledigt 2026-11-25 (Abschnitt 16, ADR 0018) | – |
