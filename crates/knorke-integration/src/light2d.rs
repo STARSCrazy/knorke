@@ -6,8 +6,9 @@
 //! 1. [`Light2dRenderer::prepare`]: `PassPlan::prepare` (culls lights and zones, decides every
 //!    stage, creates what the frame needs), then `PostRenderer::prepare` on the plan's HDR
 //!    buffer. Everything that can fail fails here.
-//! 2. [`Light2dRenderer::record`]: `PassPlan::record` (occlusion, atlases, zones, lights and
-//!    the ring lights of the shockwaves, composite), then `PostRenderer::record` (bloom, tonemap, grade, CRT, shockwaves) into the
+//! 2. [`Light2dRenderer::record`]: `PassPlan::record` (occlusion, atlases, medium map, zones,
+//!    lights and the ring lights of the shockwaves, composite), then `PostRenderer::record`
+//!    (bloom, tonemap, grade, CRT, shockwaves) into the
 //!    target. The host submits and presents.
 //!
 //! One host setting feeds both crates: the scene colour space of the output settings
@@ -20,6 +21,7 @@ use knorke_gpu::{CommandBuffer, Gpu, TextureRef};
 use knorke_light2d::Projection;
 use knorke_light2d::composite::InputColorSpace;
 use knorke_light2d::frame_warnings::{Warning, WarningSet};
+use knorke_light2d::medium_table::MediumTable;
 use knorke_light2d::pass_plan::{PassFrame, PassPlan, PassPrepared, PassRecord, SceneStores};
 use knorke_light2d::ring_light::{MAX_RING_LIGHTS, RingLight};
 use knorke_light2d::settings::LightSettings;
@@ -72,6 +74,11 @@ pub struct Light2dFrame<'a> {
     pub surface: Option<TextureRef<'a>>,
     /// Application sprite mask (scene size; alpha at or above 0.5 occludes).
     pub occlusion: Option<TextureRef<'a>>,
+    /// Medium layer (scene size; density, height span and kind of medium per pixel). With a
+    /// light it builds the medium world map that dims the lights (P29).
+    pub medium: Option<TextureRef<'a>>,
+    /// The media table the medium layer picks from; `None`: the presets.
+    pub media: Option<&'a MediumTable>,
     /// HUD overlay over the whole target (premultiplied alpha).
     pub overlay: Option<TextureRef<'a>>,
     /// The output target (`COLOR_TARGET` usage).
@@ -122,6 +129,8 @@ impl<'a> Light2dFrame<'a> {
             material: None,
             surface: None,
             occlusion: None,
+            medium: None,
+            media: None,
             overlay: None,
             target,
             projection,
@@ -137,6 +146,8 @@ impl<'a> Light2dFrame<'a> {
             material: self.material,
             surface: self.surface,
             occlusion: self.occlusion,
+            medium: self.medium,
+            media: self.media,
             projection: self.projection,
             time: self.time,
             input_space: settings.input_space(),

@@ -33,6 +33,8 @@ use crate::lighting::{
     DetailMode, LightingFrame, LightingRecord, LightingResult, LightingStage, ShadowMaps,
 };
 use crate::mask_store::MaskStore;
+use crate::medium_map::{MediumMapFrame, MediumMapStage, medium_map_builds};
+use crate::medium_table::MediumTable;
 use crate::obstacle::{ObstacleStore, PatternSource};
 use crate::occluder_raster::{
     DomainParams, INFINITE_TOP, OCCLUDER_PROGRAMS, OccluderGeometry, OccluderPrograms,
@@ -98,6 +100,11 @@ pub struct PassFrame<'a> {
     /// Application sprite mask (alpha at or above 0.5 occludes, infinitely tall; scene size,
     /// E21).
     pub occlusion: Option<TextureRef<'a>>,
+    /// Medium layer (codec `medium_pixel`, RGBA8 UNORM, scene size); `None`: no medium map.
+    pub medium: Option<TextureRef<'a>>,
+    /// The media table the medium layer picks from; `None`: the presets
+    /// ([`MediumTable::new`]).
+    pub media: Option<&'a MediumTable>,
     /// World to scene projection.
     pub projection: &'a Projection,
     /// Animation time in seconds (from the host's tick, never a clock).
@@ -118,6 +125,8 @@ impl<'a> PassFrame<'a> {
             material: None,
             surface: None,
             occlusion: None,
+            medium: None,
+            media: None,
             projection,
             time: 0.0,
             input_space: InputColorSpace::Srgb,
@@ -139,6 +148,7 @@ impl<'a> PassFrame<'a> {
             ("material", self.material),
             ("surface", self.surface),
             ("occlusion", self.occlusion),
+            ("medium", self.medium),
         ] {
             if let Some(t) = t
                 && (t.width(), t.height()) != size
@@ -245,6 +255,9 @@ pub struct PassPlan<'d> {
     occlusion: OcclusionMask<'d>,
     patterns: PatternOccluders<'d>,
     atlases: LightAtlases<'d>,
+    medium_map: MediumMapStage<'d>,
+    /// The table of frames without their own ([`PassFrame::media`]).
+    default_media: MediumTable,
     lighting: LightingStage<'d>,
     composite: CompositeStage<'d>,
     debug_check: DebugCheckStage<'d>,
@@ -303,6 +316,7 @@ fn lighting_frame<'a>(
     lights: &'a LightList,
     shadows: Option<&'a ShadowMaps<'a>>,
     atlases: &'a LightAtlases<'_>,
+    medium_map: &'a MediumMapStage<'_>,
 ) -> LightingFrame<'a> {
     LightingFrame {
         scene: frame.scene,
@@ -316,6 +330,7 @@ fn lighting_frame<'a>(
         profile_atlas: atlases.profiles.texture(),
         mask_atlas: atlases.masks.texture(),
         ring_lights: frame.ring_lights,
+        medium_map: medium_map.view(),
     }
 }
 
@@ -345,7 +360,7 @@ fn debug_check_frame<'a>(
         size: frame.size(),
         surface: frame.surface,
         material: frame.material,
-        medium: None,
+        medium: frame.medium,
         settings,
     }
 }
@@ -362,6 +377,7 @@ impl<'d> PassPlan<'d> {
         let light_pipelines = LightPipelines::new(&shaders)?;
         let composite = CompositeStage::new(gpu, &shaders)?;
         let debug_check = DebugCheckStage::new(gpu, &shaders)?;
+        let medium_map = MediumMapStage::new(&shaders)?;
         Ok(Self {
             shaders,
             pipelines,
@@ -375,6 +391,8 @@ impl<'d> PassPlan<'d> {
                 PatternPrograms::at(OCCLUDER_PROGRAMS.len() + MASK_PROGRAMS.len()),
             ),
             atlases: LightAtlases::new(gpu),
+            medium_map,
+            default_media: MediumTable::new(),
             lighting: LightingStage::new(gpu),
             composite,
             debug_check,
@@ -450,14 +468,15 @@ impl<'d> PassPlan<'d> {
             sprite,
             settings.surface_height_step,
         );
+        let builds_medium = medium_map_builds(frame.medium.is_some(), stores.lights);
         let modes = LightModes {
             height_mode: obstacles.any_finite_height(),
             normal_mode,
             max_height,
+            medium_map: builds_medium,
             profiles: stores.profiles.map(|p| p as _),
             animations: stores.animations,
             masks: stores.masks,
-            ..Default::default()
         };
         collect_lights(
             stores.lights,
@@ -585,6 +604,35 @@ impl<'d> PassPlan<'d> {
             prepared.stages.insert(PassStages::ATLASES);
         }
 
+        // Step 3b: the medium world map, on the mask's grid (or the same kind of grid).
+        let medium = match frame.medium.filter(|_| builds_medium) {
+            Some(layer) => {
+                let (domain, anchor) = match &shadows {
+                    Some(s) => (s.domain, s.anchor),
+                    None => {
+                        let d = OcclusionDomain::new(w, h, settings.resolutions().shadow);
+                        (d, MaskAnchor::compute(frame.projection, &d))
+                    }
+                };
+                Some(MediumMapFrame {
+                    layer,
+                    media: frame.media.unwrap_or(&self.default_media),
+                    projection: frame.projection,
+                    settings,
+                    surface: frame.surface.is_some(),
+                    domain,
+                    anchor,
+                })
+            }
+            None => None,
+        };
+        prepared.allocations += self
+            .medium_map
+            .prepare(&mut self.shaders, medium.as_ref())?;
+        if medium.is_some() {
+            prepared.stages.insert(PassStages::MEDIUM_MAP);
+        }
+
         // Step 4: zones and lights.
         let maps = match &shadows {
             Some(s) => Some(s.maps(&self.occlusion, &self.patterns)?),
@@ -597,6 +645,7 @@ impl<'d> PassPlan<'d> {
             &self.lights,
             maps.as_ref(),
             &self.atlases,
+            &self.medium_map,
         );
         let zones = stores.zones.map(|store| ZoneInput {
             store,
@@ -694,6 +743,10 @@ impl<'d> PassPlan<'d> {
             self.thin_obstacles = 0;
         }
         self.atlases.record(cmd)?;
+        if let Some(layer) = frame.medium {
+            self.medium_map
+                .record(cmd, self.samplers.sampler(Filter::Nearest), layer)?;
+        }
         let maps = match &shadows {
             Some(s) => Some(s.maps(&self.occlusion, &self.patterns)?),
             None => None,
@@ -705,6 +758,7 @@ impl<'d> PassPlan<'d> {
             &self.lights,
             maps.as_ref(),
             &self.atlases,
+            &self.medium_map,
         );
         out.lighting =
             self.lighting
@@ -786,12 +840,19 @@ impl<'d> PassPlan<'d> {
         &self.atlases
     }
 
-    /// Pipelines created so far: occlusion table, light programs, composite programs, debug check.
+    /// The medium world map stage (P29; for tools, tests and the medium stage).
+    pub fn medium_map(&self) -> &MediumMapStage<'d> {
+        &self.medium_map
+    }
+
+    /// Pipelines created so far: occlusion table, light programs, composite programs, debug
+    /// check, medium map.
     pub fn pipeline_count(&self) -> usize {
         self.pipelines.len()
             + self.light_pipelines.len()
             + self.composite.pipeline_count()
             + self.debug_check.pipeline_count()
+            + self.medium_map.pipeline_count()
     }
 
     /// Checks what must hold after a recorded frame and reports each broken invariant as an
@@ -879,6 +940,7 @@ impl Inspect for PassPlan<'_> {
                 ("lights", PassStages::LIGHTS),
                 ("composite", PassStages::COMPOSITE),
                 ("debug_check", PassStages::DEBUG_CHECK),
+                ("medium_map", PassStages::MEDIUM_MAP),
             ] {
                 v.field(name, last.stages.contains(s));
             }
@@ -898,6 +960,7 @@ impl Inspect for PassPlan<'_> {
             ("field", self.occlusion.field()),
             ("profile_atlas", self.atlases.profiles.texture()),
             ("mask_atlas", self.atlases.masks.texture()),
+            ("medium_map", self.medium_map.view().map(|m| m.map)),
         ] {
             let (w, h) = t.map_or((0, 0), |t| (t.width(), t.height()));
             v.begin_object(name);

@@ -14,6 +14,7 @@
 //! | [`animation`], [`area_light`], [`light_culling`], [`gpu_light`] | animation curves and store, area-light model, per-frame light lists | P8 |
 //! | [`mask`], [`mask_store`], [`light_mask`], [`resources`] | masks (gobo, window): shapes, store, placement; stores as light resources | P10 |
 //! | [`medium_table`], [`medium_culling`] | media table with presets; the lights and suns of the medium stage | P12 |
+//! | [`medium_map`] | medium world map: uniform blocks, grid, medium program layouts; `MediumMapStage` with `gpu` | P29 |
 //! | [`pattern_store`], [`pattern_geometry`] | obstacle patterns: store with shelf-packed atlas places, sampling, ray entry geometry | P15 |
 //! | [`shadow`] | occlusion domain and anchor, dirty rectangles, incremental mask update plan | P16 |
 //! | [`occluder_raster`] | obstacles into the occlusion mask: triangle buffers, tile cell textures | P22 |
@@ -71,6 +72,7 @@ pub mod mask;
 pub mod mask_store;
 pub mod material;
 pub mod medium_culling;
+pub mod medium_map;
 pub mod medium_table;
 pub mod obstacle;
 pub mod occluder_raster;

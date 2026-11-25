@@ -482,6 +482,7 @@ impl<'d> Host<'d> {
             profile_atlas: self.atlases.profiles.texture(),
             mask_atlas: self.atlases.masks.texture(),
             ring_lights: &[],
+            medium_map: None,
         };
         let zones = ZoneInput {
             store: &s.zones,

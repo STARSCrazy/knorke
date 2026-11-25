@@ -62,7 +62,8 @@ pub enum Layer {
     Occlusion,
     /// Unlit HUD over the result. Empty: 0.
     Overlay,
-    /// Density, height span and kind of medium. Empty: 0. No stage reads it yet (P29).
+    /// Density, height span and kind of medium. Empty: 0. With a light it builds the medium
+    /// world map (P29); the scattering (P30) is not ported yet.
     Medium,
 }
 
@@ -285,6 +286,8 @@ impl<'d> Layers<'d> {
             material: slot(Layer::Material),
             surface: slot(Layer::Surface),
             occlusion: slot(Layer::Occlusion).filter(|_| self.drawn.contains(Layer::Occlusion)),
+            // Like the sprite mask: an empty medium layer would only cost the map passes.
+            medium: slot(Layer::Medium).filter(|_| self.drawn.contains(Layer::Medium)),
             overlay: slot(Layer::Overlay),
             ..Light2dFrame::new(scene, target, projection)
         }
