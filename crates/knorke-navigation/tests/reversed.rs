@@ -7,17 +7,8 @@ use knorke_navigation::grid::{Cell, CellGoal, DenseGrid, GridRules, Preset};
 use knorke_navigation::topology::Topology;
 use knorke_navigation::{Graph, Limits, SearchStatus, find_path};
 
-struct Rng(u64);
-
-impl Rng {
-    fn below(&mut self, n: u32) -> u32 {
-        self.0 = self
-            .0
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        ((self.0 >> 33) as u32) % n
-    }
-}
+mod common;
+use common::Rng;
 
 fn octile() -> Topology {
     Topology::Square(GridRules::preset(Preset::Octile))

@@ -186,6 +186,15 @@ impl Wall {
     }
 }
 
+/// Grid offset (dx, dz) of the neighbour across each side, in the order of the sides.
+const NEIGHBOR_OFFSETS: [(i64, i64); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
+
+/// `p` raised (or lowered) to height `y`.
+#[inline]
+fn at(p: Vec3, y: f32) -> Vec3 {
+    Vec3::new(p.x, y, p.z)
+}
+
 /// Inward normal per side (into the cell).
 const INWARD: [Vec3; 4] = [
     Vec3 {
@@ -882,7 +891,6 @@ impl GridMap {
         let n = INWARD[side];
         let (sn, cs) = angle.sin_cos();
         let width = (u1 - u0) * s;
-        let at = |p: Vec3, y: f32| Vec3::new(p.x, y, p.z);
         if left {
             let far = base + (e * cs + n * sn) * width;
             Some((
@@ -974,8 +982,10 @@ impl GridMap {
         let p = self.corners(x as i64, z as i64);
         let (i, j) = (side, (side + 1) % 4);
         let (a, b, n) = (p[i], p[j], INWARD[side]);
-        const OFFSETS: [(i64, i64); 4] = [(0, -1), (1, 0), (0, 1), (-1, 0)];
-        let (nx, nz) = (x as i64 + OFFSETS[side].0, z as i64 + OFFSETS[side].1);
+        let (nx, nz) = (
+            x as i64 + NEIGHBOR_OFFSETS[side].0,
+            z as i64 + NEIGHBOR_OFFSETS[side].1,
+        );
         // the neighbour span facing this wall (most height in common); none in a solid column
         let facing = self.facing_span(
             nx,
@@ -1180,21 +1190,11 @@ impl GridMap {
         let Some(sp) = self.span(x as i64, z as i64, level) else {
             return;
         };
-        let s = self.cell_size;
-        let x0 = x as f32 * s;
-        let x1 = x0 + s;
-        let z0 = z as f32 * s;
-        let z1 = z0 + s;
         let (fc, cc) = (sp.floor, sp.ceiling);
         let (fh, ch) = (fc[0], cc[0]);
+        let s = self.cell_size;
         // corners NW, NE, SE, SW at height 0
-        let p = [
-            Vec3::new(x0, 0.0, z0),
-            Vec3::new(x1, 0.0, z0),
-            Vec3::new(x1, 0.0, z1),
-            Vec3::new(x0, 0.0, z1),
-        ];
-        let at = |p: Vec3, y: f32| Vec3::new(p.x, y, p.z);
+        let p = self.corners(x as i64, z as i64);
         let full = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         let sloped_floor = fc.iter().any(|&h| h != fh);
         let sloped_ceiling = cc.iter().any(|&h| h != ch);
@@ -1268,7 +1268,6 @@ impl GridMap {
         // Inward normal per side; the edge of side i runs from corner i to corner i + 1 (left to right
         // as seen from inside the cell).
         let normals = INWARD;
-        let offsets = [(0i64, -1i64), (1, 0), (0, 1), (-1, 0)];
         for side in 0..4 {
             let (i, j) = (side, (side + 1) % 4);
             let (a, b, n) = (p[i], p[j], normals[side]);
@@ -1282,7 +1281,7 @@ impl GridMap {
             // Steps: the solid of the neighbour column seen from this span on the shared edge, i.e. this
             // span's height minus the neighbour's open spans. A piece below a neighbour span (its floor
             // slab) has that span's side texture; the piece above the topmost span has the topmost's.
-            let (dx, dz) = offsets[side];
+            let (dx, dz) = NEIGHBOR_OFFSETS[side];
             // the neighbour's corners on the shared edge: ours i is its (i + 3) % 4, ours j its (i + 2) % 4
             let (ni, nj) = ((side + 3) % 4, (side + 2) % 4);
             let face = |corners: [Vec3; 4], uv: [[f32; 2]; 4], tex: i32| Quad {
@@ -1393,10 +1392,7 @@ impl GridMap {
         let s = self.cell_size;
         let (f, _) = c.corner_heights(s);
         let mut top = f.iter().fold(f32::NEG_INFINITY, |m, &h| m.max(h));
-        for (side, (dx, dz)) in [(0i64, -1i64), (1, 0), (0, 1), (-1, 0)]
-            .into_iter()
-            .enumerate()
-        {
+        for (side, (dx, dz)) in NEIGHBOR_OFFSETS.into_iter().enumerate() {
             if let Some(nsp) = self.spans(x as i64 + dx, z as i64 + dz).last() {
                 let nc = nsp.ceiling;
                 top = top.max(nc[(side + 3) % 4]).max(nc[(side + 2) % 4]);
@@ -1444,15 +1440,7 @@ impl GridMap {
     ) {
         let c = &self.cells[z * self.width + x];
         let s = self.cell_size;
-        let (x0, z0) = (x as f32 * s, z as f32 * s);
-        let p = [
-            Vec3::new(x0, 0.0, z0),
-            Vec3::new(x0 + s, 0.0, z0),
-            Vec3::new(x0 + s, 0.0, z0 + s),
-            Vec3::new(x0, 0.0, z0 + s),
-        ];
-        let at = |p: Vec3, y: f32| Vec3::new(p.x, y, p.z);
-        let offsets = [(0i64, -1i64), (1, 0), (0, 1), (-1, 0)];
+        let p = self.corners(x as i64, z as i64);
         let solid = |corners: [Vec3; 4], normal: Vec3, side: i32| Quad {
             corners,
             uv: [[0.0; 2]; 4],
@@ -1481,7 +1469,7 @@ impl GridMap {
             let mut bottom: [Option<f32>; 4] = [None; 4];
             let mut ground = f.iter().fold(f32::INFINITY, |m, &h| m.min(h));
             for side in 0..4 {
-                let (dx, dz) = offsets[side];
+                let (dx, dz) = NEIGHBOR_OFFSETS[side];
                 let (nx, nz) = (x as i64 + dx, z as i64 + dz);
                 let mut covered = None;
                 bottom[side] = self.index(nx, nz, 0).map(|_| {
@@ -1508,7 +1496,10 @@ impl GridMap {
             let mut any = false;
             for side in 0..4 {
                 let b = bottom[side].unwrap_or(ground);
-                let (nx, nz) = (x as i64 + offsets[side].0, z as i64 + offsets[side].1);
+                let (nx, nz) = (
+                    x as i64 + NEIGHBOR_OFFSETS[side].0,
+                    z as i64 + NEIGHBOR_OFFSETS[side].1,
+                );
                 any |= self.index(nx, nz, 0).is_some() && !self.column_solid(nx, nz);
                 if !(b < top) {
                     continue;
@@ -1540,7 +1531,7 @@ impl GridMap {
             // or outside the map. The cap is raised only at corners between two closed sides: over an
             // open side it stays at the ceiling, so the shadow the roof edge throws outside does not grow.
             let closed: [bool; 4] = std::array::from_fn(|side| {
-                let (dx, dz) = offsets[side];
+                let (dx, dz) = NEIGHBOR_OFFSETS[side];
                 let (nx, nz) = (x as i64 + dx, z as i64 + dz);
                 let (i, j) = (side, (side + 1) % 4);
                 match self.facing_span(
@@ -1594,7 +1585,7 @@ impl GridMap {
             }
             // the map border: a closed box one cell deep, floor to cap
             for side in 0..4 {
-                let (dx, dz) = offsets[side];
+                let (dx, dz) = NEIGHBOR_OFFSETS[side];
                 if self.index(x as i64 + dx, z as i64 + dz, 0).is_some() {
                     continue;
                 }

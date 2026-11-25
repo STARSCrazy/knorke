@@ -23,18 +23,6 @@ impl SenseMap for CellFog {
     }
 }
 
-/// Opaque cells from a list.
-struct Walls(Vec<Cell>);
-
-impl SenseMap for Walls {
-    fn sight(&mut self, cell: Cell) -> Medium {
-        Medium {
-            opaque: self.0.contains(&cell),
-            ..Medium::default()
-        }
-    }
-}
-
 /// Smoke in the cells `(1, 0)` and `(2, 0)`: thick for the eye, clear for
 /// thermal sight.
 struct Smoke;

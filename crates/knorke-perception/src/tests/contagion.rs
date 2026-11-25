@@ -119,18 +119,6 @@ fn sighting(subject: u32, point: Pos, cues: u32, at: u32) -> Percept {
     }
 }
 
-/// Opaque cells from a list.
-struct Walls(Vec<Cell>);
-
-impl SenseMap for Walls {
-    fn sight(&mut self, cell: Cell) -> Medium {
-        Medium {
-            opaque: self.0.contains(&cell),
-            ..Medium::default()
-        }
-    }
-}
-
 /// No light anywhere.
 struct Dark;
 

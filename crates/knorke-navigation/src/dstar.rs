@@ -490,13 +490,6 @@ impl<N: Copy + Eq + Hash, H: Heuristic<N>> DStarLite<N, H> {
         self.node_limit_hit
     }
 
-    /// Every node the planner got to know since [`begin`](Self::begin).
-    /// Nodes it does not know need no [`nodes_changed`](Self::nodes_changed):
-    /// they are read from the current map when first reached.
-    pub fn known_nodes(&self) -> impl Iterator<Item = N> + '_ {
-        self.records.iter().map(|r| r.node)
-    }
-
     /// Nodes the planner got to know.
     pub fn known(&self) -> usize {
         self.records.len()

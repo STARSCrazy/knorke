@@ -19,14 +19,7 @@ pub const NO_FRAG: u32 = u32::MAX;
 /// stays deterministic). Keeps memory bounded and every index below NO_FRAG.
 pub const MAX_FRAGS: usize = 1 << 20;
 
-/// Alpha in steps of 1/8 (rounded to the nearest step), clamped to 0..1; NaN counts as 0.
-#[inline]
-pub fn step_alpha(a: f32) -> f32 {
-    if a.is_nan() || a <= 0.0 {
-        return 0.0;
-    }
-    (a.min(1.0) * 8.0).round() / 8.0
-}
+pub use knorke_math::step_alpha;
 
 /// How one draw call blends: mode (BLEND_ALPHA or BLEND_ADD), its alpha before stepping, and its
 /// draw order this frame (ties at equal depth: the later draw lies on top).

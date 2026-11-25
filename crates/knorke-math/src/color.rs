@@ -90,6 +90,23 @@ impl Srgba8 {
     }
 }
 
+/// Alpha in steps of 1/8 (rounded to the nearest step), clamped to 0..1; NaN counts as 0.
+/// The renderer's blending and the lighting pass's stippled shadows share these steps, so a
+/// stippled shadow covers the share its caster shows on screen.
+#[inline]
+pub fn step_alpha(a: f32) -> f32 {
+    if a.is_nan() || a <= 0.0 {
+        return 0.0;
+    }
+    // `a` is positive and not NaN here, so `min` has no platform-dependent case.
+    #[allow(clippy::disallowed_methods)]
+    let clamped = a.min(1.0);
+    (clamped * 8.0).round() / 8.0
+}
+
+/// 4x4 Bayer matrix, values 0..15: the ordered dither of the renderer and the shadow stipple.
+pub const BAYER4: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+
 #[cfg(test)]
 mod tests {
     use super::*;

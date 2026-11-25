@@ -11,17 +11,6 @@ impl Renderer {
         id
     }
 
-    /// Changes an emitter; false for an unknown or destroyed id.
-    pub fn set_emitter(&mut self, id: u32, e: Emitter) -> bool {
-        match self.emitters.get_mut(&id) {
-            Some(slot) => {
-                *slot = e;
-                true
-            }
-            None => false,
-        }
-    }
-
     /// Removes an emitter; false for an unknown or destroyed id.
     pub fn destroy_emitter(&mut self, id: u32) -> bool {
         self.emitters.remove(&id).is_some()
@@ -145,7 +134,7 @@ impl Renderer {
         let pid = self.particle_lights.len() as u32;
         self.particle_lights.push(ParticleLight {
             pos: p.position,
-            color: color_scaled(p.color, 1.0),
+            color: crate::srgb::lin_of(p.color).map(|v| v / 255.0),
             lit: self.options.lighting && p.flags & PARTICLE_EMISSIVE == 0,
         });
         let tex = tex_id.map(|t| &self.textures[t]);
