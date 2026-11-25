@@ -7,6 +7,8 @@ pub(crate) struct Palette {
     exact: BTreeMap<[u8; 3], u8>,
     /// Nearest index for every colour with 6 bits per channel.
     cache: Vec<u8>,
+    /// One bit per 6-bit cell: some palette colour lies in it, so `exact` must be asked.
+    has_exact: Vec<u64>,
 }
 
 pub(crate) use knorke_math::BAYER4;
@@ -24,8 +26,11 @@ impl Palette {
             .map(|c| [c[0], c[1], c[2]])
             .collect();
         let mut exact = BTreeMap::new();
+        let mut has_exact = vec![0u64; 64 * 64 * 64 / 64];
         for (i, c) in colors.iter().enumerate() {
             exact.entry(*c).or_insert(i as u8);
+            let k = cell(*c);
+            has_exact[k / 64] |= 1 << (k % 64);
         }
         let mut cache = vec![0u8; 64 * 64 * 64];
         for r in 0..64u32 {
@@ -40,18 +45,26 @@ impl Palette {
             colors,
             exact,
             cache,
+            has_exact,
         })
     }
 
     /// Nearest palette index. Colours that are in the palette map to their first index exactly.
     #[inline]
     pub(crate) fn nearest(&self, c: [u8; 3]) -> u8 {
-        if let Some(&i) = self.exact.get(&c) {
+        let k = cell(c);
+        if self.has_exact[k / 64] >> (k % 64) & 1 != 0
+            && let Some(&i) = self.exact.get(&c)
+        {
             return i;
         }
-        let k = ((c[0] as usize >> 2) * 64 + (c[1] as usize >> 2)) * 64 + (c[2] as usize >> 2);
         self.cache[k]
     }
+}
+
+#[inline]
+fn cell(c: [u8; 3]) -> usize {
+    ((c[0] as usize >> 2) * 64 + (c[1] as usize >> 2)) * 64 + (c[2] as usize >> 2)
 }
 
 fn nearest_slow(colors: &[[u8; 3]], c: [i32; 3]) -> u8 {

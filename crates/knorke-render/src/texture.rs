@@ -539,8 +539,15 @@ impl Texture {
     pub fn sample(&self, u: f32, v: f32) -> [u8; 4] {
         let x = (u * self.width as f32).floor() as i64;
         let y = (v * self.height as f32).floor() as i64;
-        let x = x.rem_euclid(self.width as i64) as usize;
-        let y = y.rem_euclid(self.height as i64) as usize;
+        // the division only for coordinates outside the first repeat
+        let wrap = |i: i64, n: usize| {
+            if (0..n as i64).contains(&i) {
+                i as usize
+            } else {
+                i.rem_euclid(n as i64) as usize
+            }
+        };
+        let (x, y) = (wrap(x, self.width), wrap(y, self.height));
         self.texels[y * self.width + x]
     }
 }

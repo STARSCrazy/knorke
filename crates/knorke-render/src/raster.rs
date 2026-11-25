@@ -299,7 +299,7 @@ pub(crate) fn draw_triangle(g: &mut GBuffer, p: &Proj, tri: &[ClipVert; 3], m: &
     let mut prev = project(&poly[1], p);
     for v in &poly[2..] {
         let next = project(v, p);
-        fill(g, [s0, prev, next], m, &mut |_, _| {});
+        fill(g, [s0, prev, next], m, |_, _| {});
         prev = next;
     }
 }
@@ -316,7 +316,7 @@ fn fill(
     g: &mut GBuffer,
     mut t: [ScreenVert; 3],
     m: &Material,
-    visit: &mut dyn FnMut(usize, usize),
+    mut visit: impl FnMut(usize, usize),
 ) {
     let mut area = edge(&t[0], &t[1], t[2].x, t[2].y);
     if area == 0 {
@@ -350,17 +350,40 @@ fn fill(
     ];
     let inv_area = 1.0 / area as f32;
     let normal = m.normal;
+    // Edge values are affine in the pixel centre: step them per pixel and row instead of
+    // recomputing. Exact in i64, so coverage and barycentrics stay bit-identical.
+    let dx = [
+        -(t[2].y - t[1].y) * SUB,
+        -(t[0].y - t[2].y) * SUB,
+        -(t[1].y - t[0].y) * SUB,
+    ];
+    let dy = [
+        (t[2].x - t[1].x) * SUB,
+        (t[0].x - t[2].x) * SUB,
+        (t[1].x - t[0].x) * SUB,
+    ];
+    let (cx0, cy0) = (x0 * SUB + SUB / 2, y0 * SUB + SUB / 2);
+    let mut row_e = [
+        edge(&t[1], &t[2], cx0, cy0),
+        edge(&t[2], &t[0], cx0, cy0),
+        edge(&t[0], &t[1], cx0, cy0),
+    ];
     for py in y0..=y1 {
         let cy = py * SUB + SUB / 2;
         let row = py as usize * g.width;
+        let mut e = row_e;
+        for k in 0..3 {
+            row_e[k] += dy[k];
+        }
         for px in x0..=x1 {
-            let cx = px * SUB + SUB / 2;
-            let e0 = edge(&t[1], &t[2], cx, cy);
-            let e1 = edge(&t[2], &t[0], cx, cy);
-            let e2 = edge(&t[0], &t[1], cx, cy);
+            let [e0, e1, e2] = e;
+            for k in 0..3 {
+                e[k] += dx[k];
+            }
             if e0 < bias[0] || e1 < bias[1] || e2 < bias[2] {
                 continue;
             }
+            let cx = px * SUB + SUB / 2;
             let b0 = e0 as f32 * inv_area;
             let b1 = e1 as f32 * inv_area;
             let b2 = e2 as f32 * inv_area;
@@ -514,7 +537,7 @@ mod tests {
         let ring = [sv(2.1, 1.3), sv(37.9, 2.6), sv(38.2, 28.1), sv(1.7, 27.4)];
         for k in 0..4 {
             g.depth.fill(f32::INFINITY);
-            fill(&mut g, [c, ring[k], ring[(k + 1) % 4]], &m, &mut |x, y| {
+            fill(&mut g, [c, ring[k], ring[(k + 1) % 4]], &m, |x, y| {
                 hits[y * w + x] += 1
             });
         }
