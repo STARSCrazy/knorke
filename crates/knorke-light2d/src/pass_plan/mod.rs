@@ -87,6 +87,9 @@ impl PassStages {
     pub const DEBUG_CHECK: Self = Self(32);
     /// Medium world map (step 3b).
     pub const MEDIUM_MAP: Self = Self(64);
+    /// Medium stage: haze and the medium layer scattered, between the light pass and the
+    /// composite (step 4b).
+    pub const MEDIUM: Self = Self(128);
 
     /// `true` if every stage of `other` is in `self`.
     pub const fn contains(self, other: Self) -> bool {

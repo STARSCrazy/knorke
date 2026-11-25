@@ -23,6 +23,10 @@ use knorke_light2d::medium_map::{
     MEDIUM_MAP_PROGRAMS, MediumMapParams, MediumParams, MediumProgram, MediumResolveParams,
     MediumSplatParams, MediumTopParams, medium_layout_of, slots,
 };
+use knorke_light2d::medium_stage::{
+    MediumLightPassParams, MediumMaskLightPassParams, PolarQueryParams, PolarRowParams,
+    SunHeightParams, SunParams,
+};
 
 #[test]
 fn every_medium_program_layout_matches_its_shaders() {
@@ -118,7 +122,69 @@ const SPLAT: Layout = &[
 const TOP: Layout = &[f!(MediumTopParams, "TopMap", map, 4)];
 const RESOLVE: Layout = &[f!(MediumResolveParams, "Resolve", resolve, 4)];
 
-const STRUCTS: [(&str, Layout, usize); 5] = [
+// The stage's blocks (P30). `medium_light.vert` declares `LightOffset` only with
+// `CHI_LIGHT_MASK`; the unmasked block is the masked one's prefix.
+const BASE: usize = offset_of!(MediumMaskLightPassParams, base);
+const LIGHT_PASS: Layout = &[
+    (
+        "OriginXAxis",
+        BASE + offset_of!(MediumLightPassParams, origin_x_axis),
+        16,
+    ),
+    (
+        "YAxisZAxis",
+        BASE + offset_of!(MediumLightPassParams, y_axis_z_axis),
+        16,
+    ),
+    ("Sizes", BASE + offset_of!(MediumLightPassParams, sizes), 16),
+    f!(MediumMaskLightPassParams, "LightOffset", light_offset, 4),
+];
+const POLAR_QUERY: Layout = &[
+    f!(PolarQueryParams, "PolarMaskX", mask_x, 4),
+    f!(PolarQueryParams, "PolarMaskY", mask_y, 4),
+    f!(PolarQueryParams, "PolarAtlasSize", atlas, 4),
+];
+const POLAR_ROW: Layout = &[
+    f!(PolarRowParams, "PolarMaskX", mask_x, 4),
+    f!(PolarRowParams, "PolarMaskY", mask_y, 4),
+    f!(PolarRowParams, "PolarLight", light, 4),
+    f!(PolarRowParams, "PolarDomain", domain, 4),
+];
+const SUN: Layout = &[
+    f!(SunParams, "SunColor", color, 4),
+    f!(SunParams, "SunToLight", to_light, 4),
+    f!(SunParams, "SunMaskX", mask_x, 4),
+    f!(SunParams, "SunMaskY", mask_y, 4),
+    f!(SunParams, "SunAtlas", atlas, 4),
+    f!(SunParams, "SunBlock", block, 4),
+];
+const SUN_HEIGHT: Layout = &[
+    f!(SunHeightParams, "SunMarch", march, 4),
+    f!(SunHeightParams, "SunDomain", domain, 4),
+];
+
+const STRUCTS: [(&str, Layout, usize); 10] = [
+    (
+        "type.MediumLightPassParams",
+        LIGHT_PASS,
+        size_of::<MediumMaskLightPassParams>(),
+    ),
+    (
+        "type.PolarQueryParams",
+        POLAR_QUERY,
+        size_of::<PolarQueryParams>(),
+    ),
+    (
+        "type.PolarRowParams",
+        POLAR_ROW,
+        size_of::<PolarRowParams>(),
+    ),
+    ("type.SunParams", SUN, size_of::<SunParams>()),
+    (
+        "type.SunHeightParams",
+        SUN_HEIGHT,
+        size_of::<SunHeightParams>(),
+    ),
     ("type.MediumParams", MEDIUM, size_of::<MediumParams>()),
     ("type.MediumMapParams", MAP, size_of::<MediumMapParams>()),
     (

@@ -29,8 +29,9 @@
 
 use knorke_gpu::sys::gpu::{SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, SDL_GPUTextureFormat};
 use knorke_gpu::{
-    Bindings, BufferRef, ColorTarget, CommandBuffer, Filter, Gpu, Load, RenderPass, RenderTarget,
-    SamplerBinding, SamplerRef, Samplers, ShaderLibrary, StageBindings, TextureRef, UploadBuffer,
+    Bindings, BufferRef, ColorTarget, CommandBuffer, Filter, Gpu, Load, PipelineRef, RenderPass,
+    RenderTarget, SamplerBinding, SamplerRef, Samplers, ShaderLibrary, StageBindings, TextureRef,
+    UploadBuffer,
 };
 use knorke_math::Vec3;
 use knorke_types::{Diagnostic, DiagnosticCode};
@@ -116,7 +117,7 @@ pub struct ShadowMaps<'a> {
 }
 
 impl ShadowMaps<'_> {
-    fn maps(&self, casters: Casters) -> Result<CasterMaps<'_>, Diagnostic> {
+    pub(crate) fn maps(&self, casters: Casters) -> Result<CasterMaps<'_>, Diagnostic> {
         match casters.filter_index() {
             None => Ok(CasterMaps {
                 mask: self.mask,
@@ -166,6 +167,9 @@ pub struct LightingFrame<'a> {
     /// The medium world map (P29); `Some` makes every draw a `*_medium` program and every
     /// directional light a per-pixel draw (cull the lights with `LightModes::medium_map`).
     pub medium_map: Option<MediumMapView<'a>>,
+    /// The medium stage runs this frame (`medium_stage::medium_runs`): with ambient zones the
+    /// zone pass then keeps the pure ambient for its base pass.
+    pub medium_runs: bool,
 }
 
 impl LightingFrame<'_> {
@@ -407,7 +411,10 @@ impl<'d> LightingStage<'d> {
             // target as well; without one the light buffer is the pure ambient.
             let direction_mode =
                 detail_mode_for(frame.material.is_some(), w, h, scale) == DetailMode::Direction;
-            let dual = light_pass && direction_mode;
+            // Ring lights add into the light buffer like the lights, so the medium base pass
+            // needs the copy with them too (Chiaro's dual path).
+            let dual =
+                (light_pass && direction_mode) || ((light_pass || rings) && frame.medium_runs);
             result.allocations += self.zones.prepare(
                 shaders,
                 &input,
@@ -857,16 +864,16 @@ fn input_missing(what: &str) -> Diagnostic {
 
 /// Everything the light programs can read, by name (Chiaro `ProgramResources`); each draw
 /// binds what its program's layout names.
-struct Resources<'a> {
-    samplers: [Option<SamplerBinding<'a>>; LightSampler::COUNT],
-    uniforms: [Option<&'a [u8]>; LightUniform::COUNT],
-    storage: [Option<BufferRef<'a>>; LightStorage::COUNT],
+pub(crate) struct Resources<'a> {
+    pub(crate) samplers: [Option<SamplerBinding<'a>>; LightSampler::COUNT],
+    pub(crate) uniforms: [Option<&'a [u8]>; LightUniform::COUNT],
+    pub(crate) storage: [Option<BufferRef<'a>>; LightStorage::COUNT],
     /// Fills the unused entries of the packed arrays.
     filler: SamplerBinding<'a>,
 }
 
 impl<'a> Resources<'a> {
-    fn new(filler: SamplerBinding<'a>) -> Self {
+    pub(crate) fn new(filler: SamplerBinding<'a>) -> Self {
         Self {
             samplers: [None; LightSampler::COUNT],
             uniforms: [None; LightUniform::COUNT],
@@ -875,12 +882,17 @@ impl<'a> Resources<'a> {
         }
     }
 
-    fn set(&mut self, s: LightSampler, texture: Option<TextureRef<'a>>, sampler: SamplerRef<'a>) {
+    pub(crate) fn set(
+        &mut self,
+        s: LightSampler,
+        texture: Option<TextureRef<'a>>,
+        sampler: SamplerRef<'a>,
+    ) {
         self.samplers[s as usize] = texture.map(|t| SamplerBinding::new(t, sampler));
     }
 }
 
-fn missing_resource(program: LightProgram, name: &str) -> Diagnostic {
+fn missing_resource(program: &dyn core::fmt::Debug, name: &str) -> Diagnostic {
     Diagnostic::error(
         LIGHTING_INPUT_MISSING,
         format!("{program:?} reads {name}, which the frame does not have"),
@@ -907,6 +919,22 @@ fn bind(
     let pipeline = pipelines
         .pipeline(program, LIGHT_FORMAT)
         .ok_or_else(|| input_missing("a light pipeline"))?;
+    let extra = directional.map(|d| (LightUniform::Directional, d));
+    bind_named(pass, pipeline, &program, layout, r, vertex, extra)
+}
+
+/// Binds `pipeline` and every resource `layout` names from `r`, each at its slot (Chiaro
+/// `BindProgram`); fails naming `program` if one is absent. `vertex` is the vertex uniform
+/// block, `extra` a per-draw uniform block that takes the place of its entry in `r`.
+pub(crate) fn bind_named(
+    pass: &mut RenderPass<'_>,
+    pipeline: PipelineRef<'_>,
+    program: &dyn core::fmt::Debug,
+    layout: &LightLayout,
+    r: &Resources<'_>,
+    vertex: Option<&[u8]>,
+    extra: Option<(LightUniform, &[u8])>,
+) -> Result<(), Diagnostic> {
     let mut samplers = [r.filler; LightSampler::COUNT];
     for s in LightSampler::ALL {
         if let Some(i) = layout.sampler(s) {
@@ -917,10 +945,9 @@ fn bind(
     let mut uniforms: [&[u8]; LightUniform::COUNT] = [&[]; LightUniform::COUNT];
     for u in LightUniform::ALL {
         if let Some(i) = layout.uniform(u) {
-            let block = if u == LightUniform::Directional {
-                directional
-            } else {
-                r.uniforms[u as usize]
+            let block = match extra {
+                Some((e, bytes)) if e == u => Some(bytes),
+                _ => r.uniforms[u as usize],
             };
             uniforms[usize::from(i)] =
                 block.ok_or_else(|| missing_resource(program, u.hlsl_name()))?;

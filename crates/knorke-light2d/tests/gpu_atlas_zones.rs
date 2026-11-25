@@ -783,6 +783,7 @@ fn a_profiled_light_without_a_profile_atlas_is_refused() {
             mask_atlas: None,
             ring_lights: &[],
             medium_map: None,
+            medium_runs: false,
         };
         let e = host
             .lighting

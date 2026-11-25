@@ -34,6 +34,9 @@ use crate::lighting::{
 };
 use crate::mask_store::MaskStore;
 use crate::medium_map::{MediumMapFrame, MediumMapStage, medium_map_builds};
+use crate::medium_stage::{
+    MediumLights, MediumStage, MediumStageFrame, MediumStageRecord, medium_runs,
+};
 use crate::medium_table::MediumTable;
 use crate::obstacle::{ObstacleStore, PatternSource};
 use crate::occluder_raster::{
@@ -219,6 +222,8 @@ pub struct PassRecord {
     pub mask: MaskRecord,
     /// The light pass.
     pub lighting: LightingRecord,
+    /// The medium stage (zero without haze and medium layer).
+    pub medium: MediumStageRecord,
     /// Warnings of the frame (debug checks, [`PassPlan::set_debug_checks`]).
     pub warnings: WarningSet,
 }
@@ -256,6 +261,7 @@ pub struct PassPlan<'d> {
     patterns: PatternOccluders<'d>,
     atlases: LightAtlases<'d>,
     medium_map: MediumMapStage<'d>,
+    medium: MediumStage<'d>,
     /// The table of frames without their own ([`PassFrame::media`]).
     default_media: MediumTable,
     lighting: LightingStage<'d>,
@@ -331,6 +337,38 @@ fn lighting_frame<'a>(
         mask_atlas: atlases.masks.texture(),
         ring_lights: frame.ring_lights,
         medium_map: medium_map.view(),
+        medium_runs: medium_runs(settings, frame.medium.is_some()),
+    }
+}
+
+/// The medium stage's frame: its textures and the light pass's zones' pure ambient (kept for
+/// the stage when it runs, see the dual path).
+#[allow(clippy::too_many_arguments)]
+fn medium_frame<'a>(
+    frame: &PassFrame<'a>,
+    settings: &'a LightSettings,
+    media: &'a MediumTable,
+    shadows: Option<&'a ShadowMaps<'a>>,
+    medium_map: &'a MediumMapStage<'_>,
+    lighting: &'a LightingStage<'_>,
+    lit: &LightingResult,
+) -> MediumStageFrame<'a> {
+    let light = CompositeLight::from_stage(lighting, lit);
+    MediumStageFrame {
+        scene: frame.scene,
+        surface: frame.surface,
+        layer: frame.medium,
+        media,
+        projection: frame.projection,
+        settings,
+        shadows,
+        medium_map: medium_map.view(),
+        pure_ambient: if lit.ambient_zones {
+            light.pure_ambient
+        } else {
+            None
+        },
+        zone_directional: lit.zone_directional,
     }
 }
 
@@ -338,6 +376,7 @@ fn composite_frame<'a>(
     frame: &PassFrame<'a>,
     settings: &'a LightSettings,
     light: CompositeLight<'a>,
+    medium: &'a MediumStage<'_>,
 ) -> CompositeFrame<'a> {
     CompositeFrame {
         scene: frame.scene,
@@ -345,7 +384,7 @@ fn composite_frame<'a>(
         material: frame.material,
         surface: frame.surface,
         light,
-        medium: None,
+        medium: medium.composite_medium(frame.medium),
         projection: frame.projection,
         settings,
         input_space: frame.input_space,
@@ -378,6 +417,7 @@ impl<'d> PassPlan<'d> {
         let composite = CompositeStage::new(gpu, &shaders)?;
         let debug_check = DebugCheckStage::new(gpu, &shaders)?;
         let medium_map = MediumMapStage::new(&shaders)?;
+        let medium = MediumStage::new(gpu, &shaders)?;
         Ok(Self {
             shaders,
             pipelines,
@@ -392,6 +432,7 @@ impl<'d> PassPlan<'d> {
             ),
             atlases: LightAtlases::new(gpu),
             medium_map,
+            medium,
             default_media: MediumTable::new(),
             lighting: LightingStage::new(gpu),
             composite,
@@ -666,6 +707,39 @@ impl<'d> PassPlan<'d> {
         }
         prepared.lighting = lit;
 
+        // Step 4b: the medium stage (only with haze or a medium layer).
+        let media = frame.media.unwrap_or(&self.default_media);
+        let medium = medium_runs(settings, frame.medium.is_some()).then(|| {
+            medium_frame(
+                frame,
+                settings,
+                media,
+                maps.as_ref(),
+                &self.medium_map,
+                &self.lighting,
+                &lit,
+            )
+        });
+        let medium_lights = MediumLights {
+            store: stores.lights,
+            profiles: stores.profiles,
+            time: frame.time,
+            // As for the ground, with the shadows' height mode (Chiaro `shadows->heightMode`).
+            modes: LightModes {
+                height_mode: shadows.is_some_and(|s| s.height_mode),
+                ..modes
+            },
+        };
+        prepared.allocations += self.medium.prepare(
+            &mut self.shaders,
+            medium.as_ref(),
+            &medium_lights,
+            &mut self.atlases,
+        )?;
+        if self.medium.is_active() {
+            prepared.stages.insert(PassStages::MEDIUM);
+        }
+
         // Step 5: composite.
         let composite = self.composite.prepare(
             &mut self.shaders,
@@ -673,6 +747,7 @@ impl<'d> PassPlan<'d> {
                 frame,
                 settings,
                 CompositeLight::from_stage(&self.lighting, &lit),
+                &self.medium,
             ),
         )?;
         prepared.allocations += composite.allocations;
@@ -763,11 +838,26 @@ impl<'d> PassPlan<'d> {
         out.lighting =
             self.lighting
                 .record(cmd, &self.light_pipelines, &self.samplers, &light_frame)?;
+        if self.medium.is_active() {
+            let media = frame.media.unwrap_or(&self.default_media);
+            let medium = medium_frame(
+                frame,
+                settings,
+                media,
+                maps.as_ref(),
+                &self.medium_map,
+                &self.lighting,
+                &prepared.lighting,
+            );
+            out.medium = self
+                .medium
+                .record(cmd, &self.samplers, &medium, &self.atlases)?;
+        }
         let light = CompositeLight::from_stage(&self.lighting, &prepared.lighting);
         self.composite.record(
             cmd,
             &self.samplers,
-            &composite_frame(frame, settings, light),
+            &composite_frame(frame, settings, light, &self.medium),
         )?;
 
         let gpu_findings =
@@ -845,6 +935,11 @@ impl<'d> PassPlan<'d> {
         &self.medium_map
     }
 
+    /// The medium stage (P30; its buffers, for tools and tests).
+    pub fn medium(&self) -> &MediumStage<'d> {
+        &self.medium
+    }
+
     /// Pipelines created so far: occlusion table, light programs, composite programs, debug
     /// check, medium map.
     pub fn pipeline_count(&self) -> usize {
@@ -853,6 +948,7 @@ impl<'d> PassPlan<'d> {
             + self.composite.pipeline_count()
             + self.debug_check.pipeline_count()
             + self.medium_map.pipeline_count()
+            + self.medium.pipeline_count()
     }
 
     /// Checks what must hold after a recorded frame and reports each broken invariant as an
@@ -941,6 +1037,7 @@ impl Inspect for PassPlan<'_> {
                 ("composite", PassStages::COMPOSITE),
                 ("debug_check", PassStages::DEBUG_CHECK),
                 ("medium_map", PassStages::MEDIUM_MAP),
+                ("medium", PassStages::MEDIUM),
             ] {
                 v.field(name, last.stages.contains(s));
             }
@@ -961,6 +1058,7 @@ impl Inspect for PassPlan<'_> {
             ("profile_atlas", self.atlases.profiles.texture()),
             ("mask_atlas", self.atlases.masks.texture()),
             ("medium_map", self.medium_map.view().map(|m| m.map)),
+            ("scatter", self.medium.filtered()),
         ] {
             let (w, h) = t.map_or((0, 0), |t| (t.width(), t.height()));
             v.begin_object(name);
