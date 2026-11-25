@@ -13,6 +13,7 @@
 //! | [`obstacle`] | obstacle descriptions, handle-based store, dirty tracking for the shadow cache, snapshots | P13 |
 //! | [`animation`], [`area_light`], [`light_culling`], [`gpu_light`] | animation curves and store, area-light model, per-frame light lists | P8 |
 //! | [`mask`], [`mask_store`], [`light_mask`], [`resources`] | masks (gobo, window): shapes, store, placement; stores as light resources | P10 |
+//! | [`pattern_store`], [`pattern_geometry`] | obstacle patterns: store with shelf-packed atlas places, sampling, ray entry geometry | P15 |
 //! | [`shadow`] | occlusion domain and anchor, dirty rectangles, incremental mask update plan | P16 |
 //! | [`occluder_raster`] | obstacles into the occlusion mask: triangle buffers, tile cell textures | P22 |
 //! | [`occlusion`] | occlusion mask cache and jump flooding distance field (GPU stage with `gpu`) | P23 |
@@ -71,6 +72,8 @@ pub mod obstacle;
 pub mod occluder_raster;
 pub mod occlusion;
 pub mod pass_plan;
+pub mod pattern_geometry;
+pub mod pattern_store;
 pub mod profile;
 pub mod profile_import;
 pub mod profile_store;
@@ -88,6 +91,7 @@ pub use light_store::LightStore;
 pub use mask::MaskError;
 pub use mask_store::{MaskId, MaskStore};
 pub use obstacle::{ObstacleError, ObstacleId, ObstacleStore};
+pub use pattern_store::{PatternError, PatternId, PatternStore};
 pub use projection::{Projection, ProjectionError};
 pub use resources::StoreResources;
 pub use triangulate::{TriangulateError, Triangulator, circle_triangles};
