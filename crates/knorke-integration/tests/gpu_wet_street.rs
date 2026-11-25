@@ -16,15 +16,15 @@
 //! the frame, the surface layer and amplified diff images there.
 #![cfg(feature = "gpu")]
 
-use std::path::PathBuf;
+#[path = "common/gpu.rs"]
+mod scene_common;
 
-use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, load_png_rgba8, save_png_rgba8};
+use knorke_contract_tests::parity::{ParityBudget, compare_rgba8};
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-    SDL_GPUBufferUsageFlags,
 };
-use knorke_gpu::test_support::{read_texture, texture, with_chiaro_pack, workspace_root};
-use knorke_gpu::{CommandBuffer, ShaderLibrary, Texture, UploadBuffer};
+use knorke_gpu::test_support::{read_texture, texture, with_chiaro_pack};
+use knorke_gpu::{CommandBuffer, ShaderLibrary, Texture};
 use knorke_integration::layers::{Layer, LayerSet, Layers};
 use knorke_integration::light2d::{Light2dRenderer, Light2dSettings};
 use knorke_integration::surface::SurfaceBatch;
@@ -167,32 +167,12 @@ fn settings() -> Light2dSettings {
 }
 
 fn fixture(name: &str) -> Vec<u8> {
-    load_png_rgba8(
-        &workspace_root().join(format!("tests/golden/chiaro/wet_street/{name}.png")),
-        W,
-        H,
-    )
-}
-
-/// Max channel difference per pixel x32, red where it exceeds the STRICT tolerance.
-fn diff_image(a: &[u8], b: &[u8]) -> Vec<u8> {
-    a.as_chunks::<4>()
-        .0
-        .iter()
-        .zip(b.as_chunks::<4>().0)
-        .flat_map(|(a, b)| {
-            let m = (0..4).map(|i| a[i].abs_diff(b[i])).max().unwrap();
-            let v = m.saturating_mul(32);
-            let g = if m > 2 { 0 } else { v };
-            [v, g, g, 255]
-        })
-        .collect()
+    scene_common::fixture("wet_street", name, (W, H))
 }
 
 #[test]
 fn wet_street_matches_chiaro() {
     with_chiaro_pack(|gpu, pack| {
-        let out = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
         let projection = Projection::iso(At::new(Vec2::new(5.0, 1.5)), 24.0, 1.0, W, H);
         let mut shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
         let mut batch = SurfaceBatch::new(gpu, &shaders).unwrap();
@@ -215,25 +195,16 @@ fn wet_street_matches_chiaro() {
         // The host's frame: clear, colour and material from the C++ renderer dumps, surface
         // geometry on top of the cleared surface layer.
         let (scene, material) = (fixture("scene"), fixture("material"));
-        let mut uploads = [&scene, &material].map(|px| {
-            let mut up =
-                UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), px.len() as u32, "fixture");
-            up.reserve(px.len() as u64).unwrap();
-            up.map().unwrap().bytes()[..px.len()].copy_from_slice(px);
-            up
-        });
         let geometry = surfaces(&projection);
         batch.prepare(&mut shaders, &geometry).unwrap();
         let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
         drop(layers.clear_pass(&mut cmd, LayerSet::ALL).unwrap());
-        {
-            let mut copy = cmd.copy_pass().unwrap();
-            for (up, layer) in uploads.iter_mut().zip([Layer::Scene, Layer::Material]) {
-                copy.upload_to_texture(up, layers.texture(layer).unwrap(), false)
-                    .unwrap();
-            }
-        }
-        layers.mark_drawn(LayerSet::of(Layer::Scene).with(Layer::Material));
+        let _uploads = scene_common::upload_layers(
+            gpu,
+            &mut cmd,
+            &mut layers,
+            &[(Layer::Scene, &scene), (Layer::Material, &material)],
+        );
         batch.record(&mut cmd, &mut layers, &geometry).unwrap();
         cmd.submit_and_wait().unwrap();
 
@@ -256,22 +227,19 @@ fn wet_street_matches_chiaro() {
         cmd.submit_and_wait().unwrap();
         let pixels = read_texture(gpu, target.texture_ref());
 
-        let golden = load_png_rgba8(
-            &workspace_root().join("tests/golden/chiaro/wet_street.png"),
-            OUT.0,
-            OUT.1,
-        );
+        let golden = scene_common::fixture(".", "wet_street", OUT);
         let strict =
             compare_rgba8(&pixels, &golden, OUT.0, OUT.1, &[], &ParityBudget::STRICT).unwrap();
         strict.print("wet_street", "STRICT");
-        if let Some(dir) = &out {
-            std::fs::create_dir_all(dir).unwrap();
-            save_png_rgba8(&dir.join("wet_street.rust.png"), &pixels, OUT.0, OUT.1);
-            let diff = diff_image(&pixels, &golden);
-            save_png_rgba8(&dir.join("wet_street.diff.png"), &diff, OUT.0, OUT.1);
-            save_png_rgba8(&dir.join("wet_street.surface.png"), &surface, W, H);
-            let diff = diff_image(&surface, &surface_ref);
-            save_png_rgba8(&dir.join("wet_street.surface.diff.png"), &diff, W, H);
+        if let Some(dir) = scene_common::scene_out() {
+            scene_common::save_with_diff(&dir, "wet_street", &pixels, &golden, OUT);
+            scene_common::save_with_diff(
+                &dir,
+                "wet_street.surface",
+                &surface,
+                &surface_ref,
+                (W, H),
+            );
         }
         assert!(
             surface == surface_ref,
