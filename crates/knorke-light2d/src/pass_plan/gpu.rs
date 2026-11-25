@@ -33,12 +33,14 @@ use crate::lighting::{
     DetailMode, LightingFrame, LightingRecord, LightingResult, LightingStage, ShadowMaps,
 };
 use crate::mask_store::MaskStore;
-use crate::obstacle::ObstacleStore;
+use crate::obstacle::{ObstacleStore, PatternSource};
 use crate::occluder_raster::{
-    INFINITE_TOP, NoPatterns, OCCLUDER_PROGRAMS, OccluderGeometry, OccluderPrograms, TileOccluders,
-    thin_circle_radius,
+    DomainParams, INFINITE_TOP, OCCLUDER_PROGRAMS, OccluderGeometry, OccluderPrograms,
+    TileOccluders, thin_circle_radius,
 };
 use crate::occlusion::{MASK_PROGRAMS, MaskPrograms, MaskRecord, OcclusionMask};
+use crate::pattern_occluders::{PATTERN_PROGRAMS, PatternOccluders, PatternPrograms};
+use crate::pattern_store::PatternStore;
 use crate::profile_store::ProfileStore;
 use crate::projection::Projection;
 use crate::settings::LightSettings;
@@ -54,24 +56,31 @@ pub const INVALID_FRAME: DiagnosticCode =
 /// An invariant of the plan is broken ([`PassPlan::check_invariants`]).
 pub const INVARIANT: DiagnosticCode = DiagnosticCode::new("knorke.light2d.pass_plan.invariant");
 
-const fn occlusion_programs() -> [ProgramDesc; OCCLUDER_PROGRAMS.len() + MASK_PROGRAMS.len()] {
-    let mut out = [OCCLUDER_PROGRAMS[0]; OCCLUDER_PROGRAMS.len() + MASK_PROGRAMS.len()];
+const OCCLUSION_LEN: usize = OCCLUDER_PROGRAMS.len() + MASK_PROGRAMS.len() + PATTERN_PROGRAMS.len();
+
+const fn occlusion_programs() -> [ProgramDesc; OCCLUSION_LEN] {
+    let mut out = [OCCLUDER_PROGRAMS[0]; OCCLUSION_LEN];
     let mut i = 0;
     while i < OCCLUDER_PROGRAMS.len() {
         out[i] = OCCLUDER_PROGRAMS[i];
         i += 1;
     }
-    while i < out.len() {
-        out[i] = MASK_PROGRAMS[i - OCCLUDER_PROGRAMS.len()];
-        i += 1;
+    let mut j = 0;
+    while j < MASK_PROGRAMS.len() {
+        out[i] = MASK_PROGRAMS[j];
+        (i, j) = (i + 1, j + 1);
+    }
+    j = 0;
+    while j < PATTERN_PROGRAMS.len() {
+        out[i] = PATTERN_PROGRAMS[j];
+        (i, j) = (i + 1, j + 1);
     }
     out
 }
 
-/// The pipeline table of the obstacle raster and the occlusion mask: [`OCCLUDER_PROGRAMS`]
-/// followed by [`MASK_PROGRAMS`].
-pub const OCCLUSION_PROGRAMS: [ProgramDesc; OCCLUDER_PROGRAMS.len() + MASK_PROGRAMS.len()] =
-    occlusion_programs();
+/// The pipeline table of the obstacle raster, the occlusion mask and the pattern id texture:
+/// [`OCCLUDER_PROGRAMS`], [`MASK_PROGRAMS`], then [`PATTERN_PROGRAMS`].
+pub const OCCLUSION_PROGRAMS: [ProgramDesc; OCCLUSION_LEN] = occlusion_programs();
 
 /// The scene textures of one frame, all the host's, borrowed for `'a` (Chiaro `CHI_Frame`
 /// without the target and the output parts).
@@ -156,6 +165,9 @@ pub struct SceneStores<'a> {
     pub masks: Option<&'a MaskStore>,
     /// Light animations.
     pub animations: Option<&'a AnimationStore>,
+    /// Obstacle patterns (needed by pattern obstacles); `None`: every pattern obstacle casts its
+    /// scalar opacity, and no pattern stage runs.
+    pub patterns: Option<&'a PatternStore>,
 }
 
 impl<'a> SceneStores<'a> {
@@ -168,6 +180,7 @@ impl<'a> SceneStores<'a> {
             profiles: None,
             masks: None,
             animations: None,
+            patterns: None,
         }
     }
 }
@@ -226,6 +239,7 @@ pub struct PassPlan<'d> {
     geometry: OccluderGeometry<'d>,
     tiles: TileOccluders<'d>,
     occlusion: OcclusionMask<'d>,
+    patterns: PatternOccluders<'d>,
     atlases: LightAtlases<'d>,
     lighting: LightingStage<'d>,
     composite: CompositeStage<'d>,
@@ -249,7 +263,11 @@ fn not_prepared(what: &str) -> Diagnostic {
 }
 
 impl ShadowState {
-    fn maps<'a>(&self, mask: &'a OcclusionMask<'_>) -> Result<ShadowMaps<'a>, Diagnostic> {
+    fn maps<'a>(
+        &self,
+        mask: &'a OcclusionMask<'_>,
+        patterns: &'a PatternOccluders<'_>,
+    ) -> Result<ShadowMaps<'a>, Diagnostic> {
         Ok(ShadowMaps {
             domain: self.domain,
             remainder: self.anchor.remainder,
@@ -269,6 +287,7 @@ impl ShadowState {
             shadow_top: self.shadow_top,
             scene_max_top: self.scene_max_top,
             casters: [mask.caster_maps(0), mask.caster_maps(1)],
+            patterns: patterns.maps(),
         })
     }
 }
@@ -346,6 +365,10 @@ impl<'d> PassPlan<'d> {
             geometry: OccluderGeometry::new(gpu, OccluderPrograms::default()),
             tiles: TileOccluders::new(gpu, OccluderPrograms::default()),
             occlusion: OcclusionMask::new(gpu, MaskPrograms::at(OCCLUDER_PROGRAMS.len())),
+            patterns: PatternOccluders::new(
+                gpu,
+                PatternPrograms::at(OCCLUDER_PROGRAMS.len() + MASK_PROGRAMS.len()),
+            ),
             atlases: LightAtlases::new(gpu),
             lighting: LightingStage::new(gpu),
             composite,
@@ -483,6 +506,9 @@ impl<'d> PassPlan<'d> {
             );
             input.cells = obstacles;
             input.sprite = sprite;
+            // The mask's mean opacities of pattern obstacles; without a store every pattern is
+            // gone and an obstacle writes its scalar opacity.
+            let source = |id| stores.patterns.and_then(|p| p.mean_opacity(id));
             let before = self.occlusion.allocations();
             let update = self.occlusion.prepare(
                 &mut self.shaders,
@@ -491,13 +517,14 @@ impl<'d> PassPlan<'d> {
                 height_mode,
             )?;
             self.occlusion.prepare_casters(self.lights.caster_classes)?;
-            if update != MaskUpdate::Reused {
-                let min_radius = thin_circle_radius(frame.projection, &input.domain);
+            let mask_drawn = update != MaskUpdate::Reused;
+            let min_radius = thin_circle_radius(frame.projection, &input.domain);
+            if mask_drawn {
                 self.geometry.prepare(
                     &mut self.shaders,
                     &mut self.pipelines,
                     obstacles,
-                    &NoPatterns,
+                    &source,
                     height_mode,
                     min_radius,
                 )?;
@@ -505,11 +532,22 @@ impl<'d> PassPlan<'d> {
                     &mut self.shaders,
                     &mut self.pipelines,
                     obstacles,
-                    &NoPatterns,
+                    &source,
                     height_mode,
                 )?;
             }
             prepared.allocations += self.occlusion.allocations() - before;
+            prepared.allocations += self.patterns.prepare(
+                &mut self.shaders,
+                &mut self.pipelines,
+                obstacles,
+                stores.patterns,
+                frame.projection,
+                &input.domain,
+                &input.anchor,
+                min_radius,
+                mask_drawn,
+            )?;
             prepared.mask_update = Some(update);
             prepared.stages.insert(PassStages::OCCLUSION);
             let scene_max_top = if height_mode {
@@ -521,7 +559,8 @@ impl<'d> PassPlan<'d> {
                 domain: input.domain,
                 anchor: input.anchor,
                 height_mode,
-                any_partial: obstacles.any_partial(),
+                // The crossing path must run to read a pattern (Chiaro E25).
+                any_partial: obstacles.any_partial() || self.patterns.is_active(),
                 shadow_top: if sprite || obstacles.any_infinite_enabled() {
                     INFINITE_TOP
                 } else {
@@ -543,7 +582,7 @@ impl<'d> PassPlan<'d> {
 
         // Step 4: zones and lights.
         let maps = match &shadows {
-            Some(s) => Some(s.maps(&self.occlusion)?),
+            Some(s) => Some(s.maps(&self.occlusion, &self.patterns)?),
             None => None,
         };
         let light_frame = lighting_frame(
@@ -636,13 +675,22 @@ impl<'d> PassPlan<'d> {
                 frame.occlusion,
             )?;
             self.occlusion.commit();
+            if let Some(s) = &shadows {
+                self.patterns.record(
+                    cmd,
+                    &self.pipelines,
+                    self.samplers.sampler(Filter::Nearest),
+                    &self.tiles,
+                    &DomainParams::new(frame.projection, &s.domain, &s.anchor),
+                )?;
+            }
             self.thin_obstacles = self.geometry.thin_count();
         } else {
             self.thin_obstacles = 0;
         }
         self.atlases.record(cmd)?;
         let maps = match &shadows {
-            Some(s) => Some(s.maps(&self.occlusion)?),
+            Some(s) => Some(s.maps(&self.occlusion, &self.patterns)?),
             None => None,
         };
         let light_frame = lighting_frame(

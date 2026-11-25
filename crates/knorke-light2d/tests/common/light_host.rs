@@ -462,6 +462,7 @@ impl<'d> Host<'d> {
             },
             scene_max_top,
             casters: [None, None],
+            patterns: None,
         });
         // The atlases the frame needs, uploaded before the light pass reads them.
         let mut atlas_created = self

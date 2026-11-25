@@ -49,6 +49,7 @@ use crate::light_program::{
     LightFeature, LightLayout, LightProgram, LightSampler, LightStorage, LightUniform,
     light_layout_of,
 };
+use crate::pattern_occluders::PatternMaps;
 use crate::projection::Projection;
 use crate::settings::LightSettings;
 use crate::shadow::OcclusionDomain;
@@ -108,6 +109,8 @@ pub struct ShadowMaps<'a> {
     pub scene_max_top: f32,
     /// The maps of the caster classes `[Static, Dynamic]` (E53), where built.
     pub casters: [Option<CasterMaps<'a>>; 2],
+    /// Pattern obstacles in the domain (P28); `Some` makes the shadow programs read them.
+    pub patterns: Option<PatternMaps<'a>>,
 }
 
 impl ShadowMaps<'_> {
@@ -465,7 +468,7 @@ impl<'d> LightingStage<'d> {
             normal_mode,
             shadow_height_mode: shadows.is_some_and(|s| s.height_mode),
             medium_map: false,
-            patterns: false,
+            patterns: shadows.is_some_and(|s| s.patterns.is_some()),
         };
         let mut programs = [None; PROGRAMS];
         for p in DRAW_PROGRAMS {
@@ -667,6 +670,15 @@ impl<'d> LightingStage<'d> {
             linear,
         );
         res.uniforms[LightUniform::Surface as usize] = Some(&surface_params);
+        let patterns = frame.shadows.and_then(|s| s.patterns.as_ref());
+        if let Some(pm) = patterns {
+            res.set(LightSampler::PatternIds, Some(pm.ids), nearest);
+            res.set(LightSampler::PatternAtlas, Some(pm.atlas), nearest);
+            res.uniforms[LightUniform::Pattern as usize] = Some(&pm.params);
+            res.storage[LightStorage::PatternObstacles as usize] = Some(pm.obstacles);
+            res.storage[LightStorage::Patterns as usize] = Some(pm.records);
+            res.storage[LightStorage::PatternData as usize] = Some(pm.data);
+        }
         res.storage[LightStorage::Lights as usize] = self.lights.buffer_ref();
         res.storage[LightStorage::Masks as usize] = if masked > 0 {
             self.masks.buffer_ref()

@@ -42,8 +42,11 @@
 //!   evaluated in `record` and returned with it.
 //! - The caster class masks of filtered shadows (E53) are part of the occlusion stage: no
 //!   extra input, nothing extra without a visible filtered light.
-//! - Not built (and not blocked): medium (P12, P29, P30), patterns (P15, P28), ring lights
-//!   (P21). Their inputs are fields still to come in
+//! - Pattern obstacles (P28) are part of the occlusion stage: [`SceneStores::patterns`] gives
+//!   the mask their mean opacities and, with a pattern obstacle in the domain, adds the pattern
+//!   atlas, the id texture and the `Pattern` shadow programs; without one nothing runs.
+//! - Not built (and not blocked): medium (P12, P29, P30), ring lights (P21). Their inputs are
+//!   fields still to come in
 //!   [`PassFrame`] and [`SceneStores`] and stages between steps 2 and 5; the stages already take
 //!   `None` for them.
 

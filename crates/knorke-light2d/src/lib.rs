@@ -73,6 +73,7 @@ pub mod occluder_raster;
 pub mod occlusion;
 pub mod pass_plan;
 pub mod pattern_geometry;
+pub mod pattern_occluders;
 pub mod pattern_store;
 pub mod profile;
 pub mod profile_import;
