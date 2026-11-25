@@ -1704,17 +1704,10 @@ impl Squad {
     }
 }
 
-/// True when one of `tactic`'s abort rules fires on `row`, without rules
-/// (an [`Abort::Custom`] never fires).
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) fn fires(tactic: &Tactic, row: &[i32]) -> bool {
-    fires_with(tactic, row, |_| false, |_, _| {})
-}
-
 /// True when one of `tactic`'s abort rules fires on `row`, in list order
 /// (stops at the first that fires); `custom` decides an [`Abort::Custom`],
 /// `seen` hears each rule's index and answer.
-fn fires_with(
+pub(super) fn fires_with(
     tactic: &Tactic,
     row: &[i32],
     mut custom: impl FnMut(u32) -> bool,

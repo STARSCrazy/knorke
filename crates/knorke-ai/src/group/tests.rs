@@ -2932,7 +2932,7 @@ fn abort_compare() {
             aborts: vec![Abort::When { input, cmp, value }],
             ..tactics::rush()
         };
-        squad::fires(&t, &[0, 0, 5])
+        squad::fires_with(&t, &[0, 0, 5], |_| false, |_, _| {})
     };
     assert!(fires_with(Compare::AtLeast, 5, 2));
     assert!(!fires_with(Compare::AtLeast, 6, 2));
@@ -2954,7 +2954,7 @@ fn abort_compare() {
         aborts: vec![Abort::Custom(1)],
         ..tactics::rush()
     };
-    assert!(!squad::fires(&t, &[0, 0, 5]));
+    assert!(!squad::fires_with(&t, &[0, 0, 5], |_| false, |_, _| {}));
 }
 
 #[test]
