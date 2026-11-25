@@ -100,7 +100,7 @@ pub use samplers::{Filter, SAMPLER_CREATE_FAILED, Samplers};
 #[cfg(feature = "sdl")]
 pub use upload::{
     Mapped, UPLOAD_CREATE_FAILED, UPLOAD_LIMIT, UPLOAD_MAP_FAILED, UPLOAD_NOT_RESERVED,
-    UploadBuffer,
+    UploadBuffer, upload_pixels,
 };
 
 #[cfg(feature = "sdl")]

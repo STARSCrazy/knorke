@@ -21,13 +21,13 @@ use std::sync::{Mutex, MutexGuard};
 
 use sdl3_sys::gpu::{
     SDL_GPU_SHADERFORMAT_DXIL, SDL_GPU_SHADERFORMAT_MSL, SDL_GPU_SHADERFORMAT_SPIRV,
-    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUBufferUsageFlags,
-    SDL_GPUTextureFormat, SDL_GPUTextureUsageFlags,
+    SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUTextureFormat,
+    SDL_GPUTextureUsageFlags,
 };
 
 use crate::{
     CommandBuffer, Device, DownloadBuffer, Gpu, LiveCounter, Texture, TextureDesc, TextureRef,
-    UploadBuffer, init_video,
+    init_video,
 };
 
 static SERIAL: Mutex<()> = Mutex::new(());
@@ -218,20 +218,7 @@ pub fn assert_same_bytes(name: &str, got: &[u8], want: &[u8]) {
 /// Fills `texture` with `pixels` (the host's work: Chiaro's demos draw these layers with their
 /// renderer). The upload is submitted and waited for.
 pub fn upload_pixels(gpu: Gpu<'_>, texture: &Texture<'_>, pixels: &[u8]) {
-    let mut up = UploadBuffer::new(
-        gpu,
-        SDL_GPUBufferUsageFlags(0),
-        pixels.len() as u32,
-        "pixels",
-    );
-    up.reserve(pixels.len() as u64).unwrap();
-    up.map().unwrap().bytes()[..pixels.len()].copy_from_slice(pixels);
-    let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
-    cmd.copy_pass()
-        .unwrap()
-        .upload_to_texture(&up, texture.texture_ref(), false)
-        .unwrap();
-    cmd.submit_and_wait().unwrap();
+    crate::upload_pixels(gpu, texture, pixels).expect("upload");
 }
 
 /// A texture, filled with `pixels` if given.

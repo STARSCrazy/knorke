@@ -277,3 +277,27 @@ impl Drop for Mapped<'_, '_> {
         }
     }
 }
+
+/// Host helper: fills `texture` with `pixels` in a command buffer of its own, submitted and
+/// waited for. For set-up, tools and tests; a frame uploads through its own copy pass.
+///
+/// # Errors
+/// What creating, mapping or submitting reports.
+pub fn upload_pixels(
+    gpu: Gpu<'_>,
+    texture: &crate::Texture<'_>,
+    pixels: &[u8],
+) -> Result<(), Diagnostic> {
+    let mut up = UploadBuffer::new(
+        gpu,
+        SDL_GPUBufferUsageFlags(0),
+        pixels.len() as u32,
+        "pixels",
+    );
+    up.reserve(pixels.len() as u64)?;
+    up.map()?.bytes()[..pixels.len()].copy_from_slice(pixels);
+    let mut cmd = crate::CommandBuffer::acquire(gpu.device())?;
+    cmd.copy_pass()?
+        .upload_to_texture(&up, texture.texture_ref(), false)?;
+    cmd.submit_and_wait()
+}

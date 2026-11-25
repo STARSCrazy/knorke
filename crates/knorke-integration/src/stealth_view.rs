@@ -12,9 +12,9 @@
 
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-    SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUBufferUsageFlags, SDL_GPUTextureUsageFlags,
+    SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUTextureUsageFlags,
 };
-use knorke_gpu::{CommandBuffer, DownloadBuffer, Gpu, Texture, TextureDesc, UploadBuffer};
+use knorke_gpu::{CommandBuffer, DownloadBuffer, Gpu, Texture, TextureDesc, upload_pixels};
 use knorke_grid::Cell;
 use knorke_light2d::light::{Height, LightDesc, LightId, LightType};
 use knorke_light2d::pass_plan::SceneStores;
@@ -35,22 +35,6 @@ fn invalid(what: impl core::fmt::Debug) -> Diagnostic {
     Diagnostic::error(INVALID_SCENE, format!("{what:?}"))
 }
 
-/// Fills `texture` with `pixels`; submitted and waited for.
-fn upload(gpu: Gpu<'_>, texture: &Texture<'_>, pixels: &[u8]) -> Result<(), Diagnostic> {
-    let mut up = UploadBuffer::new(
-        gpu,
-        SDL_GPUBufferUsageFlags(0),
-        pixels.len() as u32,
-        "pixels",
-    );
-    up.reserve(pixels.len() as u64)?;
-    up.map()?.bytes()[..pixels.len()].copy_from_slice(pixels);
-    let mut cmd = CommandBuffer::acquire(gpu.device())?;
-    cmd.copy_pass()?
-        .upload_to_texture(&up, texture.texture_ref(), false)?;
-    cmd.submit_and_wait()
-}
-
 fn rgba8<'d>(
     gpu: Gpu<'d>,
     (w, h): (u32, u32),
@@ -60,7 +44,7 @@ fn rgba8<'d>(
     let desc = TextureDesc::new(w, h, SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, usage);
     let texture = Texture::new(gpu, desc)?;
     if let Some(pixels) = pixels {
-        upload(gpu, &texture, pixels)?;
+        upload_pixels(gpu, &texture, pixels)?;
     }
     Ok(texture)
 }
@@ -255,7 +239,7 @@ impl<'d> View<'d> {
     /// What the GPU reports.
     pub fn draw(&mut self, pose: &Pose) -> Result<Vec<u8>, Diagnostic> {
         self.paint(pose);
-        upload(self.gpu, &self.colour, &self.canvas)?;
+        upload_pixels(self.gpu, &self.colour, &self.canvas)?;
         for (lamp, &(at, facing)) in self.lamps.iter().zip(&pose.guards) {
             if let Some((id, lamp)) = lamp {
                 let desc = Self::lamp(lamp, at, facing);
