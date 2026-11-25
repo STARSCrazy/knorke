@@ -27,7 +27,7 @@ Plan-Prinzip 1 (Standalone) und 2 (Komposition) widersprechen sich, sobald Beque
 | `knorke-grid` | `*` außer `knorke-types` | gemeinsame Raumtypen, geschlossene Abhängigkeitsliste (ADR 0012) |
 | `knorke-render` | `knorke-lighting` | unabhängig; nur Integration verbindet |
 | `knorke-lighting` | render, runtime, scene | arbeitet auf Host-Targets |
-| `knorke-runtime` | agent, cli, mcp | Release-Spiel ohne Development Plane |
+| `knorke-runtime` | `*` außer `knorke-types`, `knorke-observe`, `knorke-replay` | treibt jede Simulation an und besitzt keine Fachalgorithmen (ADR 0009); damit auch ohne Development Plane |
 | alle Fachmodule + types/math/observe/gpu | `knorke-integration` | Adapter zeigen nach innen, nie zurück |
 | `knorke-types` | `*` | bleibt Vertrag, wird kein Core |
 | `knorke-math` | `*` außer `bytemuck`, `mint`, `knorke-types`, `libm` | Basis-Crate, geschlossene Abhängigkeitsliste (ADR 0006) |

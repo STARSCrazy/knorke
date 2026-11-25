@@ -6,6 +6,7 @@ members = [
     "crates/knorke-observe",
     "crates/knorke-exec",
     "crates/knorke-replay",
+    "crates/knorke-runtime",
     "crates/knorke-grid",
     "crates/knorke-navigation",
     "crates/knorke-perception",
@@ -36,6 +37,7 @@ mint = { version = "0.5", default-features = false }
 libm = "0.2.16"
 knorke-exec = { path = "crates/knorke-exec", version = "0.0.1" }
 knorke-replay = { path = "crates/knorke-replay", version = "0.0.1" }
+knorke-runtime = { path = "crates/knorke-runtime", version = "0.0.1" }
 rayon = "1.10"
 knorke-grid = { path = "crates/knorke-grid", version = "0.0.1" }
 knorke-navigation = { path = "crates/knorke-navigation", version = "0.0.1" }

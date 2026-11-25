@@ -13,7 +13,7 @@ Bindend für alle Änderungen (`CLAUDE.md`). Neue Grundsatzentscheidung → neue
 | [0006](0006-data-exchange.md) | Datenaustausch ohne Kopien | angenommen |
 | [0007](0007-observability.md) | Gemeinsames Debugging und Analyse | angenommen |
 | [0008](0008-events-commands-parallelism.md) | Events, Commands und Parallelität ohne Broker | angenommen |
-| [0009](0009-frame-schedule.md) | Frame-Ablauf und Scheduler | vorgeschlagen (mit ersten Systemen) |
+| [0009](0009-frame-schedule.md) | Frame-Ablauf und Scheduler | angenommen; Stufe 1 in `knorke-runtime` |
 | [0010](0010-snapshot-replay-bug-detection.md) | Snapshots, Replay und automatische Fehlererkennung | angenommen |
 | [0011](0011-cross-platform-determinism-and-optional-features.md) | Plattformübergreifender Determinismus und abschaltbare Zusatzfeatures | angenommen (Windows und WASM lokal belegt; CI-Bestätigung Linux/ARM offen) |
 | [0012](0012-sagax-split.md) | Sagax-Neuschnitt: Grid, Navigation, Perception, AI, Integration | angenommen |

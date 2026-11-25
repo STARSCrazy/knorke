@@ -20,6 +20,11 @@ pub struct Attention {
     cursor: u32,
 }
 
+// Simulation state: it decides which targets the next `look` checks.
+knorke_types::by_fields! {
+    Attention { cursor };
+}
+
 impl Attention {
     /// The index the next round robin starts from (taken modulo the
     /// number of targets).

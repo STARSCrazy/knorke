@@ -140,6 +140,7 @@ dependencies = [
  "knorke-post",
  "knorke-render",
  "knorke-replay",
+ "knorke-runtime",
  "knorke-types",
  "png",
 ]
@@ -267,6 +268,16 @@ dependencies = [
 name = "knorke-replay"
 version = "0.0.1"
 dependencies = [
+ "knorke-types",
+]
+
+[[package]]
+name = "knorke-runtime"
+version = "0.0.1"
+dependencies = [
+ "knorke-integration",
+ "knorke-observe",
+ "knorke-replay",
  "knorke-types",
 ]
 

@@ -1,0 +1,20 @@
+[package]
+name = "knorke-runtime"
+description = "Runs a deterministic Knorke simulation: fixed ticks from host time, commands at the tick boundary, systems in a fixed order (ADR 0003, ADR 0009)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+knorke-types = { workspace = true }
+knorke-observe = { workspace = true }
+knorke-replay = { workspace = true }
+
+[dev-dependencies]
+# The guard scene joins navigation, perception and AI.
+knorke-integration = { workspace = true, default-features = false, features = ["ai"] }
+
+[lints]
+workspace = true

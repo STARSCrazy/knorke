@@ -557,7 +557,7 @@ Details in den ADRs unter `docs/adr/`, Inventuren unter `docs/inventory/`.
 | `Sink`/`Probe`/`Inspect`, `Recorder`, Export Perfetto/JSON | `knorke-observe` | 0007 |
 | Vertragstests (keine Kopie, 0 Allokationen auf allen Threads, bitgleich über Executoren), Benchmarks | `knorke-contract-tests` | 0006, 0008 |
 | Abhängigkeitsregeln und Standalone-Builds in CI | `xtask` | 0001 |
-| Frame-Ablauf/Scheduler (nur Entwurf) | – | 0009 |
+| Frame-Ablauf Stufe 1 (2026-11-25): `FixedStep` (Host-Zeit → Ticks + Interpolationsfaktor, gedeckelt), `Runtime` (Commands am Tick-Anfang, Ticks über `TickDriver`), Systeme als Tabelle in fester Reihenfolge mit `Probe`-Scope; erste Szene `guard_scene` (Navigation, Wahrnehmung, Zustandsautomat, `EventQueue`) mit Replay-Test und 0 Allokationen im Dauerbetrieb. `Attention` (Wahrnehmung) ist jetzt `SnapshotValue`. Task-Graph-Scheduler weiter offen | `knorke-runtime`, `knorke-perception` | 0009 |
 | Snapshot-Vertrag (`Snapshot`, `SnapshotBuf`, `SnapshotValue`), `Checksum` pro Modul-Abschnitt | `knorke-types` | 0010 |
 | Replay: `Recorder`/Flight Recorder, `verify` (Tick + Modul), `seek`, `minimize` (Delta-Debugging) | `knorke-replay` | 0010 |
 | Fehlererkennung: `Invariants`, `ProgressWatch`, Bildheuristiken (`frame_diff`, `flicker_score`, `non_finite`) | `knorke-observe` | 0010 |
@@ -594,7 +594,9 @@ Entscheidungen aus Gesprächen:
 | Idee | Status | Auslöser / nächster Schritt |
 |---|---|---|
 | **Snapshot/Restore des Simulationszustands** (Replays, Rollback-Netcode, Time-Travel-Debugging) | erledigt (Abschnitt 16, ADR 0010) | beim Sagax-Umbau: jedes neue Modul implementiert `Snapshot` |
-| **Task-Graph-Scheduler** (Systeme nach Lese-/Schreibzugriff parallel) | geplant | ADR 0009, mit den ersten 2–3 echten Systemen |
+| **Task-Graph-Scheduler** (Systeme nach Lese-/Schreibzugriff parallel) | geplant | ADR 0009; die feste Tabelle (`run_systems`) reicht, bis ein Tick gemessen parallel lohnt |
+| **Wachmann-Szene mit Bild**: `guard_scene` über die Laufzeit zeichnen (GPU-2D-Licht, Phasen „Render vorbereiten“/„Render“ aus ADR 0009) | geplant | nächster Schritt Richtung Vertical Slice (Phase 4) |
+| **`knorke-scene` und Agenten-CLI** (Phase 3): Szene als Daten statt als Rust-Code, `discover`/`inspect`/`mutate`/`validate` | geplant | nach der Szene mit Bild; `guard_scene` ist der erste Inhalt |
 | **Pipelining** Simulation Tick N+1 ∥ Render Frame N | geplant | nach erstem Vertical Slice messen |
 | **Handle-Reservierung aus parallelen Chunks** (atomarer Zähler in `Slots`) | offen | sobald ein System parallel spawnt |
 | **Gemeinsamer Raum-Index** (Broadphase/Spatial Hash für Navigation, Wahrnehmung, Culling, Audio) | offen | wenn zwei echte Module ihn brauchen |
@@ -666,7 +668,7 @@ Zwei Modelle, beide brauchen dieselben Grundlagen:
 
 | Thema | Status | Bemerkung |
 |---|---|---|
-| Zeit: Tick + Interpolationsfaktor pro Frame | vorbereitet | ADR 0003/0009; Animation läuft in „Render vorbereiten“ |
+| Zeit: Tick + Interpolationsfaktor pro Frame | vorbereitet (`FixedStep::alpha`, `Frame::alpha`) | ADR 0003/0009; Animation läuft in „Render vorbereiten“ |
 | Sprite-/Frame-Animation, Kurven, Easing | offen | Modul `knorke-animation`; deterministisch, wenn Gameplay davon abhängt |
 | Gameplay-Ereignisse aus Animationen (Treffer-Frame, Schritt) | vorbereitet | als `EventQueue`-Events |
 | Skelett-Animation (2D-Bones), Blending | offen | nach Sprite-Animation |
@@ -718,7 +720,7 @@ Plan-Prinzip 9: Knorke erzwingt keine Physik-Engine. Physik ist ein austauschbar
 
 | Thema | Status | Bemerkung |
 |---|---|---|
-| Fester Tick, Sub-Steps, Interpolation für die Darstellung | vorbereitet | ADR 0003/0009; Physik läuft in der Simulationsphase, Rendering interpoliert |
+| Fester Tick, Sub-Steps, Interpolation für die Darstellung | vorbereitet (fester Tick: `knorke-runtime`) | ADR 0003/0009; Physik läuft in der Simulationsphase, Rendering interpoliert |
 | Positionen/Geschwindigkeiten ohne Kopie austauschen | vorbereitet | `Column`/`project`, `At<World2, Vec2>`; Physik-Engines halten meist eigene gepackte Arrays, die direkt als `&[Vec2]` lesbar sind |
 | Kollisionsereignisse (Beginn/Ende, Trigger) | vorbereitet | `EventQueue`, nie Callbacks während des Physik-Schritts |
 | Kräfte, Impulse, Teleport von außen | vorbereitet | `CommandBuffer`, angewendet vor dem Physik-Schritt |

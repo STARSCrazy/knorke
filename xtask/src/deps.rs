@@ -220,6 +220,13 @@ const RULES: &[Rule] = &[
         why: "replays may ship in release builds (flight recorder): knorke-types only",
     },
     Rule {
+        from: &["knorke-runtime"],
+        to: &["*"],
+        except: &["knorke-types", "knorke-observe", "knorke-replay"],
+        through: &[],
+        why: "the runtime drives any simulation and owns no domain algorithm: contracts, probes and replay only (ADR 0009)",
+    },
+    Rule {
         from: &["knorke-exec"],
         to: &["*"],
         except: &[

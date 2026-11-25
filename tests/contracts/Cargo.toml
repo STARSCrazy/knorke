@@ -23,6 +23,7 @@ sdl-build-static = ["gpu", "knorke-gpu/sdl-build-static"]
 [dev-dependencies]
 knorke-observe = { workspace = true, features = ["std"] }
 knorke-exec = { workspace = true }
+knorke-runtime = { workspace = true }
 knorke-render = { workspace = true }
 knorke-integration = { workspace = true }
 knorke-light2d = { workspace = true }
