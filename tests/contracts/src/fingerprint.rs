@@ -9,7 +9,7 @@ use knorke_math::{Aabb2, Vec2, det};
 use knorke_replay::Simulation;
 use knorke_types::{
     Checksum, Handle, Parallel, Reader, Seed, Slots, Snapshot, SnapshotBuf, SnapshotError,
-    SnapshotValue, StableHasher, Tick, Writer, restore,
+    SnapshotValue, StableHasher, Tick, Writer, by_fields, by_tag, restore,
 };
 
 /// One moving body.
@@ -23,20 +23,7 @@ pub struct Body {
     pub heading: f32,
 }
 
-impl SnapshotValue for Body {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.pos);
-        w.put(&self.vel);
-        w.put(&self.heading);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Body {
-            pos: r.get()?,
-            vel: r.get()?,
-            heading: r.get()?,
-        })
-    }
-}
+by_fields! { Body { pos, vel, heading } }
 
 /// Commands of the fingerprint scenario.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -49,36 +36,11 @@ pub enum Cmd {
     Thin(u16),
 }
 
-impl SnapshotValue for Cmd {
-    fn put(&self, w: &mut Writer<'_>) {
-        match *self {
-            Cmd::Burst { at, n } => {
-                w.put(&0u8);
-                w.put(&at);
-                w.put(&n);
-            }
-            Cmd::Target(t) => {
-                w.put(&1u8);
-                w.put(&t);
-            }
-            Cmd::Thin(k) => {
-                w.put(&2u8);
-                w.put(&k);
-            }
-        }
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Cmd::Burst {
-                at: r.get()?,
-                n: r.get()?,
-            },
-            1 => Cmd::Target(r.get()?),
-            2 => Cmd::Thin(r.get()?),
-            _ => return Err(SnapshotError::Invalid("cmd")),
-        })
-    }
-}
+by_tag! { Cmd, SnapshotError::Invalid("cmd") => {
+    0 => Burst { at, n },
+    1 => Target(t),
+    2 => Thin(k),
+} }
 
 /// Simulation state (one snapshot section).
 #[derive(Default)]

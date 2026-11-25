@@ -5,7 +5,8 @@ use knorke_replay::{
     verify,
 };
 use knorke_types::{
-    Reader, Seed, Slots, Snapshot, SnapshotBuf, SnapshotError, SnapshotValue, Tick, Writer, restore,
+    Reader, Seed, Slots, Snapshot, SnapshotBuf, SnapshotError, SnapshotValue, Tick, Writer, by_tag,
+    restore,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -15,33 +16,11 @@ enum Cmd {
     Noop,
 }
 
-impl SnapshotValue for Cmd {
-    fn put(&self, w: &mut Writer<'_>) {
-        match *self {
-            Cmd::Spawn { x, v } => {
-                w.put(&0u8);
-                w.put(&x);
-                w.put(&v);
-            }
-            Cmd::Push { dv } => {
-                w.put(&1u8);
-                w.put(&dv);
-            }
-            Cmd::Noop => w.put(&2u8),
-        }
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(match r.get::<u8>()? {
-            0 => Cmd::Spawn {
-                x: r.get()?,
-                v: r.get()?,
-            },
-            1 => Cmd::Push { dv: r.get()? },
-            2 => Cmd::Noop,
-            _ => return Err(SnapshotError::Invalid("cmd tag")),
-        })
-    }
-}
+by_tag! { Cmd, SnapshotError::Invalid("cmd tag") => {
+    0 => Spawn { x, v },
+    1 => Push { dv },
+    2 => Noop,
+} }
 
 /// Module 1: moving particles with a seeded wobble.
 #[derive(Default)]

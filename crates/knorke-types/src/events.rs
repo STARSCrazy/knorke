@@ -194,16 +194,9 @@ impl<E> EventQueue<E> {
     }
 }
 
-/// A cursor is part of its reader's simulation state: save it next to the reader's data so
-/// that a restored reader continues exactly where the saved one stopped.
-impl crate::SnapshotValue for EventCursor {
-    fn put(&self, w: &mut crate::snapshot::Writer<'_>) {
-        w.put(&self.next);
-    }
-    fn get(r: &mut crate::snapshot::Reader<'_>) -> Result<Self, crate::SnapshotError> {
-        Ok(EventCursor { next: r.get()? })
-    }
-}
+// A cursor is part of its reader's simulation state: save it next to the reader's data so
+// that a restored reader continues exactly where the saved one stopped.
+crate::by_fields! { EventCursor { next } }
 
 impl<E: crate::SnapshotValue> EventQueue<E> {
     pub(crate) fn snapshot_put(&self, w: &mut crate::snapshot::Writer<'_>) {

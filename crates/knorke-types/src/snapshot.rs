@@ -464,38 +464,20 @@ impl<T: SnapshotValue> SnapshotValue for Vec<T> {
     }
 }
 
-impl SnapshotValue for Tick {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.0);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Tick(r.get()?))
-    }
+/// Snapshot form of a one-field tuple newtype: just the field.
+macro_rules! tuple_newtype_value {
+    ($($t:ident),+) => {$(
+        impl SnapshotValue for $t {
+            fn put(&self, w: &mut Writer<'_>) {
+                w.put(&self.0);
+            }
+            fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
+                Ok($t(r.get()?))
+            }
+        }
+    )+};
 }
-impl SnapshotValue for Seed {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.0);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Seed(r.get()?))
-    }
-}
-impl SnapshotValue for Revision {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.0);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Revision(r.get()?))
-    }
-}
-impl SnapshotValue for Checksum {
-    fn put(&self, w: &mut Writer<'_>) {
-        w.put(&self.0);
-    }
-    fn get(r: &mut Reader<'_>) -> Result<Self, SnapshotError> {
-        Ok(Checksum(r.get()?))
-    }
-}
+tuple_newtype_value!(Tick, Seed, Revision, Checksum);
 impl SnapshotValue for Generation {
     fn put(&self, w: &mut Writer<'_>) {
         w.put(&self.get());
