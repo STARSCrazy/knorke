@@ -868,7 +868,12 @@ Aus P31 (Pass-Plan, Integration; 2026-11-24):
 - **Sprite-Maske im Höhenmodus** (`occlusion_mask_height.frag`) – **offen**: gebaut, aber ohne Chiaro-Golden.
 - **Demo-Szenen aus P3** (10 Szenen, 1280×720) – **offen**: brauchen Layers/Sprites (P33–P35), teils Medium (P29/P30) und Ringlicht (P21); vier davon sind nicht deterministisch (Uhr/Maus).
 - **Leistung Pass-Plan gegen alten Spike** – **offen**: nicht gemessen (`KNORKE_SCENE_BENCH` vorhanden).
-- **`check_invariants` des Pass-Plans** ist eine Methode mit `Sink`, kein `knorke_observe::Invariants` (Lebensdauer `'d`) – **offen**, bei P32 ansehen.
+- **`check_invariants` des Pass-Plans** ist eine Methode mit `Sink`, kein `knorke_observe::Invariants` (Lebensdauer `'d`) – **erledigt (bleibt so)**, bei P32 angesehen: `Invariants<W>` ist eine Regelliste des Hosts über seine Welt; der Plan liefert die Prüfung, der Host kann sie dort als Regel eintragen.
+
+Aus P32/P33 (Debug-Prüfung, Layers; 2026-11-25):
+- **GPU-Debug-Prüfung** – **erledigt**: opt-in über `DebugChecks::LAYERS`, Readback nur dann (ADR 0017 Punkt 8), aus = nichts angelegt; Bild unverändert und 0 Allokationen belegt. **Medium-Prüfung im Plan** – **offen** bis P29 (Stufe nimmt das Medium schon, getestet).
+- **Layers** in `knorke-integration` – **erledigt**: nur GPU-Layers. **Layer-Größe = Szenengröße** wird nicht geprüft (der Pass-Plan meldet falsche Puffergrößen selbst) – so gewollt.
+- **Eigene Shader für die 2D-Helfer** (Sprites, Surface-Geometrie zeichnen; in Chiaro machte das SDL_Renderer) – **geplant** (Entscheidung Manuel 2026-11-25): Übersetzen mit DXC statt shadercross (`D:\Dev-Tools\dxc`, SPIR-V bytegleich zu Chiaros Blobs geprüft an `output.frag`), Ablage laut ADR 0014 §3. **MSL für eigene Shader** – **offen** (DXC kann kein MSL; shadercross oder SPIRV-Cross nötig).
 
 Aufräumen (Auftrag Manuel 2026-11-24; zwei Opus-Audits, nur gelesen; Ersparnis meist geschätzt):
 - Leitlinie: wenig Code, nichts doppelt, Leser ist ein Agent; Kommentare sagen „warum“ und Nebeneffekte; Verhalten, Bitgleichheit, Snapshot-Formate und Diagnose-Codes bleiben.
