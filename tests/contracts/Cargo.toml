@@ -29,7 +29,7 @@ knorke-integration = { workspace = true, features = ["stealth"] }
 knorke-scene = { workspace = true }
 knorke-light2d = { workspace = true }
 knorke-post = { workspace = true }
-knorke-gpu = { workspace = true }
+knorke-gpu = { workspace = true, features = ["test-support"] }
 
 # Own lint table: the allocation counter needs `unsafe impl GlobalAlloc`.
 [lints.rust]
