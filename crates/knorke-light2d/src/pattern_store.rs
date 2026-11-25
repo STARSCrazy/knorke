@@ -690,8 +690,9 @@ impl PatternStore {
         for (_, p) in self.patterns.iter() {
             let fits = (1..=MAX_REGION).contains(&p.width)
                 && (1..=MAX_REGION).contains(&p.height)
-                && p.atlas_x + p.width <= ATLAS_SIZE
-                && p.atlas_y + p.height <= ALPHA_ROWS
+                // Subtractions: the sides are bounded above, a sum could overflow.
+                && p.atlas_x <= ATLAS_SIZE - p.width
+                && p.atlas_y <= ALPHA_ROWS - p.height
                 && p.start as usize + p.bytes() <= self.texels.len();
             if !fits {
                 return Err(SnapshotError::Invalid("pattern region"));
@@ -718,7 +719,10 @@ impl PatternStore {
             }
             if shelf.height == 0
                 || !shelf.height.is_multiple_of(SHELF_STEP)
-                || shelf.y + shelf.height > ALPHA_ROWS
+                || shelf
+                    .y
+                    .checked_add(shelf.height)
+                    .is_none_or(|end| end > ALPHA_ROWS)
             {
                 return Err(SnapshotError::Invalid("pattern shelf"));
             }

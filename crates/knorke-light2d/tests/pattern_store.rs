@@ -445,9 +445,9 @@ fn a_snapshot_round_trip_keeps_handles_texels_and_the_next_placement() {
 }
 
 #[test]
-fn restore_rejects_a_region_too_large_and_leaves_an_empty_store() {
+fn restore_rejects_a_region_outside_the_atlas_and_leaves_an_empty_store() {
     let (store, _) = churned();
-    let mut bytes = save(&store).bytes().to_vec();
+    let bytes = save(&store).bytes().to_vec();
     // The first pattern's width, found by its width, height and repeat width (1.0) bytes.
     let first = store.iter().next().unwrap().1;
     let needle = [
@@ -460,11 +460,15 @@ fn restore_rejects_a_region_too_large_and_leaves_an_empty_store() {
         .windows(needle.len())
         .position(|w| w == needle.as_slice())
         .unwrap();
-    bytes[at..at + 4].copy_from_slice(&300u32.to_le_bytes());
-    let mut back = PatternStore::new();
-    let e = restore(&mut Reader::new(&bytes), &mut back).unwrap_err();
-    assert_eq!(e, SnapshotError::Invalid("pattern region"));
-    assert!(back.is_empty());
+    // Too wide, then an atlas position (the 8 bytes before the width) whose sum would overflow.
+    for (offset, value) in [(at, 300u32), (at - 8, u32::MAX)] {
+        let mut bad = bytes.clone();
+        bad[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        let mut back = PatternStore::new();
+        let e = restore(&mut Reader::new(&bad), &mut back).unwrap_err();
+        assert_eq!(e, SnapshotError::Invalid("pattern region"));
+        assert!(back.is_empty());
+    }
 }
 
 /// Replay: the same commands give the same bytes; a store restored in the middle continues
