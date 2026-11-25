@@ -299,7 +299,7 @@ pub(crate) fn draw_triangle(g: &mut GBuffer, p: &Proj, tri: &[ClipVert; 3], m: &
     let mut prev = project(&poly[1], p);
     for v in &poly[2..] {
         let next = project(v, p);
-        fill(g, [s0, prev, next], m, &mut |_, _| {});
+        fill(g, [s0, prev, next], m, |_, _| {});
         prev = next;
     }
 }
@@ -316,7 +316,7 @@ fn fill(
     g: &mut GBuffer,
     mut t: [ScreenVert; 3],
     m: &Material,
-    visit: &mut dyn FnMut(usize, usize),
+    mut visit: impl FnMut(usize, usize),
 ) {
     let mut area = edge(&t[0], &t[1], t[2].x, t[2].y);
     if area == 0 {
@@ -537,7 +537,7 @@ mod tests {
         let ring = [sv(2.1, 1.3), sv(37.9, 2.6), sv(38.2, 28.1), sv(1.7, 27.4)];
         for k in 0..4 {
             g.depth.fill(f32::INFINITY);
-            fill(&mut g, [c, ring[k], ring[(k + 1) % 4]], &m, &mut |x, y| {
+            fill(&mut g, [c, ring[k], ring[(k + 1) % 4]], &m, |x, y| {
                 hits[y * w + x] += 1
             });
         }
