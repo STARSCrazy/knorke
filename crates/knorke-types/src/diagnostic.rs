@@ -13,6 +13,17 @@ pub enum Severity {
     Error,
 }
 
+impl Severity {
+    /// The lowercase word every text and JSON output uses: `info`, `warning` or `error`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Severity::Info => "info",
+            Severity::Warning => "warning",
+            Severity::Error => "error",
+        }
+    }
+}
+
 /// Stable, machine-readable diagnostic code such as `knorke.scene.reference.missing`.
 ///
 /// Codes are part of the public contract that agents match on (plan section 8.3): renaming
@@ -126,12 +137,7 @@ impl Diagnostic {
 
 impl fmt::Display for Diagnostic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let level = match self.severity {
-            Severity::Info => "info",
-            Severity::Warning => "warning",
-            Severity::Error => "error",
-        };
-        write!(f, "{level}[{}]", self.code)?;
+        write!(f, "{}[{}]", self.severity.as_str(), self.code)?;
         if let Some(path) = &self.path {
             write!(f, " at {path}")?;
         }

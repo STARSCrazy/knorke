@@ -5,7 +5,7 @@
 
 use crate::{Inspect, Value, Visitor};
 use core::fmt::Write as _;
-use knorke_types::{Diagnostic, Severity};
+use knorke_types::Diagnostic;
 use std::string::String;
 use std::vec::Vec;
 
@@ -163,14 +163,7 @@ pub fn inspect_to_json(value: &(impl Inspect + ?Sized)) -> String {
 pub fn diagnostic_to_json(d: &Diagnostic) -> String {
     let mut out = String::new();
     out.push_str("{\"severity\":");
-    write_str(
-        &mut out,
-        match d.severity {
-            Severity::Info => "info",
-            Severity::Warning => "warning",
-            Severity::Error => "error",
-        },
-    );
+    write_str(&mut out, d.severity.as_str());
     out.push_str(",\"code\":");
     write_str(&mut out, d.code.as_str());
     out.push_str(",\"message\":");

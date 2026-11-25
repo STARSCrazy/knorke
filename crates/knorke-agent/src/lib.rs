@@ -163,9 +163,17 @@ pub fn execute(scene: &Scene, orders: &[Order], ticks: u64) -> Result<Value, Vec
     }))
 }
 
+/// The [`IO`] diagnostic for `path`, shared by every read and write.
+fn io_error(path: &str, e: &dyn core::fmt::Display) -> Diagnostic {
+    Diagnostic::error(IO, format!("{path}: {e}")).at(path)
+}
+
+fn one(d: Diagnostic) -> Vec<Diagnostic> {
+    vec![d]
+}
+
 fn read(path: &str) -> Result<String, Diagnostic> {
-    std::fs::read_to_string(path)
-        .map_err(|e| Diagnostic::error(IO, format!("{path}: {e}")).at(path))
+    std::fs::read_to_string(path).map_err(|e| io_error(path, &e))
 }
 
 fn read_scene(path: &str) -> Result<Scene, Diagnostic> {
@@ -178,8 +186,7 @@ fn read_json<T: serde::de::DeserializeOwned>(path: &str) -> Result<T, Diagnostic
 }
 
 fn write(path: &str, text: &str) -> Result<(), Diagnostic> {
-    std::fs::write(Path::new(path), text)
-        .map_err(|e| Diagnostic::error(IO, format!("{path}: {e}")).at(path))
+    std::fs::write(Path::new(path), text).map_err(|e| io_error(path, &e))
 }
 
 fn usage() -> Vec<Diagnostic> {
@@ -195,7 +202,6 @@ fn option<'a>(args: &'a [String], flag: &str) -> Result<Option<&'a str>, Vec<Dia
 }
 
 fn operate(args: &[String]) -> Result<Value, Vec<Diagnostic>> {
-    let one = |d: Diagnostic| vec![d];
     let arg = |i: usize| args.get(i).map(String::as_str);
     match (arg(0), arg(1)) {
         (Some("discover"), None) => Ok(discover()),
@@ -229,20 +235,16 @@ fn operate(args: &[String]) -> Result<Value, Vec<Diagnostic>> {
                 Some(file) => read_json(file).map_err(one)?,
                 None => Vec::new(),
             };
-            let ticks = option(args, "--ticks")?.map(|n| n.parse().map_err(|_| usage()));
+            let ticks = option(args, "--ticks")?
+                .map(|n| n.parse().map_err(|_| usage()))
+                .transpose()?;
             if op == "execute" {
-                execute(&scene, &orders, ticks.transpose()?.unwrap_or(60))
+                execute(&scene, &orders, ticks.unwrap_or(60))
             } else {
                 let out = option(args, "--out")?.ok_or_else(usage)?;
                 let shaders = option(args, "--shaders")?;
                 // Without `--ticks` the picture shows the scene as it starts.
-                render(
-                    &scene,
-                    &orders,
-                    ticks.transpose()?.unwrap_or(0),
-                    shaders,
-                    out,
-                )
+                render(&scene, &orders, ticks.unwrap_or(0), shaders, out)
             }
         }
         _ => Err(usage()),

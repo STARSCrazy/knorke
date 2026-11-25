@@ -48,7 +48,8 @@ pub fn render(
     use knorke_gpu::{Device, Gpu, LiveCounter, init_video};
     use knorke_integration::stealth_view::{Pose, View};
 
-    let one = |d: Diagnostic| vec![d];
+    use crate::{io_error, one};
+
     // The simulation first: an invalid scene is reported without touching the GPU.
     let mut rt = crate::start(scene)?;
     for _ in 0..ticks.min(crate::MAX_TICKS) {
@@ -72,9 +73,7 @@ pub fn render(
     let pixels = view.draw(&Pose::of(&rt.sim.world.actors)).map_err(one)?;
     let (width, height) = view.size();
 
-    let io = |e: &dyn core::fmt::Display| {
-        one(Diagnostic::error(crate::IO, format!("{out}: {e}")).at(out))
-    };
+    let io = |e: &dyn core::fmt::Display| one(io_error(out, e));
     let file = std::fs::File::create(out).map_err(|e| io(&e))?;
     let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), width, height);
     encoder.set_color(png::ColorType::Rgba);
