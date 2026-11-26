@@ -473,7 +473,7 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24; "hart halb", the fences as 50 % walls: 0.314 / 1.25,
 /// today 0.724 / 2.56; "flächen" 0.002 / 0.01, today 0.020 / 0.11 (bound rounded up: a tenth of
 /// so little is below what a driver may change); "zaun", the fences with their patterns, hard
-/// 0.694 / 1.61, today 0.994 / 2.10, soft 1.477 / 5.70, today 2.269 / 8.49.
+/// 0.675 / 1.53, today 0.994 / 2.10, soft 1.477 / 5.70, today 2.269 / 8.49.
 const BOUNDS: [(&str, f64, f64); 9] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
@@ -482,9 +482,34 @@ const BOUNDS: [(&str, f64, f64); 9] = [
     ("hart halb", 0.35, 1.38),
     ("flächen", 0.004, 0.02),
     ("linie pfosten", 0.014, 0.03),
-    ("zaun hart", 0.77, 1.78),
+    ("zaun hart", 0.75, 1.69),
     ("zaun weich", 1.63, 6.27),
 ];
+
+/// The facade in "zaun hart" that the spot light beside the lattice tower lights through it
+/// (output pixels x, y, width, height), and the most the rows may differ from the reference
+/// there (mean of 255). Rays rising out through the tower's top read its pattern where they
+/// leave it, not at its far side; reading the far side lost the top of the lattice's shadow
+/// there. Measured 1.951 (2026-11-26, Vulkan, RX 6700 XT), at the far side 2.625; plus a tenth.
+const FACADE: ([usize; 4], f64) = ([560, 170, 160, 160], 2.15);
+
+/// Mean absolute difference of two pictures over the colour channels within `rect`.
+fn region_mean(a: &[u8], b: &[u8], [x, y, w, h]: [usize; 4]) -> f64 {
+    let row = OUT.0 as usize * 4;
+    let mut sum = 0u64;
+    for r in y..y + h {
+        let span = r * row + x * 4..r * row + (x + w) * 4;
+        for (p, q) in a[span.clone()]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b[span].as_chunks::<4>().0)
+        {
+            sum += (0..3).map(|c| u64::from(p[c].abs_diff(q[c]))).sum::<u64>();
+        }
+    }
+    sum as f64 / (w * h * 3) as f64
+}
 
 /// The post of "linie pfosten": a third along the shop sign's line light (at 31, 26.12, 2.4
 /// either way along x, 4.6 high), 0.7 in front of it and taller than it, so it cuts the light of
@@ -692,6 +717,14 @@ fn light_rows_against_chiaro_and_the_reference() {
                     save_png_rgba8(&file, px, OUT.0, OUT.1);
                 }
             }
+            let facade = (name == "zaun hart")
+                .then(|| region_mean(&pictures[1].1, &pictures[2].1, FACADE.0));
+            if let Some(facade) = facade {
+                let _ = writeln!(
+                    report,
+                    "{name:12} facade, neu against wahr: mean {facade:.3} of 255"
+                );
+            }
             eprint!("{report}");
             let (old, rows) = (numbers[0], numbers[1]);
             assert!(
@@ -701,6 +734,10 @@ fn light_rows_against_chiaro_and_the_reference() {
             assert!(
                 rows.0 <= bound.1 && rows.1 <= bound.2,
                 "{name}: rows against the reference {rows:?}, bound {bound:?}"
+            );
+            assert!(
+                facade.is_none_or(|f| f <= FACADE.1),
+                "{name}: the facade lit through the lattice tower {facade:?}, bound {FACADE:?}"
             );
             full.push_str(&report);
             report.clear();

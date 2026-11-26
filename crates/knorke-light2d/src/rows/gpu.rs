@@ -482,7 +482,7 @@ impl<'d> RowLights<'d> {
         if !exact {
             textures.copy_within(8.., 7);
         }
-        let records = patterns.map_or([lamps, lamps], |p| [p.obstacles, p.records]);
+        let records = patterns.map_or([lamps; 3], |p| [p.obstacles, p.records, p.data]);
         let pattern_params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
         let lookup = match shadows {
             Some(s) => RowLookupParams::new(
