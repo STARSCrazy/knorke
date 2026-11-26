@@ -184,6 +184,10 @@ pub struct LightList {
     pub directional_shadows: u32,
     /// Shadow caster filter (E53) of each entry of `directional`.
     pub directional_casters: Vec<Casters>,
+    /// Of each entry of `directional`: half the spread of the heights its disc's rays gain per
+    /// mask texel of way, from the disc's top to its bottom (0 without a source radius; a sun
+    /// map's soft shadow, [`crate::rows::SunParams`]).
+    pub directional_rise: Vec<f32>,
     /// Shadowed lights with a caster filter, `[Static, Dynamic][0 point/spot, 1 line/rect]`; not
     /// in `shadowed` and `shadowed_area`. Index with [`Casters::filter_index`].
     pub filtered: [[Vec<GpuLight>; 2]; 2],
@@ -235,6 +239,7 @@ impl LightList {
         self.directional.clear();
         self.directional_shadows = 0;
         self.directional_casters.clear();
+        self.directional_rise.clear();
         for by_class in &mut self.filtered {
             for list in by_class {
                 list.clear();
@@ -433,7 +438,9 @@ pub fn make_gpu_light(
 /// Per-pixel data of a directional light (E24). Moving a distance `s` along the unit vector `L`
 /// toward the light moves the ground point by `s * (Lx, Ly)` in the world and by `s * m` in the
 /// mask; the ray in the mask therefore rises by `Lz / |m|` per texel, and its penumbra widens by
-/// `tan(angle) * texels_per_world / |m|` per texel.
+/// `tan(angle) * texels_per_world / |m|` per texel. Also the rise of `LightList::directional_rise`:
+/// tilting `L` up or down by the angle keeps its direction on the ground, so the ray then rises by
+/// `tan(elevation) * hypot(Lx, Ly) / |m|` per texel at that elevation.
 fn make_directional(
     stored: &StoredLight,
     color: Vec3,
@@ -441,7 +448,7 @@ fn make_directional(
     p: &Projection,
     domain: &OcclusionDomain,
     texels_per_world: f32,
-) -> GpuDirectional {
+) -> (GpuDirectional, f32) {
     let d = &stored.desc;
     let (lx, ly, lz) = (
         -stored.direction.x,
@@ -452,13 +459,21 @@ fn make_directional(
     let my = (lx * p.x_axis.y + ly * p.y_axis.y) * domain.texels_per_scene[1];
     let m = det::hypot(mx, my);
     let mut g = GpuDirectional::default();
+    let mut rise = 0.0;
     if m > 1e-6 {
+        let angle = d.source_radius * DEG_TO_RAD;
         g.dir_slope = [
             mx / m,
             my / m,
             lz / m,
-            det::tan(d.source_radius * DEG_TO_RAD) * texels_per_world / m,
+            det::tan(angle) * texels_per_world / m,
         ];
+        let ground = det::hypot(lx, ly);
+        let elevation = det::atan2(lz, ground);
+        // Up to just below the zenith: beyond it the disc's top would shine from behind.
+        let top = det::tan((elevation + angle).clamp(-1.5, 1.5));
+        let bottom = det::tan((elevation - angle).clamp(-1.5, 1.5));
+        rise = 0.5 * (top - bottom) * ground / m;
     }
     g.color = [
         color.x * strength,
@@ -467,7 +482,7 @@ fn make_directional(
         0.0, // set by the caller
     ];
     g.world = [lx, ly, lz, d.specular];
-    g
+    (g, rise)
 }
 
 /// Fills `out` from the enabled lights: directional lights go into `directional` in normal mode
@@ -522,7 +537,7 @@ pub fn collect_lights(
         if d.kind == LightType::Directional {
             let shadows = d.cast_shadows && modes.height_mode;
             if shadows || modes.normal_mode || modes.medium_map {
-                let mut g = make_directional(
+                let (mut g, rise) = make_directional(
                     stored,
                     color,
                     strength,
@@ -532,6 +547,7 @@ pub fn collect_lights(
                 );
                 g.color[3] = if shadows { 1.0 } else { 0.0 };
                 out.directional.push(g);
+                out.directional_rise.push(rise);
                 let casters = if shadows { casters_of(d) } else { Casters::All };
                 out.directional_casters.push(casters);
                 out.caster_classes |= casters.class_bit();

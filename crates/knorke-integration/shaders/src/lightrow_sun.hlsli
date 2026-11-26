@@ -1,6 +1,7 @@
-// Light rows (ADR 0019, plan 17.13 L3): what the programs of a hard sun's shadow map share. lightrow_sun_build.frag
-// writes, per map texel, the receiver heights a ray toward the sun from there finds shadowed; lightrow_sun_light.hlsli
-// looks a pixel's height up there, lightrow_sun_truth.frag (a test tool) marches instead. Like Chiaro's directional
+// Light rows (ADR 0019, plan 17.13 L3): what the programs of a sun's shadow map share. lightrow_sun_build.frag
+// writes, per map texel, the receiver heights a ray toward the sun from there finds shadowed (and, for a soft sun, how
+// far along the ray their ends lie); lightrow_sun_light.hlsli looks a pixel's height up there, lightrow_sun_truth.frag
+// (a test tool) marches instead. Like Chiaro's directional
 // lights (E24) only finite obstacles block (the height texture's .ba), with Chiaro's tolerance below a top.
 #ifndef KNORKE_LIGHTROW_SUN_HLSLI
 #define KNORKE_LIGHTROW_SUN_HLSLI
@@ -17,7 +18,8 @@
     float4 MapOrigin;  /* xy the corner of the map's first lattice texel in mask texels, zw the map's size */        \
     float4 MapInverse; /* map texel coordinates of mask point p: (dot(xy, p - corner), dot(zw, p - corner)) */      \
     float4 MapBuild;   /* x texels before the receiver that do not count (Chiaro: 1), y the lowest receiver */      \
-                       /* height a map texel stands in for */                                                       \
+                       /* height a map texel stands in for, z a soft sun's rise (0: hard), w the height the */     \
+                       /* march rises by per texel (the disc's lowest ray) */                                       \
     float4 MapLattice; /* int bits: xy the map's first lattice texel, zw the mask anchor (mask = world + zw) */
 
 static const float kSunEmpty = 1e30; // an unused interval: (kSunEmpty, -kSunEmpty)

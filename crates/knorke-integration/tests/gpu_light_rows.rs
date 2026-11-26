@@ -23,6 +23,7 @@ use knorke_gpu::CommandBuffer;
 use knorke_gpu::test_support::{sampled_rgba8, with_chiaro_pack};
 use knorke_integration::layers::{Layer, LayerSet};
 use knorke_integration::light2d::Light2dSettings;
+use knorke_light2d::NoResources;
 use knorke_light2d::light::{LightDesc, LightType, MaskMode, ShadowFilter};
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::settings::{Quality, Resolutions};
@@ -204,12 +205,13 @@ fn row_lights_equal_chiaro_lights_without_obstacles() {
     });
 }
 
-/// Without obstacles in the mask a hard sun with a map is Chiaro's sun: the same Lambert term,
-/// highlight, wet ground and direction sample into the same targets, in all three material modes
-/// and without surface and material buffer, to the bit. The demo's moon alone; one finite box far
-/// outside the picture keeps the frame's shadows (and so the moon's) on.
+/// Without obstacles in the mask a sun with a map is Chiaro's sun, hard and soft (the size of
+/// `plain.txt`'s moon, 1 degree): the same Lambert term, highlight, wet ground and direction
+/// sample into the same targets, in all three material modes and without surface and material
+/// buffer, to the bit. The demo's moon alone; one finite box far outside the picture keeps the
+/// frame's shadows (and so the moon's) on.
 #[test]
-fn a_hard_sun_equals_chiaros_sun_without_obstacles() {
+fn a_sun_equals_chiaros_sun_without_obstacles() {
     with_chiaro_pack(|gpu, pack| {
         iso_night::with_demo("hard", 44, "", |demo| {
             let demo = Demo {
@@ -261,7 +263,15 @@ fn a_hard_sun_equals_chiaros_sun_without_obstacles() {
                         LayerSet::of(Layer::Material).with(Layer::Surface),
                     ),
                 ];
-                for (mode, light, skip) in modes {
+                let moon = (f.scene.light_ids.iter().copied())
+                    .find(|&id| f.scene.lights.get(id).is_ok())
+                    .unwrap();
+                for (radius, (mode, light, skip)) in
+                    [0.0, 1.0].into_iter().flat_map(|r| modes.map(|m| (r, m)))
+                {
+                    let mut desc = f.scene.lights.get(moon).unwrap().clone();
+                    desc.source_radius = radius;
+                    f.scene.lights.update(moon, &desc, &NoResources).unwrap();
                     f.settings.light.quality.quality = Quality::Custom(Resolutions {
                         light,
                         shadow: 0.5,
@@ -274,13 +284,13 @@ fn a_hard_sun_equals_chiaros_sun_without_obstacles() {
                     let (on, with) = f.frame();
                     let (max, mean, share) = diff(&on, &off);
                     eprintln!(
-                        "the moon alone, material mode {mode}: {} sun maps; largest difference \
+                        "the moon alone, radius {radius}, material mode {mode}: {} sun maps; largest difference \
                          {max}/255, mean {mean:.5}, {share:.3} % of the pixels",
                         with.lighting.row_suns
                     );
                     assert_eq!(without.lighting.row_suns, 0, "{mode}: rows off");
                     assert_eq!(with.lighting.row_suns, 1, "{mode}: the moon has a map");
-                    assert_eq!(max, 0, "{mode}");
+                    assert_eq!(max, 0, "radius {radius}, {mode}");
                 }
             });
         });
@@ -589,8 +599,8 @@ fn a_sprite_mask_casts_row_shadows() {
 }
 
 /// A row is built when its lamp or the mask in its reach changed, and not otherwise; the moon's
-/// map whole when the moon turns, in part (the texels whose rays reach the change) when an
-/// obstacle moves or the camera pans by whole mask texels. Whatever was kept, the picture is
+/// map whole when the moon turns or gets a size, in part (the texels whose rays reach the change)
+/// when an obstacle moves or the camera pans by whole mask texels, hard and soft. Whatever was kept, the picture is
 /// that of a plan that builds every row and map.
 #[test]
 fn rows_are_built_only_when_lamp_or_mask_change() {
@@ -681,8 +691,56 @@ fn rows_are_built_only_when_lamp_or_mask_change() {
                     assert_eq!(check(f, "resting"), rest);
                 }
 
+                // A size (plain.txt's moon): the map gains its second target, built whole; then
+                // a pan and the obstacle again update it in part.
+                f.scene.change_light(moon, |d| d.source_radius = 1.0);
+                assert_eq!(check(f, "the moon got a size"), (0, 1, 0, whole));
+                assert_eq!(check(f, "resting"), rest);
+                f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(2.0, 0.0));
+                let (_, full, part, texels) = check(f, "soft moon, camera moved 1 mask texel");
+                assert!(
+                    full == 0 && part == 1 && texels < whole / 2,
+                    "{texels} of {whole}"
+                );
+                assert_eq!(check(f, "resting"), rest);
+                f.scene.obstacles.set_transform(id, pose.0, pose.1).unwrap();
+                let (_, full, part, texels) = check(f, "soft moon, the obstacle moved back");
+                assert!(
+                    full == 0 && part == 1 && texels < whole / 4,
+                    "{texels} of {whole}"
+                );
+                assert_eq!(check(f, "resting"), rest);
+
                 f.renderer.plan_mut().invalidate();
                 assert_eq!(check(f, "invalidated"), (all, 1, 0, whole));
+            });
+        });
+    });
+}
+
+/// A sun takes its shadow from a map unless a partly transparent or pattern obstacle lies in the
+/// mask (the map holds opaque obstacles only); one outside it does not count. The demo as it is
+/// has its two pattern fences in the picture, so its moon keeps Chiaro's programs; with them
+/// opaque it has a map, also with a half-transparent box far outside the picture, not with the
+/// box in it.
+#[test]
+fn only_partial_obstacles_in_the_mask_keep_a_sun_from_its_map() {
+    with_chiaro_pack(|gpu, pack| {
+        iso_night::with_demo("hard", 44, "", |demo| {
+            demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                let suns = |f: &mut DemoFrames<'_, '_>| f.frame().1.lighting.row_suns;
+                assert_eq!(suns(f), 0, "the pattern fences in the picture");
+                drop_patterns(&mut f.scene);
+                assert_eq!(suns(f), 1, "opaque fences");
+                let mut glass = ShapeDesc::rect(1.0, 1.0);
+                glass.common.height = 2.0;
+                glass.common.opacity = 0.5;
+                glass.common.position = At::new(Vec2::new(-500.0, -500.0));
+                let id = f.scene.obstacles.create_shape(&glass).unwrap();
+                assert_eq!(suns(f), 1, "a half-transparent box far outside");
+                let inside = f.scene.obstacles.iter().next().unwrap().1.common.position;
+                f.scene.obstacles.set_transform(id, inside, 0.0).unwrap();
+                assert_eq!(suns(f), 0, "the box in the picture");
             });
         });
     });

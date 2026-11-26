@@ -1,12 +1,12 @@
 //! The row lights on the GPU: the row atlas (one row of [`ROW_ANGLES`] texels per lamp), the
 //! edge atlas of lamps with a source radius, the crossing atlas of frames with pattern obstacles,
-//! the maps of the hard suns, their programs and what a frame records. Part of
+//! the maps of the suns, their programs and what a frame records. Part of
 //! the light pass ([`LightingStage`](crate::lighting::LightingStage) owns and drives it); it
 //! records into the host's command buffer and never submits or reads back (ADR 0002).
 
 use knorke_gpu::sys::gpu::{
-    SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT,
-    SDL_GPUTextureFormat,
+    SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ, SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
+    SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT, SDL_GPUTextureFormat,
 };
 use knorke_gpu::{
     Bindings, Blend, ColorTarget, CommandBuffer, CopyPass, Filter, Gpu, Load, PipelineCache,
@@ -43,6 +43,29 @@ const EDGE: usize = 1;
 const PATTERN: usize = 5;
 const SUN_BUILD: usize = 11;
 const SUN_BAND: usize = 16;
+/// A soft sun's map has a second target: how far along the ray its intervals' ends lie.
+const REACH_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
+
+const fn soft_build(vertex: &'static str) -> ProgramDesc {
+    ProgramDesc {
+        second: Some(SecondTarget {
+            format: REACH_FORMAT,
+            blend: Blend::Opaque,
+        }),
+        ..ProgramDesc::new(vertex, "lightrow_sun_build.frag", Blend::Opaque)
+    }
+}
+
+/// The program that builds a sun's map whole or over its bands (`update`), with the second
+/// target if `soft` (the hard programs drop the build's second output).
+const fn sun_build_program(update: bool, soft: bool) -> usize {
+    match (update, soft) {
+        (false, false) => SUN_BUILD,
+        (true, false) => SUN_BAND,
+        (false, true) => 17,
+        (true, true) => 18,
+    }
+}
 /// Bytes of a band (`SunBand` of `lightrow_sun_band.vert`).
 const SUN_BAND_SIZE: usize = 32;
 
@@ -69,10 +92,11 @@ const fn material_program(vertex: &'static str, fragment: &'static str) -> Progr
 /// The light is one shader in three versions because the light pass has three target layouts
 /// (Chiaro's `surface_light.hlsli`): the light buffer alone, with the specular buffer, with the
 /// direction buffer; and each again for masked lamps. A frame without surface and material
-/// buffer has Chiaro's flat light (no Lambert term), with and without a mask. A hard sun is a
+/// buffer has Chiaro's flat light (no Lambert term), with and without a mask. A sun is a
 /// fullscreen draw (Chiaro's `fullscreen.vert`) in the same four layouts, its map build one too;
-/// an update of the map draws the build over its bands (`lightrow_sun_band.vert`).
-const PROGRAMS: [ProgramDesc; 17] = [
+/// an update of the map draws the build over its bands (`lightrow_sun_band.vert`); both again
+/// for a soft sun's map with its second target.
+const PROGRAMS: [ProgramDesc; 19] = [
     atlas_program("lightrow_build.frag"),
     atlas_program("lightrow_edge.frag"),
     ProgramDesc::new("lightrow.vert", "lightrow_light.frag", Blend::Additive),
@@ -110,6 +134,8 @@ const PROGRAMS: [ProgramDesc; 17] = [
         "lightrow_sun_build.frag",
         Blend::Opaque,
     ),
+    soft_build("fullscreen.vert"),
+    soft_build("lightrow_sun_band.vert"),
 ];
 
 /// `flat`: no surface and no material buffer, so no detail targets either.
@@ -183,6 +209,21 @@ struct FrameSun {
     params: SunParams,
 }
 
+impl FrameSun {
+    /// A source radius: the map has a second target.
+    fn soft(&self) -> bool {
+        self.params.build[2] > 0.0
+    }
+
+    /// The program its map's work this frame draws with, `None` when kept.
+    fn build_program(&self) -> Option<usize> {
+        match self.work {
+            MapWork::Keep => None,
+            work => Some(sun_build_program(work == MapWork::Update, self.soft())),
+        }
+    }
+}
+
 /// The row lights of the light pass (see the [module docs](super)).
 #[derive(Debug)]
 pub struct RowLights<'d> {
@@ -204,6 +245,8 @@ pub struct RowLights<'d> {
     flat: bool,
     /// The sun maps (`lightrow_sun_build.frag`).
     maps: [RenderTarget<'d>; MAX_SUNS],
+    /// Their second targets, a soft sun's only.
+    reaches: [RenderTarget<'d>; MAX_SUNS],
     sun_cache: SunCache,
     /// The frame's suns with a map, [`RowsRecord::suns`] of them.
     suns: [FrameSun; MAX_SUNS],
@@ -234,6 +277,7 @@ impl<'d> RowLights<'d> {
             detail: DetailMode::None,
             flat: false,
             maps: core::array::from_fn(|_| RenderTarget::new(gpu)),
+            reaches: core::array::from_fn(|_| RenderTarget::new(gpu)),
             sun_cache: SunCache::default(),
             suns: [FrameSun::default(); MAX_SUNS],
             bands: [SunBands::default(); MAX_SUNS],
@@ -316,12 +360,15 @@ impl<'d> RowLights<'d> {
             (f.edges > 0, EDGE, ROW_FORMAT),
             (f.built > 0 && patterns, PATTERN, ROW_FORMAT),
             (f.suns > 0, sun_program(detail, flat), LIGHT_FORMAT),
-            (f.suns_built > 0, SUN_BUILD, ROW_FORMAT),
-            (f.suns_updated > 0, SUN_BAND, ROW_FORMAT),
         ];
         for (needed, program, format) in programs {
             if needed {
                 pipelines.get(shaders, program, format)?;
+            }
+        }
+        for sun in &self.suns[..f.suns as usize] {
+            if let Some(program) = sun.build_program() {
+                pipelines.get(shaders, program, ROW_FORMAT)?;
             }
         }
         Ok(allocations)
@@ -334,16 +381,21 @@ impl<'d> RowLights<'d> {
     fn prepare_suns(&mut self, frame: &LightingFrame<'_>) -> Result<u32, Diagnostic> {
         let list = frame.lights;
         let mut n = 0;
-        if let Some(s) = frame.shadows.filter(|s| s.height_mode && !s.any_partial) {
+        if let Some(s) = frame
+            .shadows
+            .filter(|s| s.height_mode && !s.partial_in_mask)
+        {
             let mask = row_mask(s);
             let suits = SunGrid::size_of(mask.size)[1] <= MAX_SUN_MAP
                 && frame_suits(frame.settings, frame.medium_map.is_some(), s.scene_max_top);
             let tolerance = height_tolerance(frame.settings);
             let candidates = (list.directional.iter().zip(&list.directional_casters))
+                .zip(&list.directional_rise)
                 .enumerate()
-                .filter(|(_, (g, c))| suits && sun_suits(g, **c));
-            for (i, (g, _)) in candidates {
-                let params = SunParams::new(g, mask.size, mask.snapped, tolerance, s.scene_max_top);
+                .filter(|(_, ((g, c), _))| suits && sun_suits(g, **c));
+            for (i, ((g, _), &rise)) in candidates {
+                let (top, snapped) = (s.scene_max_top, mask.snapped);
+                let params = SunParams::new(g, rise, mask.size, snapped, tolerance, top);
                 let source = SunSource::new(&params, &mask);
                 let Some((map, refresh)) = self.sun_cache.assign(i as u64, source, mask.change)
                 else {
@@ -370,7 +422,7 @@ impl<'d> RowLights<'d> {
             }
         }
         let mut allocations = 0;
-        for (k, target) in self.maps.iter_mut().enumerate() {
+        for (k, (target, reach)) in self.maps.iter_mut().zip(&mut self.reaches).enumerate() {
             match self.suns[..n].iter_mut().find(|f| f.map as usize == k) {
                 Some(f) => {
                     let [w, h] = [f.params.origin[2], f.params.origin[3]].map(|v| v as u32);
@@ -378,8 +430,17 @@ impl<'d> RowLights<'d> {
                         allocations += 1;
                         f.work = MapWork::Build;
                     }
+                    if !f.soft() {
+                        reach.release();
+                    } else if reach.ensure(w, h, REACH_FORMAT)? {
+                        allocations += 1;
+                        f.work = MapWork::Build;
+                    }
                 }
-                None => target.release(),
+                None => {
+                    target.release();
+                    reach.release();
+                }
             }
         }
         self.frame.suns = n as u32;
@@ -594,14 +655,18 @@ impl<'d> RowLights<'d> {
             .enumerate()
         {
             let count = bands.quads().len() as u32;
-            let (load, program) = match sun.work {
-                MapWork::Update if count > 0 => (Load::Load, SUN_BAND),
-                MapWork::Build => (Load::DontCare, SUN_BUILD),
+            let load = match sun.work {
+                MapWork::Update if count > 0 => Load::Load,
+                MapWork::Build => Load::DontCare,
                 _ => continue,
+            };
+            let Some(program) = sun.build_program() else {
+                continue;
             };
             let map = self.maps[sun.map as usize]
                 .texture_ref()
                 .ok_or_else(|| missing("a sun map"))?;
+            let reach = self.reaches[sun.map as usize].texture_ref();
             let params = sun.params.to_bytes();
             // `SunBandPass` of lightrow_sun_band.vert: where the map's first lattice texel lies in
             // the texture, the map's size and this sun's first band.
@@ -621,15 +686,23 @@ impl<'d> RowLights<'d> {
             pass_bytes[..16].copy_from_slice(bytemuck::bytes_of(&band));
             pass_bytes[16..20].copy_from_slice(&((k * MAX_SUN_BANDS) as u32).to_le_bytes());
             let buffer = self.band_buffer.buffer_ref();
-            let mut pass = cmd.render_pass(&[ColorTarget::new(map, load)])?;
-            let vertex = match (program, buffer) {
-                (SUN_BAND, Some(buffer)) => StageBindings {
+            let targets = match (sun.soft(), reach) {
+                (false, _) => &[ColorTarget::new(map, load)][..],
+                (true, Some(reach)) => {
+                    &[ColorTarget::new(map, load), ColorTarget::new(reach, load)]
+                }
+                (true, None) => return Err(missing("a soft sun's second map")),
+            };
+            let mut pass = cmd.render_pass(targets)?;
+            let update = sun.work == MapWork::Update;
+            let vertex = match (update, buffer) {
+                (true, Some(buffer)) => StageBindings {
                     storage_buffers: &[buffer],
                     uniforms: &[&pass_bytes],
                     ..Default::default()
                 },
-                (SUN_BAND, None) => return Err(missing("the sun band buffer")),
-                _ => StageBindings::default(),
+                (true, None) => return Err(missing("the sun band buffer")),
+                (false, _) => StageBindings::default(),
             };
             pass.bind_program(
                 self.pipeline(program, ROW_FORMAT)?,
@@ -642,7 +715,7 @@ impl<'d> RowLights<'d> {
                     },
                 },
             )?;
-            if program == SUN_BUILD {
+            if !update {
                 pass.draw_fullscreen()?;
             } else {
                 // Each band four times, moved by the map's size: it wraps around the texture.
@@ -859,21 +932,23 @@ impl<'d> RowLights<'d> {
         let map = self.maps[sun.map as usize]
             .texture_ref()
             .ok_or_else(|| missing("a sun map"))?;
-        // Neither surface nor material buffer: the flat program does not read the first.
+        // Neither surface nor material buffer: the flat program does not read the first; a hard
+        // sun does not read the second map.
         let stand_in = frame.scene;
         let textures = [
             frame.surface.or(frame.material).unwrap_or(stand_in),
             shadows.mask,
             shadows.height.ok_or_else(|| missing("the height map"))?,
             map,
+            self.reaches[sun.map as usize].texture_ref().unwrap_or(map),
             frame.material.unwrap_or(stand_in),
         ]
         .map(|t| SamplerBinding::new(t, samplers.sampler(Filter::Nearest)));
         // Only the exact program reads the material buffer.
         let count = if self.detail == DetailMode::Exact && !self.flat {
-            5
+            6
         } else {
-            4
+            5
         };
         let params = sun.params.to_bytes();
         pass.bind_program(

@@ -457,6 +457,7 @@ impl<'d> Host<'d> {
             height: self.occlusion.height(),
             height_mode,
             any_partial: s.obstacles.any_partial(),
+            partial_in_mask: s.obstacles.any_partial(),
             shadow_top: if s.obstacles.any_infinite_enabled() {
                 INFINITE_TOP
             } else {
