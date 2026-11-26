@@ -388,26 +388,19 @@ fn the_hall_window_is_a_row_light() {
                     let normal = Vec3::new(-u.y, u.x, 0.0).normalize_or_zero() * v.length();
                     let lamp = original.position.value;
                     let toward = Vec2::new(original.mask_center.x, original.mask_center.y) - lamp;
-                    let cases: [(&str, Box<dyn Fn(&mut LightDesc)>); 3] = [
-                        ("fenster", Box::new(|_| {})),
-                        (
-                            "schraeg",
-                            Box::new(move |d| d.mask_v = normal * 0.6 + v * 0.8),
-                        ),
-                        (
-                            "projektor",
-                            Box::new(move |d| {
-                                d.mask_mode = MaskMode::Projector;
-                                d.position = At::new(lamp + toward * 2.0);
-                                d.direction = Vec3::new(toward.x, toward.y, -toward.length())
-                                    .normalize_or_zero();
-                            }),
-                        ),
-                    ];
-                    for (case, change) in cases {
+                    for case in ["fenster", "schraeg", "projektor"] {
                         f.scene.change_light(window, |d| {
                             *d = original.clone();
-                            change(d);
+                            match case {
+                                "schraeg" => d.mask_v = normal * 0.6 + v * 0.8,
+                                "projektor" => {
+                                    d.mask_mode = MaskMode::Projector;
+                                    d.position = At::new(lamp + toward * 2.0);
+                                    d.direction = Vec3::new(toward.x, toward.y, -toward.length())
+                                        .normalize_or_zero();
+                                }
+                                _ => {}
+                            }
                         });
                         let (on, off, _) = on_and_off(f);
                         let masked = (f.renderer.plan().lights().rows.iter())
