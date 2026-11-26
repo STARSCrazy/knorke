@@ -490,8 +490,11 @@ const BOUNDS: [(&str, f64, f64); 9] = [
 /// (output pixels x, y, width, height), and the most the rows may differ from the reference
 /// there (mean of 255). Rays rising out through the tower's top read its pattern where they
 /// leave it, not at its far side; reading the far side lost the top of the lattice's shadow
-/// there. Measured 1.951 (2026-11-26, Vulkan, RX 6700 XT), at the far side 2.625; plus a tenth.
-const FACADE: ([usize; 4], f64) = ([560, 170, 160, 160], 2.15);
+/// there. Where the light's ray grazes the tower, the mask's staircase splits it in two runs;
+/// hulling the low building and the facade behind them instead blackened the facade's south
+/// end (the build joins the pieces then, `Squeeze`). Measured 1.316 (2026-11-26, Vulkan,
+/// RX 6700 XT), hulled 1.951, at the far side 2.625; plus a tenth.
+const FACADE: ([usize; 4], f64) = ([560, 170, 160, 160], 1.45);
 
 /// Mean absolute difference of two pictures over the colour channels within `rect`.
 fn region_mean(a: &[u8], b: &[u8], [x, y, w, h]: [usize; 4]) -> f64 {

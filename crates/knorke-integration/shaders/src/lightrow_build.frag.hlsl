@@ -1,12 +1,13 @@
 // Light rows (ADR 0019): builds one lamp's row, one texel per angle.
 // Marches once outward from the lamp's ground point over the height texture of the occlusion mask, to the lamp's
 // radius. Consecutive texels with the same height interval are one run (rn, rf, base, top). A run is dropped if a
-// nearer run standing on the ground already blocks every slope it would block; of more than four the last slot
-// takes the hull of the rest, which can only hide too much. The run the lamp stands in is skipped.
+// nearer run standing on the ground already blocks every slope it would block; of more than four, two pieces of one
+// split obstacle become one (`Squeeze`), else the last slot takes the hull of the rest, which can only hide too
+// much. The run the lamp stands in is skipped.
 // A partly transparent run (E25: mask opacity below kOpaqueOpacity) carries the transmittance 1 - o of its first texel,
 // as Chiaro reads o where a crossing enters (the mask's rim texels of an obstacle may hold less); it never ends the
-// march and never hides a farther run. An angle with one keeps three runs,
-// the fourth slot holds the transmittances (lightrow_runs.hlsli).
+// march and never hides a farther run. An angle with one keeps three runs (squeezed or hulled as above), the fourth
+// slot holds the transmittances (lightrow_runs.hlsli).
 // An edge lies where the ray enters
 // the texel of the first sample with another interval, not on the sample.
 #include "lightrow.hlsli"
@@ -67,6 +68,30 @@ float4 Hull(float4 near, float4 far)
     return float4(near.x, far.y, min(near.z, far.z), max(near.w, far.w));
 }
 
+// Frees one of the first n slots by joining two neighbouring runs that are one obstacle split: a ray grazing an
+// outline steps out of the mask's staircase and back in, which leaves two runs of one interval and kind within two
+// texels. The joined run lets through the product, as the two crossings do in Chiaro's trace. Used only when the
+// slots overflow, where the hull behind a split partly transparent obstacle (a low building and the facade beyond
+// it) hid the facade from all of the light. False if no two runs are such a pair.
+bool Squeeze(inout float4 runs[kRuns], inout float pass[kRuns], int n)
+{
+    for (int k = 0; k + 1 < n; ++k) {
+        if (all(runs[k].zw == runs[k + 1].zw) && (pass[k] > 0.0) == (pass[k + 1] > 0.0)
+            && runs[k + 1].x <= runs[k].y + 2.0) {
+            runs[k].y = runs[k + 1].y;
+            pass[k] *= pass[k + 1];
+            for (int j = k + 1; j + 1 < n; ++j) {
+                runs[j] = runs[j + 1];
+                pass[j] = pass[j + 1];
+            }
+            runs[n - 1] = float4(0.0, 0.0, 0.0, 0.0);
+            pass[n - 1] = 0.0;
+            return true;
+        }
+    }
+    return false;
+}
+
 // Adds a closed run that lets `through` of the light pass to the kept ones; false once nothing behind it can matter.
 // The hull lets through the product of what it took: opaque if any of it is.
 bool Keep(inout float4 runs[kRuns], inout float pass[kRuns], inout int count, float4 run, float through, float zl)
@@ -80,6 +105,9 @@ bool Keep(inout float4 runs[kRuns], inout float pass[kRuns], inout int count, fl
         if (pass[k] <= 0.0 && o.z <= 0.0 && (zl - o.w) / o.y <= fall && (zl - o.w) / o.x <= rise) {
             return true;
         }
+    }
+    if (count == kRuns && Squeeze(runs, pass, kRuns)) {
+        --count;
     }
     if (count < kRuns) {
         runs[count] = run;
@@ -139,9 +167,9 @@ RowOutput main(SurfaceLightVaryings i)
         Keep(runs, pass, count, float4(begin, t, current.xy), current.z, zl);
     }
     bool partial = pass[0] > 0.0 || pass[1] > 0.0 || pass[2] > 0.0 || pass[3] > 0.0;
-    if (partial) {
-        runs[2] = count > 3 ? Hull(runs[2], runs[3]) : runs[2];
-        pass[2] *= count > 3 ? pass[3] : 1.0;
+    if (partial && count > 3 && !Squeeze(runs, pass, kRuns)) {
+        runs[2] = Hull(runs[2], runs[3]);
+        pass[2] *= pass[3];
     }
     RowOutput o;
     o.first = float4(PackRun(runs[0]), PackRun(runs[1]));
