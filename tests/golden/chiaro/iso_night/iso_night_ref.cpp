@@ -12,7 +12,7 @@
 // the HUD rect).
 // The demo's Scene.cpp is compiled into this file straight from the Chiaro tree: 9bc5b9b with one fix in
 // PatternSheet(), `closed = x < 2;` instead of `closed = x >= 2;` (the slat column at u = 0 is drawn as a slat, so it
-// must block; it let light pass before), not committed in Chiaro. `private` is opened
+// must block; it let light pass before), committed in Chiaro as e8a149a. `private` is opened
 // for it to read the scene's descs. main() repeats what the demo's main.cpp sets up for these variants; change
 // both together. The HUD overlay is left out: the golden is compared outside its rect (manifest.toml).
 // Build (MSVC x64, against an out-of-tree Chiaro 9bc5b9b build <b>), from a directory outside the repo:

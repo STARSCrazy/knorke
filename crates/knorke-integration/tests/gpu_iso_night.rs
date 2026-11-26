@@ -1,4 +1,4 @@
-//! The Chiaro demo scene `iso_night` (examples/iso_night_demo of chiaro @ 9bc5b9b plus one fix in
+//! The Chiaro demo scene `iso_night` (examples/iso_night_demo of chiaro @ 9bc5b9b plus one fix, e8a149a, in
 //! `Scene.cpp` `PatternSheet()`: `closed = x < 2;` instead of `x >= 2`, so the drawn slats block;
 //! zlib license)
 //! at `--time 5` in its five P3 variants, end to end through [`Layers`] and [`Light2dRenderer`],
