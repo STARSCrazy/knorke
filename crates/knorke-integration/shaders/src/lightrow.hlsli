@@ -29,7 +29,8 @@ static const float kEdgeFar = 63.0;        // lightrow_edge.frag: the outline li
 static const float kInfiniteTop = 60000.0; // tops from here on are infinitely tall (the mask writes 65504)
 
 // A row texel holds two runs as four floats, each two 12-bit numbers (exact in a 32-bit float): distances in quarter
-// texels (up to 1023.75), heights in hundredths; top 4095 is infinitely tall.
+// texels (up to 1023.75), heights in hundredths; top 4095 is infinitely tall. A finite top of 40.9 (MAX_TOP of
+// `knorke_light2d::rows`) or more would read as infinite, so such a frame draws no row lights.
 float2 PackRun(float4 run) // rn, rf, base, top
 {
     float2 d = round(clamp(run.xy, 0.0, 1023.75) * 4.0);

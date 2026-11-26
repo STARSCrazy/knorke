@@ -510,9 +510,10 @@ impl<'d> PassPlan<'d> {
         let obstacles = stores.obstacles;
         let sprite = frame.occlusion.is_some();
         let normal_mode = frame.surface.is_some() || frame.material.is_some();
+        let max_top = obstacles.max_finite_top();
         let max_height = max_height(
             frame.surface.is_some(),
-            obstacles.max_finite_top(),
+            max_top,
             obstacles.any_infinite_enabled(),
             sprite,
             settings.surface_height_step,
@@ -531,6 +532,7 @@ impl<'d> PassPlan<'d> {
                 frame.surface.is_some(),
                 builds_medium,
                 obstacles.any_partial() || obstacles.any_pattern() || sprite,
+                max_top,
             ),
         };
         collect_lights(

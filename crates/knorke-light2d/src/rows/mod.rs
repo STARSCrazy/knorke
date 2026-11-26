@@ -44,6 +44,9 @@ pub const MAX_REACH: f32 = 600.0;
 /// Most rows of the atlas, so most shadow-casting row lights of a frame; further ones stay with
 /// Chiaro's programs.
 pub const MAX_ROWS: u32 = 256;
+/// Obstacle tops from here on (world units) are infinitely tall to a row: it stores heights in
+/// hundredths as 12-bit numbers (`PackRun` in `lightrow.hlsli`).
+pub const MAX_TOP: f32 = 40.9;
 /// Texels before the receiver that do not count as occluders (Chiaro's trace: 1).
 pub const RECEIVER_GAP: f32 = 1.0;
 /// Most angles the edge pass walks to each side (below `kEdgeFar` of the shaders).
@@ -59,14 +62,16 @@ pub const GROUND_TOLERANCE: f32 = 1e-3;
 /// - without a surface buffer (the row light is a surface light),
 /// - with a medium world map (the row programs have no `*_medium` variant),
 /// - with `other_occluders`: a partly transparent or pattern obstacle (a row knows opaque runs
-///   only) or a sprite occlusion mask (not examined with rows yet).
+///   only) or a sprite occlusion mask (not examined with rows yet),
+/// - with a finite obstacle top (`max_top`, the highest) of [`MAX_TOP`] or more.
 pub fn frame_suits(
     settings: &LightSettings,
     surface: bool,
     medium_map: bool,
     other_occluders: bool,
+    max_top: f32,
 ) -> bool {
-    settings.light_rows && surface && !medium_map && !other_occluders
+    settings.light_rows && surface && !medium_map && !other_occluders && max_top < MAX_TOP
 }
 
 /// Whether a light can be a row light in a frame [`frame_suits`] accepts: a point or spot light
@@ -448,11 +453,27 @@ mod tests {
             light_rows: true,
             ..LightSettings::default()
         };
-        assert!(frame_suits(&on, true, false, false));
-        assert!(!frame_suits(&LightSettings::default(), true, false, false));
-        assert!(!frame_suits(&on, false, false, false), "no surface buffer");
-        assert!(!frame_suits(&on, true, true, false), "medium map");
-        assert!(!frame_suits(&on, true, false, true), "partial obstacles");
+        assert!(frame_suits(&on, true, false, false, 3.0));
+        assert!(!frame_suits(
+            &LightSettings::default(),
+            true,
+            false,
+            false,
+            3.0
+        ));
+        assert!(
+            !frame_suits(&on, false, false, false, 3.0),
+            "no surface buffer"
+        );
+        assert!(!frame_suits(&on, true, true, false, 3.0), "medium map");
+        assert!(
+            !frame_suits(&on, true, false, true, 3.0),
+            "partial obstacles"
+        );
+        assert!(
+            !frame_suits(&on, true, false, false, MAX_TOP),
+            "tall obstacle"
+        );
 
         let point = LightDesc::new(LightType::Point);
         assert!(light_suits(&point, 100.0));
