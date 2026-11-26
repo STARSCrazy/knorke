@@ -67,19 +67,19 @@ pub const GROUND_TOLERANCE: f32 = 1e-3;
 /// Whether a frame can draw row lights at all. It cannot
 /// - without a surface buffer (the row light is a surface light),
 /// - with a medium world map (the row programs have no `*_medium` variant),
-/// - with a sprite occlusion mask (not examined with rows yet),
 /// - with a finite obstacle top (`max_top`, the highest) of [`MAX_TOP`] or more.
 ///
 /// Tile grids with a pattern exclude only the lamps that reach them ([`RowBlockers`]); partly
-/// transparent obstacles and the other pattern obstacles are runs of the row.
+/// transparent obstacles, the other pattern obstacles and the application's sprite mask (its
+/// heights are in the height texture, its scene rectangle is redrawn every frame) are runs of
+/// the row.
 pub fn frame_suits(
     settings: &LightSettings,
     surface: bool,
     medium_map: bool,
-    sprite: bool,
     max_top: f32,
 ) -> bool {
-    settings.light_rows && surface && !medium_map && !sprite && max_top < MAX_TOP
+    settings.light_rows && surface && !medium_map && max_top < MAX_TOP
 }
 
 /// Mask rectangles of the active tile grids with a pattern: the pattern pass finds crossings of
@@ -617,18 +617,11 @@ mod tests {
             light_rows: false,
             ..on
         };
-        assert!(frame_suits(&on, true, false, false, 3.0));
-        assert!(!frame_suits(&off, true, false, false, 3.0));
-        assert!(
-            !frame_suits(&on, false, false, false, 3.0),
-            "no surface buffer"
-        );
-        assert!(!frame_suits(&on, true, true, false, 3.0), "medium map");
-        assert!(!frame_suits(&on, true, false, true, 3.0), "sprite mask");
-        assert!(
-            !frame_suits(&on, true, false, false, MAX_TOP),
-            "tall obstacle"
-        );
+        assert!(frame_suits(&on, true, false, 3.0));
+        assert!(!frame_suits(&off, true, false, 3.0));
+        assert!(!frame_suits(&on, false, false, 3.0), "no surface buffer");
+        assert!(!frame_suits(&on, true, true, 3.0), "medium map");
+        assert!(!frame_suits(&on, true, false, MAX_TOP), "tall obstacle");
 
         let point = LightDesc::new(LightType::Point);
         assert!(light_suits(&point, 100.0));
