@@ -269,8 +269,7 @@ pub struct LightSettings {
     /// Transition to light rows (ADR 0019, plan 17.13): point, spot, line and rect lights the
     /// rows can draw ([`rows::light_suits`](crate::rows::light_suits)) take their shadow from one
     /// row per lamp (four for line and rect) instead of a ray march per pixel; all others are
-    /// drawn as before. Default off:
-    /// then nothing changes.
+    /// drawn as before. Default on; off draws every light as Chiaro's (the ports' parity tests).
     pub light_rows: bool,
 }
 
@@ -285,7 +284,7 @@ impl Default for LightSettings {
             haze: HazeSettings::default(),
             medium_height_step: None,
             debug_checks: DebugChecks::NONE,
-            light_rows: false,
+            light_rows: true,
         }
     }
 }
@@ -451,7 +450,7 @@ mod tests {
         assert!(s.haze.shafts);
         assert_eq!(s.haze.color, Vec3::new(0.9, 0.9, 0.9));
         assert_eq!(s.medium_height_step, None);
-        assert!(!s.light_rows);
+        assert!(s.light_rows);
         assert!(!s.debug_checks.any());
     }
 

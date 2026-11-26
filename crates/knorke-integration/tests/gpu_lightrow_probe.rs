@@ -208,6 +208,7 @@ fn settings(shadow: f32) -> Light2dSettings {
                 ..QualitySettings::default()
             },
             surface_height_step: HEIGHT_STEP,
+            light_rows: false, // today's light; the rows are switched on where they are drawn
             ..LightSettings::default()
         },
         post: PostSettings::default(),

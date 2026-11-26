@@ -612,18 +612,13 @@ mod tests {
 
     #[test]
     fn suitability_names_what_rows_cannot_do() {
-        let on = LightSettings {
-            light_rows: true,
-            ..LightSettings::default()
+        let on = LightSettings::default();
+        let off = LightSettings {
+            light_rows: false,
+            ..on
         };
         assert!(frame_suits(&on, true, false, false, 3.0));
-        assert!(!frame_suits(
-            &LightSettings::default(),
-            true,
-            false,
-            false,
-            3.0
-        ));
+        assert!(!frame_suits(&off, true, false, false, 3.0));
         assert!(
             !frame_suits(&on, false, false, false, 3.0),
             "no surface buffer"
