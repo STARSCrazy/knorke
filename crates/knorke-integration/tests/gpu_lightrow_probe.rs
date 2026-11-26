@@ -3,8 +3,9 @@
 //! `iso_night_hard` cut down to what rows can draw: the point and spot lights that cast shadows
 //! (13), no profile, mask, pattern, animation, flicker, medium, sun, zones, material. Hard
 //! shadows, and soft ones with the lamp sizes of `plain.txt`; each as it is ("normal") and with
-//! every lamp four times ("last"); and the line and rect lights that cast shadows (4) alone
-//! ("flächen").
+//! every lamp four times ("last"); the line and rect lights that cast shadows (4) alone
+//! ("flächen"); the shop sign's line light alone with a post close in front of it, a third
+//! along ("linie pfosten").
 //!
 //! - Today: [`Light2dRenderer`] with `light_rows` off.
 //! - New: the same with `light_rows` on.
@@ -77,25 +78,25 @@ fn num(s: &str) -> f32 {
     s.parse().unwrap()
 }
 
-/// The scene text cut down to what the probe compares: the enabled point and spot lights (with
-/// `area` the line and rect lights instead) that cast shadows (every extra switched off) and
-/// the enabled obstacles without their patterns, the two pattern fences with opacity `fence`.
-fn parse(text: &str, soft: bool, fence: f32, area: bool) -> (Vec<LightDesc>, ObstacleStore) {
+/// The scene text cut down to what the probe compares: the enabled lights of the types in
+/// `kinds` (Chiaro's numbers: 0 point, 1 spot, 3 line, 4 rect) that cast shadows (every extra
+/// switched off) and the enabled obstacles without their patterns, the two pattern fences with
+/// opacity `fence`.
+fn parse(text: &str, soft: bool, fence: f32, kinds: &str) -> (Vec<LightDesc>, ObstacleStore) {
     let (mut lights, mut obstacles) = (Vec::new(), ObstacleStore::new());
     for line in text.lines() {
         let f: Vec<&str> = line.split(' ').collect();
         let v = |i: usize| num(f[i]);
         match f[0] {
             "light" => {
-                let kind = match (f[1], area) {
-                    ("0", false) => LightType::Point,
-                    ("1", false) => LightType::Spot,
-                    ("3", true) => LightType::Line,
-                    ("4", true) => LightType::Rect,
-                    _ => continue,
+                let kind = match f[1] {
+                    "0" => LightType::Point,
+                    "1" => LightType::Spot,
+                    "3" => LightType::Line,
+                    _ => LightType::Rect,
                 };
-                // CHI_LIGHT_NO_SHADOWS, _DISABLED; CHI_HEIGHT_AUTO is -1.
-                if f[2].parse::<u32>().unwrap() & 3 != 0 || v(5) < 0.0 {
+                // CHI_LIGHT_NO_SHADOWS, _DISABLED; CHI_HEIGHT_AUTO is -1 (the moon's).
+                if !kinds.contains(f[1]) || f[2].parse::<u32>().unwrap() & 3 != 0 || v(5) < 0.0 {
                     continue;
                 }
                 let mut d = LightDesc::new(kind);
@@ -408,14 +409,35 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24; "hart halb", the fences as 50 % walls: 0.314 / 1.25,
 /// today 0.724 / 2.56; "flächen" 0.002 / 0.01, today 0.020 / 0.11 (bound rounded up: a tenth of
 /// so little is below what a driver may change).
-const BOUNDS: [(&str, f64, f64); 6] = [
+const BOUNDS: [(&str, f64, f64); 7] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
     ("weich normal", 0.70, 2.55),
     ("weich last", 0.96, 3.34),
     ("hart halb", 0.35, 1.38),
     ("flächen", 0.004, 0.02),
+    ("linie pfosten", 0.014, 0.03),
 ];
+
+/// The post of "linie pfosten": a third along the shop sign's line light (at 31, 26.12, 2.4
+/// either way along x, 4.6 high), 0.7 in front of it and taller than it, so it cuts the light of
+/// one end off the ground behind it and a line light marched from its middle alone misses that.
+fn post() -> ShapeDesc<'static> {
+    let common = ObstacleCommon {
+        position: At::new(Vec2::new(31.0 - 2.4 + 4.8 / 3.0, 26.82)),
+        rotation: 0.0,
+        height: 6.0,
+        base_height: 0.0,
+        opacity: 1.0,
+        dynamic: false,
+        enabled: true,
+        shadow_footprint: false,
+    };
+    ShapeDesc {
+        common,
+        shape: Shape::Circle { radius: 0.25 },
+    }
+}
 
 #[test]
 fn light_rows_against_chiaro_and_the_reference() {
@@ -467,21 +489,32 @@ fn light_rows_against_chiaro_and_the_reference() {
         let offsets = [(0.0, 0.0), (0.7, 0.3), (-0.5, 0.6), (0.4, -0.7)];
         let scenes = [false, true]
             .into_iter()
-            .flat_map(|soft| [(soft, 1, 1.0, false), (soft, 4, 1.0, false)])
-            .chain([(false, 1, 0.5, false), (false, 1, 1.0, true)]);
-        for ((soft, copies, fence, area), bound) in scenes.zip(BOUNDS) {
+            .flat_map(|soft| [(soft, 1, 1.0, "01"), (soft, 4, 1.0, "01")])
+            .chain([
+                (false, 1, 0.5, "01"),
+                (false, 1, 1.0, "34"),
+                (false, 1, 1.0, "3"),
+            ]);
+        for ((soft, copies, fence, kinds), bound) in scenes.zip(BOUNDS) {
             let name = bound.0;
-            let (mut base, obstacles) = parse(&text, false, fence, area);
+            let (mut base, mut obstacles) = parse(&text, false, fence, kinds);
+            if kinds == "3" {
+                obstacles.create_shape(&post()).unwrap();
+            }
             if soft {
                 // The lamp sizes of the variant with soft shadows, on the same lamps.
-                let sized = parse(&plain, true, 1.0, false).0;
+                let sized = parse(&plain, true, 1.0, kinds).0;
                 assert_eq!(sized.len(), base.len());
                 for (d, s) in base.iter_mut().zip(&sized) {
                     assert_eq!(d.position, s.position);
                     d.source_radius = s.source_radius;
                 }
             }
-            let (expected, supports) = if area { (4, SUPPORTS) } else { (13, 1) };
+            let (expected, supports) = match kinds {
+                "01" => (13, 1),
+                "34" => (4, SUPPORTS),
+                _ => (1, SUPPORTS),
+            };
             assert_eq!(
                 base.len(),
                 expected,
