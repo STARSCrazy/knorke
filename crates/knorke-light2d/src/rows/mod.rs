@@ -65,7 +65,6 @@ pub const EDGE_NEAR: f32 = 16.0;
 pub const GROUND_TOLERANCE: f32 = 1e-3;
 
 /// Whether a frame can draw row lights at all. It cannot
-/// - without a surface buffer (the row light is a surface light),
 /// - with a medium world map (the row programs have no `*_medium` variant),
 /// - with a finite obstacle top (`max_top`, the highest) of [`MAX_TOP`] or more.
 ///
@@ -74,13 +73,11 @@ pub const GROUND_TOLERANCE: f32 = 1e-3;
 /// heights are in the height texture) are runs of the row. The sprite mask may change anywhere
 /// every frame, so its scene rectangle counts as changed every frame and the rows of the lamps
 /// that reach it are rebuilt every frame.
-pub fn frame_suits(
-    settings: &LightSettings,
-    surface: bool,
-    medium_map: bool,
-    max_top: f32,
-) -> bool {
-    settings.light_rows && surface && !medium_map && max_top < MAX_TOP
+///
+/// A frame without surface buffer lights its pixels as ground, with the material buffer as
+/// Chiaro's surface programs, without one as Chiaro's flat programs (no Lambert term).
+pub fn frame_suits(settings: &LightSettings, medium_map: bool, max_top: f32) -> bool {
+    settings.light_rows && !medium_map && max_top < MAX_TOP
 }
 
 /// Mask rectangles of the active tile grids with a pattern: the pattern pass finds crossings of
@@ -618,11 +615,10 @@ mod tests {
             light_rows: false,
             ..on
         };
-        assert!(frame_suits(&on, true, false, 3.0));
-        assert!(!frame_suits(&off, true, false, 3.0));
-        assert!(!frame_suits(&on, false, false, 3.0), "no surface buffer");
-        assert!(!frame_suits(&on, true, true, 3.0), "medium map");
-        assert!(!frame_suits(&on, true, false, MAX_TOP), "tall obstacle");
+        assert!(frame_suits(&on, false, 3.0));
+        assert!(!frame_suits(&off, false, 3.0));
+        assert!(!frame_suits(&on, true, 3.0), "medium map");
+        assert!(!frame_suits(&on, false, MAX_TOP), "tall obstacle");
 
         let point = LightDesc::new(LightType::Point);
         assert!(light_suits(&point, 100.0));

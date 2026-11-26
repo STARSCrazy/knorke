@@ -9,7 +9,8 @@
 // A pattern obstacle is such a run; where the pattern pass found its crossing, the pattern at the height of this
 // pixel's ray there takes the place of the run's transmittance (lightrow_pattern.hlsli), as Chiaro's crossing.
 // lightrow_light.frag, lightrow_light_exact.frag and lightrow_light_direction.frag are this file for the three
-// target layouts of the light pass (surface_light.hlsli).
+// target layouts of the light pass (surface_light.hlsli); lightrow_light_flat.frag for a frame without surface and
+// material buffer (KNORKE_FLAT in lightrow_surface.hlsli).
 // The *_mask programs (CHI_LIGHT_MASK with CHI_POINT_LIGHTS, masked point and spot lights) multiply by the mask as
 // Chiaro's (surface_light.hlsli); a window mask's ray ends at the window: the runs nearer the lamp than the window
 // do not count (`Clip`). The lamp keeps its size, as Chiaro's ray to the window keeps the angle of the lamp's.
@@ -154,14 +155,16 @@ float Through(float4 runs[kRuns], float4 pass, float4 crossings, float2 ground, 
 static const float kFar = 1e30;
 
 // The part of the lamp a run hides from the place (r, z), as (across from, across to, share of the heights): the
-// lamp is a square, across the ray in mask texels within +-wide, upright within zl +- size. `angles` are the
+// lamp is a square, across the ray in mask texels within +-wide, upright within zl +- size cut at the ground (a lamp
+// on the ground, as in a flat frame, would otherwise light half its shadow from under the obstacles). `angles` are the
 // angles from the place's ray to the obstacle's outline on either side, `along` where on the run (0 near end, 1 far
 // end) each outline stands; a lamp point x texels across sees the place past an outline at distance d
 // x (1 - d / r) / d off that ray.
 float3 Part(float4 run, float2 angles, float2 along, float zl, float size, float wide, float z, float r)
 {
     float2 h = Hidden(run, z, r);
-    float share = (min(h.y, zl + size) - max(h.x, zl - size)) / (2.0 * size);
+    float low = max(zl - size, 0.0);
+    float share = (min(h.y, zl + size) - max(h.x, low)) / max(zl + size - low, 1e-6);
     if (share <= 0.0) {
         return float3(0.0, 0.0, 0.0);
     }

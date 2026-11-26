@@ -61,8 +61,9 @@ const fn material_program(vertex: &'static str, fragment: &'static str) -> Progr
 
 /// The light is one shader in three versions because the light pass has three target layouts
 /// (Chiaro's `surface_light.hlsli`): the light buffer alone, with the specular buffer, with the
-/// direction buffer; and each again for masked lamps.
-const PROGRAMS: [ProgramDesc; 9] = [
+/// direction buffer; and each again for masked lamps. A frame without surface and material
+/// buffer has Chiaro's flat light (no Lambert term), with and without a mask.
+const PROGRAMS: [ProgramDesc; 11] = [
     atlas_program("lightrow_build.frag"),
     atlas_program("lightrow_edge.frag"),
     ProgramDesc::new("lightrow.vert", "lightrow_light.frag", Blend::Additive),
@@ -76,9 +77,19 @@ const PROGRAMS: [ProgramDesc; 9] = [
     ),
     material_program("lightrow_mask.vert", "lightrow_light_exact_mask.frag"),
     material_program("lightrow_mask.vert", "lightrow_light_direction_mask.frag"),
+    ProgramDesc::new("lightrow.vert", "lightrow_light_flat.frag", Blend::Additive),
+    ProgramDesc::new(
+        "lightrow_mask.vert",
+        "lightrow_light_flat_mask.frag",
+        Blend::Additive,
+    ),
 ];
 
-const fn light_program(detail: DetailMode, masked: bool) -> usize {
+/// `flat`: no surface and no material buffer, so no detail targets either.
+const fn light_program(detail: DetailMode, masked: bool, flat: bool) -> usize {
+    if flat {
+        return if masked { 10 } else { 9 };
+    }
     let base = if masked { 6 } else { 2 };
     base + match detail {
         DetailMode::None => 0,
@@ -119,6 +130,8 @@ pub struct RowLights<'d> {
     dirty: Vec<u32>,
     frame: RowsRecord,
     detail: DetailMode,
+    /// The frame has neither surface nor material buffer.
+    flat: bool,
 }
 
 impl<'d> RowLights<'d> {
@@ -140,6 +153,7 @@ impl<'d> RowLights<'d> {
             dirty: Vec::with_capacity(MAX_ROWS as usize),
             frame: RowsRecord::default(),
             detail: DetailMode::None,
+            flat: false,
         }
     }
 
@@ -178,6 +192,7 @@ impl<'d> RowLights<'d> {
     ) -> Result<u32, Diagnostic> {
         self.frame = RowsRecord::default();
         self.detail = detail;
+        self.flat = frame.surface.is_none() && frame.material.is_none();
         self.dirty.clear();
         self.cache.begin();
         let lights: &[RowLight] = &frame.lights.rows;
@@ -244,10 +259,18 @@ impl<'d> RowLights<'d> {
             none => none.insert(PipelineCache::new(shaders, &PROGRAMS)?),
         };
         if masked < self.frame.lights {
-            pipelines.get(shaders, light_program(detail, false), LIGHT_FORMAT)?;
+            pipelines.get(
+                shaders,
+                light_program(detail, false, self.flat),
+                LIGHT_FORMAT,
+            )?;
         }
         if masked > 0 {
-            pipelines.get(shaders, light_program(detail, true), LIGHT_FORMAT)?;
+            pipelines.get(
+                shaders,
+                light_program(detail, true, self.flat),
+                LIGHT_FORMAT,
+            )?;
         }
         if self.frame.built > 0 {
             pipelines.get(shaders, BUILD, ROW_FORMAT)?;
@@ -489,7 +512,9 @@ impl<'d> RowLights<'d> {
         let (row0, row1) = rows.unwrap_or((stand_in, stand_in));
         let (edge0, edge1) = edges.unwrap_or((stand_in, stand_in));
         let mut textures = [
-            frame.surface.unwrap_or(stand_in),
+            // Without a surface buffer the material buffer, as Chiaro's light programs; neither:
+            // not read (SurfaceAt).
+            frame.surface.or(frame.material).unwrap_or(stand_in),
             shadows.map_or(stand_in, |s| s.mask),
             shadows.and_then(|s| s.height).unwrap_or(stand_in),
             row0,
@@ -532,7 +557,7 @@ impl<'d> RowLights<'d> {
             let vertex_uniforms: [&[u8]; 1] = [&vertex];
             let samplers = usize::from(exact) + usize::from(masked) + 10;
             pass.bind_program(
-                self.pipeline(light_program(self.detail, masked), LIGHT_FORMAT)?,
+                self.pipeline(light_program(self.detail, masked, self.flat), LIGHT_FORMAT)?,
                 &Bindings {
                     vertex: StageBindings {
                         storage_buffers: &[lamps],

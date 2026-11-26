@@ -173,6 +173,8 @@ impl Scene {
     pub(crate) fn golden(name: &'static str, ambient: Vec3, light_resolution: f32) -> Self {
         let mut s = Self::new(name, 0.0, light_resolution);
         s.settings.ambient = ambient;
+        // Chiaro's light: the scene is compared with Chiaro's pictures.
+        s.settings.light_rows = false;
         s.size = (W, H);
         s
     }

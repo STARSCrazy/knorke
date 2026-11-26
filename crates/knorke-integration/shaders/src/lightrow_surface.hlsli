@@ -76,6 +76,32 @@ float Visibility(SurfaceLightVaryings i, Surface s, float maskT)
 #else
 #define CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest) Visibility(i, s, 0.0)
 #endif
+#ifdef KNORKE_FLAT
+// A frame without surface and material buffer: Chiaro's flat light (light_sdf.frag, light_sdf_height.frag main).
+// Every pixel is ground (SurfaceParams without a surface buffer: SurfaceAt reads no texture), and the light has no
+// Lambert term.
+#include "light_common.hlsli"
+#include "surface.hlsli"
+
+float4 main(SurfaceLightVaryings i) : SV_Target0
+{
+    float3 world;
+    Surface s = SurfaceAt(SurfaceTex, SurfaceSampler, i.scene, SceneStep, world, InvAxes, OriginZAxis);
+    LightParams l = CHI_LIGHT_PARAMS(i);
+    float3 toLight, nearest;
+    float2 ts;
+    float3 light = i.colorFalloff.rgb * LightReachAt(world, l, toLight, nearest, ts);
+#ifdef CHI_LIGHT_MASK
+    float maskT;
+    light *= CHI_LIGHT_MASK_TINT(i, world - i.positionRadius.xyz, maskT);
+#endif
+    if (all(light <= 0.0)) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    return float4(light * CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest), 0.0);
+}
+#else
 #include "surface_light.hlsli"
+#endif
 
 #endif

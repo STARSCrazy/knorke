@@ -215,10 +215,11 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
             occlusion: occlusion.as_ref().map(Texture::texture_ref),
             ..Light2dFrame::new(color.texture_ref(), target.texture_ref(), &projection)
         };
-        // Chiaro's defaults with the scene's ambient and output filter.
+        // Chiaro's defaults with the scene's ambient and output filter, and Chiaro's light.
         let mut settings = Light2dSettings {
             light: LightSettings {
                 ambient: Vec3::new(scene.ambient, scene.ambient, scene.ambient),
+                light_rows: false,
                 ..LightSettings::default()
             },
             post: PostSettings::default(),
@@ -263,6 +264,27 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
                 compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::LOOSE).unwrap();
             loose.print(scene.name, "LOOSE");
             failures.push(format!("{}: {strict:?}", scene.name));
+        }
+        // The row light (ADR 0019) differs from Chiaro's along shadow edges only. Measured
+        // 2026-11-26 (Vulkan, RX 6700 XT): gate_sprite_shadow mean 0.446 of 255 (7.72 while a
+        // lamp on the ground lit half its soft shadow from below the ground); minimal_normal_map 0.
+        let mut rows = settings;
+        rows.light.light_rows = true;
+        frame_once(
+            &device,
+            &mut renderer,
+            &frame,
+            &stores,
+            &rows,
+            Some(&download),
+        );
+        let mut lit = vec![0u8; (w * h * 4) as usize];
+        download.read(&mut lit).unwrap();
+        let report = compare_rgba8(&lit, &reference, w, h, &[], &ParityBudget::STRICT).unwrap();
+        let mean = report.sum_diff as f64 / report.compared as f64;
+        eprintln!("{} with light rows: mean {mean:.4} of 255", scene.name);
+        if mean > 0.5 {
+            failures.push(format!("{} with light rows: mean {mean}", scene.name));
         }
         if let Some(dir) = &out {
             std::fs::create_dir_all(dir).unwrap();
