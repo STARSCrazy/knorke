@@ -17,7 +17,8 @@
 //! The test always checks that the rows are closer to the reference than today's light.
 //! `KNORKE_PROBE_OUT=<dir>` writes `<scene>_heute.png`, `<scene>_neu.png`, `<scene>_wahr.png`,
 //! the differences times 8 and `messung.txt`; `KNORKE_PROBE_FRAMES=<n>` times n frames per run
-//! (wall clock: prepare + record + submit + wait), `KNORKE_PROBE_RUNS` runs per case (default
+//! (wall clock: prepare + record + submit, in batches of [`BATCH`] frames that wait once at their
+//! end, so the GPU stays busy), `KNORKE_PROBE_RUNS` runs per case (default
 //! 5), the cases in turn: today, rows with resting lamps, rows with every lamp moved every frame
 //! (all rows built), and a frame without lights (what no light stage can save).
 #![cfg(feature = "gpu")]
@@ -207,6 +208,7 @@ fn settings(shadow: f32) -> Light2dSettings {
                 ..QualitySettings::default()
             },
             surface_height_step: HEIGHT_STEP,
+            light_rows: false, // today's light; the rows are switched on where they are drawn
             ..LightSettings::default()
         },
         post: PostSettings::default(),
@@ -397,13 +399,18 @@ fn draw(
     frame: &Light2dFrame<'_>,
     stores: &SceneStores<'_>,
     settings: &Light2dSettings,
+    wait: bool,
 ) -> PassRecord {
     let prepared = renderer.prepare(frame, stores, settings).unwrap();
     let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
     let record = renderer
         .record(&mut cmd, frame, settings, prepared)
         .unwrap();
-    cmd.submit_and_wait().unwrap();
+    if wait {
+        cmd.submit_and_wait().unwrap();
+    } else {
+        cmd.submit().unwrap();
+    }
     record
 }
 
@@ -424,14 +431,24 @@ fn stats(mut us: Vec<f64>) -> (f64, f64) {
     (us[us.len() / 2], us[us.len() * 95 / 100])
 }
 
-/// `frames` calls of `frame`, each timed: the host times frames (wall clock is a host tool).
+/// Frames per timed batch. Waiting for every frame let the GPU idle between frames, and its
+/// clocks dropped: the median of a frame without lights moved by a factor of 2 between runs.
+const BATCH: usize = 100;
+
+/// `frames` calls of `frame` (told whether to wait for the GPU), in batches of [`BATCH`] that wait
+/// at their end; the time per frame of each batch (the host times frames: wall clock is a host
+/// tool).
 #[allow(clippy::disallowed_methods)]
-fn time(frames: usize, mut frame: impl FnMut()) -> (f64, f64) {
-    let mut us = Vec::with_capacity(frames);
-    for _ in 0..frames {
-        let t0 = std::time::Instant::now();
-        frame();
-        us.push(t0.elapsed().as_secs_f64() * 1e6);
+fn time(frames: usize, mut frame: impl FnMut(bool)) -> (f64, f64) {
+    let mut us = Vec::with_capacity(frames / BATCH + 1);
+    let mut t0 = std::time::Instant::now();
+    for i in 0..frames {
+        let end = i % BATCH == BATCH - 1 || i + 1 == frames;
+        frame(end);
+        if end {
+            us.push(t0.elapsed().as_secs_f64() * 1e6 / (i % BATCH + 1) as f64);
+            t0 = std::time::Instant::now();
+        }
     }
     stats(us)
 }
@@ -654,10 +671,10 @@ fn light_rows_against_chiaro_and_the_reference() {
                 }
                 let [r_today, r_rest, r_moved, r_none] = &mut renderers;
                 let stores = stores_of(&lights, &obstacles, patterns);
-                let t = time(n, || {
-                    draw(gpu, r_today, &frame(0), &stores, &today);
+                let t = time(n, |wait| {
+                    draw(gpu, r_today, &frame(0), &stores, &today, wait);
                 });
-                let moved = time(n, || {
+                let moved = time(n, |wait| {
                     step += 1;
                     let x = if step.is_multiple_of(2) { NUDGE } else { 0.0 };
                     for (&id, d) in ids.iter().zip(&descs) {
@@ -665,19 +682,19 @@ fn light_rows_against_chiaro_and_the_reference() {
                         moving.set_position(id, at, d.height).unwrap();
                     }
                     let stores = stores_of(&moving, &obstacles, patterns);
-                    let record = draw(gpu, r_moved, &frame(2), &stores, &rows);
+                    let record = draw(gpu, r_moved, &frame(2), &stores, &rows, wait);
                     assert_eq!(record.lighting.rows_built, rows_all);
                 });
-                let floor = time(n, || {
+                let floor = time(n, |wait| {
                     let stores = stores_of(&none, &obstacles, patterns);
-                    draw(gpu, r_none, &frame(2), &stores, &rows);
+                    draw(gpu, r_none, &frame(2), &stores, &rows, wait);
                 });
                 // The first frame builds the rows, from then on the lamps rest.
-                let first = draw(gpu, r_rest, &frame(1), &stores, &rows).lighting;
+                let first = draw(gpu, r_rest, &frame(1), &stores, &rows, true).lighting;
                 assert_eq!(first.row_lights, all, "every lamp is a row light");
                 assert_eq!(first.rows_built, if run == 0 { rows_all } else { 0 });
-                let rest = time(n, || {
-                    let record = draw(gpu, r_rest, &frame(1), &stores, &rows);
+                let rest = time(n, |wait| {
+                    let record = draw(gpu, r_rest, &frame(1), &stores, &rows, wait);
                     assert_eq!(record.lighting.rows_built, 0);
                 });
                 if run > 0 {

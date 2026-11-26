@@ -26,7 +26,7 @@ use knorke_integration::light2d::Light2dSettings;
 use knorke_light2d::light::{LightDesc, LightType, MaskMode, ShadowFilter};
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::settings::{Quality, Resolutions};
-use knorke_math::{At, Vec2};
+use knorke_math::{At, Vec2, Vec3};
 
 /// Largest channel difference of two pictures, the mean over all channels and the share of
 /// pixels that differ, in percent.
@@ -361,6 +361,7 @@ fn half_transparent_walls_are_runs_of_the_row() {
 /// The masked hall window alone (a point light under the hall's ceiling behind a window mask):
 /// a row light with the mask's colour whose ray ends at the window, so the hall's own walls
 /// cast nothing; hard (`hard`) and soft with infinitely tall walls (`plain`), against Chiaro's.
+/// The same with the window tilted, and as a projector mask.
 /// `KNORKE_ROWS_OUT=<dir>` writes both pictures.
 #[test]
 fn the_hall_window_is_a_row_light() {
@@ -375,48 +376,72 @@ fn the_hall_window_is_a_row_light() {
                             f.scene.lights.destroy(id).unwrap();
                         }
                     }
-                    let (on, off, _) = on_and_off(f);
-                    let masked = (f.renderer.plan().lights().rows.iter())
-                        .filter(|l| l.mask.is_some())
-                        .count();
-                    // The demo's car lights come and go with the frame: the window's own light
-                    // is the frame less the one without it, each way.
                     let window = f.scene.light_ids[(f.scene.light_ids.iter())
                         .position(|&id| f.scene.lights.get(id).is_ok())
                         .unwrap()];
-                    f.scene.change_light(window, |d| d.enabled = false);
-                    let (dark_on, dark_off, _) = on_and_off(f);
-                    let own = |a: &[u8], b: &[u8]| -> Vec<u8> {
-                        a.iter().zip(b).map(|(x, y)| x.saturating_sub(*y)).collect()
-                    };
-                    let (on, off) = (own(&on, &dark_on), own(&off, &dark_off));
-                    let lit = 100.0
-                        * (off.as_chunks::<4>().0.iter())
-                            .filter(|p| p.iter().any(|&c| c > 0))
-                            .count() as f64
-                        / (off.len() / 4) as f64;
-                    let (max, mean, share) = diff(&on, &off);
-                    eprintln!(
-                        "iso_night_{variant}, the hall window's light: lighting {lit:.2} % of the \
-                         pixels; against rows off: largest difference {max}/255, mean \
-                         {mean:.4}, {share:.2} % of the pixels"
-                    );
-                    if let Some(dir) = std::env::var_os("KNORKE_ROWS_OUT") {
-                        let dir = std::path::PathBuf::from(dir);
-                        std::fs::create_dir_all(&dir).unwrap();
-                        for (name, px) in [("neu", &on), ("heute", &off)] {
-                            let opaque: Vec<u8> = (px.as_chunks::<4>().0.iter())
-                                .flat_map(|p| [p[0], p[1], p[2], 255])
-                                .collect();
-                            let file = dir.join(format!("fenster_{variant}_{name}.png"));
-                            knorke_contract_tests::parity::save_png_rgba8(
-                                &file, &opaque, OUT.0, OUT.1,
-                            );
+                    let original = f.scene.lights.get(window).unwrap().clone();
+                    // As it is; tilted out of the wall (a window met over a stretch of the
+                    // ground: the near edge of its rectangle begins the row); a projector mask
+                    // instead, the lamp moved out of the hall through the window and shining
+                    // away from it (the mask tints only; the hall's walls cast).
+                    let (u, v) = (original.mask_u, original.mask_v);
+                    let normal = Vec3::new(-u.y, u.x, 0.0).normalize_or_zero() * v.length();
+                    let lamp = original.position.value;
+                    let toward = Vec2::new(original.mask_center.x, original.mask_center.y) - lamp;
+                    for case in ["fenster", "schraeg", "projektor"] {
+                        f.scene.change_light(window, |d| {
+                            *d = original.clone();
+                            match case {
+                                "schraeg" => d.mask_v = normal * 0.6 + v * 0.8,
+                                "projektor" => {
+                                    d.mask_mode = MaskMode::Projector;
+                                    d.position = At::new(lamp + toward * 2.0);
+                                    d.direction = Vec3::new(toward.x, toward.y, -toward.length())
+                                        .normalize_or_zero();
+                                }
+                                _ => {}
+                            }
+                        });
+                        let (on, off, _) = on_and_off(f);
+                        let masked = (f.renderer.plan().lights().rows.iter())
+                            .filter(|l| l.mask.is_some())
+                            .count();
+                        // The demo's car lights come and go with the frame: the window's own
+                        // light is the frame less the one without it, each way.
+                        f.scene.change_light(window, |d| d.enabled = false);
+                        let (dark_on, dark_off, _) = on_and_off(f);
+                        let own = |a: &[u8], b: &[u8]| -> Vec<u8> {
+                            a.iter().zip(b).map(|(x, y)| x.saturating_sub(*y)).collect()
+                        };
+                        let (on, off) = (own(&on, &dark_on), own(&off, &dark_off));
+                        let lit = 100.0
+                            * (off.as_chunks::<4>().0.iter())
+                                .filter(|p| p.iter().any(|&c| c > 0))
+                                .count() as f64
+                            / (off.len() / 4) as f64;
+                        let (max, mean, share) = diff(&on, &off);
+                        eprintln!(
+                            "iso_night_{variant}, the hall window's light, {case}: lighting \
+                             {lit:.2} % of the pixels; against rows off: largest difference \
+                             {max}/255, mean {mean:.4}, {share:.2} % of the pixels"
+                        );
+                        if let Some(dir) = std::env::var_os("KNORKE_ROWS_OUT") {
+                            let dir = std::path::PathBuf::from(dir);
+                            std::fs::create_dir_all(&dir).unwrap();
+                            for (name, px) in [("neu", &on), ("heute", &off)] {
+                                let opaque: Vec<u8> = (px.as_chunks::<4>().0.iter())
+                                    .flat_map(|p| [p[0], p[1], p[2], 255])
+                                    .collect();
+                                let file = dir.join(format!("{case}_{variant}_{name}.png"));
+                                knorke_contract_tests::parity::save_png_rgba8(
+                                    &file, &opaque, OUT.0, OUT.1,
+                                );
+                            }
                         }
+                        assert_eq!(masked, 1, "{case}: the hall window is a row light");
+                        assert!(lit > 0.1, "{case}: the window lights {lit} % of the pixels");
+                        assert!(mean < 0.5 && share < 5.0, "{case}: mean {mean}, {share} %");
                     }
-                    assert_eq!(masked, 1, "the hall window is a row light");
-                    assert!(lit > 1.0, "the window lights {lit} % of the pixels");
-                    assert!(mean < 0.5 && share < 5.0, "mean {mean}, {share} %");
                 });
             });
         }

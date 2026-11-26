@@ -69,6 +69,8 @@ pub(crate) fn settings(scene: &Scene) -> Light2dSettings {
                 ..QualitySettings::default()
             },
             surface_height_step: HEIGHT_STEP,
+            // Chiaro's light: the scene is compared with Chiaro's pictures.
+            light_rows: false,
             ..LightSettings::default()
         },
         post: PostSettings::default(),
