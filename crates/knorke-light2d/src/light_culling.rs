@@ -37,7 +37,7 @@ use crate::light_math::{
 };
 use crate::mask::mask_atlas_blocks;
 use crate::mask_store::MaskStore;
-use crate::rows::{MAX_ROWS, RowBlockers, RowLight, RowSpace, light_suits, row_key};
+use crate::rows::{MAX_ROWS, RowBlockers, RowLight, RowSpace, light_suits, row_key, row_span};
 use crate::settings::LightSettings;
 pub use crate::shadow::{MaskAnchor, OcclusionDomain};
 use crate::{LightStore, Projection};
@@ -197,7 +197,7 @@ pub struct LightList {
     /// Row lights (ADR 0019, [`crate::rows::light_suits`]) in store order, drawn by the row programs;
     /// in none of the lists above.
     pub rows: Vec<RowLight>,
-    /// Entries of `rows` that cast shadows.
+    /// Rows the entries of `rows` need ([`RowLight::rows`]); 0: none casts shadows.
     pub row_shadows: u32,
     /// Visible masked lights (`masked_ordered.len()`).
     pub masked_lights: u32,
@@ -693,24 +693,24 @@ pub fn collect_lights(
             }
         }
         if modes.rows {
-            let reach = row_space.reach(d.radius);
-            // Beyond the atlas's rows, or reaching a blocker, a shadowed light stays with Chiaro's
-            // programs.
+            let row = RowLight {
+                light: g,
+                key: row_key(light_ref),
+                shadowed: d.cast_shadows,
+                reach: row_space.reach(d.radius + row_span(&g)),
+                size: d.source_radius,
+            };
+            // Beyond the atlas's rows, or reaching a blocker (from the emitter's middle, as far
+            // as its support points' rows), a shadowed light stays with Chiaro's programs.
             let blocked = || {
-                out.row_shadows >= MAX_ROWS
+                out.row_shadows + row.rows() > MAX_ROWS
                     || modes
                         .row_blockers
-                        .is_some_and(|b| b.meet([g.shadow[2], g.shadow[3]], reach))
+                        .is_some_and(|b| b.meet([g.shadow[2], g.shadow[3]], row.reach))
             };
-            if light_suits(d, reach) && !(d.cast_shadows && blocked()) {
-                out.row_shadows += u32::from(d.cast_shadows);
-                out.rows.push(RowLight {
-                    light: g,
-                    key: row_key(light_ref),
-                    shadowed: d.cast_shadows,
-                    reach,
-                    size: d.source_radius,
-                });
+            if light_suits(d, row.reach) && !(d.cast_shadows && blocked()) {
+                out.row_shadows += row.rows();
+                out.rows.push(row);
                 continue;
             }
         }

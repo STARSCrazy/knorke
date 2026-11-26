@@ -179,17 +179,43 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
     return min(through, 1.0 - area / (2.0 * wide));
 }
 
+// Line and rect lights: the mean of the hard sight from four points on the emitter, each with its own row (the
+// middles of four equal pieces; SUPPORT_TS of `knorke_light2d::rows`). Chiaro traces one ray to the nearest point.
+static const float2 kSupports[2][4] = {
+    {float2(-0.75, 0.0), float2(-0.25, 0.0), float2(0.25, 0.0), float2(0.75, 0.0)},
+    {float2(-0.5, -0.5), float2(0.5, -0.5), float2(-0.5, 0.5), float2(0.5, 0.5)},
+};
+
+float HardSight(float2 ground, float zl, float row, float2 start, float z)
+{
+    float2 d = start - ground;
+    float r = length(d);
+    if (r < 1e-3) {
+        return 1.0;
+    }
+    float4 runs[kRuns];
+    float4 pass;
+    Runs(floor(frac(atan2(d.y, d.x) / kTwoPi) * RowSize.x), row, runs, pass);
+    return Through(runs, pass, zl, (zl - z) / r, r, true);
+}
+
 float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
 {
+    if (l.directionType.w > 1.5) {
+        int rect = l.directionType.w > 2.5 ? 1 : 0;
+        float sum = 0.0;
+        [unroll] for (int k = 0; k < 4; ++k) {
+            float2 ground;
+            float zl;
+            EmitterPoint(l, kSupports[rect][k], ground, zl);
+            sum += HardSight(ground, zl, l.profile[k], start, z);
+        }
+        return sum * 0.25;
+    }
     float2 d = start - ROW_GROUND(l);
     float turn = frac(atan2(d.y, d.x) / kTwoPi) * RowSize.x; // texel a holds the ray at a + 0.5
     if (ROW_SIZE(l) > 0.0) {
         return SoftSight(l, d, turn, z, r);
     }
-    float zl = ROW_HEIGHT(l);
-    float slope = (zl - z) / r;
-    float4 runs[kRuns];
-    float4 pass;
-    Runs(floor(turn), ROW_SLOT(l), runs, pass);
-    return Through(runs, pass, zl, slope, r, true);
+    return HardSight(ROW_GROUND(l), ROW_HEIGHT(l), ROW_SLOT(l), start, z);
 }

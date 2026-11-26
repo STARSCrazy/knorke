@@ -1,5 +1,6 @@
 //! Light rows (ADR 0019): the shadow of a point or spot light from one row per lamp instead of a
-//! ray march per pixel.
+//! ray march per pixel; a line or rect light takes it from the rows of [`SUPPORTS`] points on
+//! its emitter.
 //!
 //! A lamp's row holds, for each of [`ROW_ANGLES`] directions around its ground point, the up to
 //! four obstacle runs (near, far, base, top) a ray meets on its way out through the occlusion
@@ -28,8 +29,9 @@ pub use gpu::{ROWS_INPUT_MISSING, RowLights, RowsRecord};
 
 use knorke_math::uniform_block;
 
-use knorke_math::{At, Vec2, World2};
+use knorke_math::{At, Vec2, Vec3, World2, det};
 
+use crate::area_light::rect_across;
 use crate::gpu_light::GpuLight;
 use crate::light::{LightDesc, LightRef, LightType, ShadowFilter};
 use crate::obstacle::ObstacleStore;
@@ -134,13 +136,24 @@ fn touches(list: &DirtyRectList, ground: [f32; 2], reach: f32) -> bool {
             .any(|r| r.x0 < hi[0] && r.x1 > lo[0] && r.y0 < hi[1] && r.y1 > lo[1])
 }
 
-/// Whether a light can be a row light in a frame [`frame_suits`] accepts: a point or spot light
-/// without mask; if it casts shadows also without a caster filter (E53: a row is
+/// Rows of a shadowed line or rect light, one per support point.
+pub const SUPPORTS: u32 = 4;
+/// The support points of a line and of a rect light in emitter coordinates (t along U, s along
+/// V): the middles of four equal pieces, so their mean is the midpoint rule over the emitter.
+/// `kSupports` in `lightrow_surface.hlsli`.
+const SUPPORT_TS: [[[f32; 2]; 4]; 2] = [
+    [[-0.75, 0.0], [-0.25, 0.0], [0.25, 0.0], [0.75, 0.0]],
+    [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]],
+];
+
+/// Whether a light can be a row light in a frame [`frame_suits`] accepts: a point, spot, line or
+/// rect light without mask; if it casts shadows also without a caster filter (E53: a row is
 /// built from the mask of all casters), not marked `inside_obstacle` (E147: the row skips only
-/// the obstacle a lamp's height lies in) and with a reach of at most [`MAX_REACH`] mask texels.
+/// the obstacle a lamp's height lies in) and with a reach ([`RowLight::reach`]) of at most
+/// [`MAX_REACH`] mask texels.
 /// Animation, flicker, a turning cone and a profile change nothing a row holds.
 pub fn light_suits(d: &LightDesc, reach: f32) -> bool {
-    matches!(d.kind, LightType::Point | LightType::Spot)
+    d.kind != LightType::Directional
         && d.mask.is_none()
         && (!d.cast_shadows
             || (d.shadow_filter == ShadowFilter::All && !d.inside_obstacle && reach <= MAX_REACH))
@@ -191,22 +204,80 @@ impl RowSpace {
 pub struct RowLight {
     /// The light as Chiaro's programs get it.
     pub light: GpuLight,
-    /// What its row is remembered under ([`row_key`]).
-    pub key: u32,
+    /// What its row is remembered under ([`row_key`]; a support point's adds its index).
+    pub key: u64,
     /// It casts shadows this frame, so it needs a row.
     pub shadowed: bool,
-    /// [`RowSpace::reach`] of its radius.
+    /// [`RowSpace::reach`] of the distance its rows must reach ([`row_span`] beyond the radius).
     pub reach: f32,
     /// Source radius in world units (0: hard shadows).
     pub size: f32,
 }
 
 /// The key of a light's row: its slot index in the light store, transient lights counted down
-/// from below [`RowCache`]'s free mark so they never share a persistent lamp's row.
-pub fn row_key(light: LightRef) -> u32 {
-    match light {
+/// from the top so they never share a persistent lamp's row; the low bits number the support
+/// points ([`RowLight::support`]).
+pub fn row_key(light: LightRef) -> u64 {
+    u64::from(match light {
         LightRef::Persistent(id) => id.index(),
-        LightRef::Transient(i) => FREE - 1 - i,
+        LightRef::Transient(i) => u32::MAX - 1 - i,
+    }) << 2
+}
+
+/// A rect light's half extent across (V), zero for other lights.
+fn across(g: &GpuLight) -> Vec3 {
+    let v = |a: [f32; 4]| Vec3::new(a[0], a[1], a[2]);
+    if g.direction_type[3] > 2.5 {
+        rect_across(v(g.direction_type), v(g.area), g.area[3])
+    } else {
+        Vec3::ZERO
+    }
+}
+
+/// How much farther than its radius a support point's row must reach, in world units: a place
+/// is lit within the radius of the emitter's nearest point, which may lie the emitter's whole
+/// ground extent away from the support point. 0 for point and spot lights.
+pub fn row_span(g: &GpuLight) -> f32 {
+    if g.direction_type[3] <= 1.5 {
+        return 0.0;
+    }
+    let v = across(g);
+    2.0 * (det::hypot(g.area[0], g.area[1]) + det::hypot(v.x, v.y))
+}
+
+impl RowLight {
+    /// A line or rect light: its shadow is the mean of its support points' rows.
+    pub fn is_area(&self) -> bool {
+        self.light.direction_type[3] > 1.5
+    }
+
+    /// Rows it needs this frame: none without shadow, [`SUPPORTS`] for a line or rect light.
+    pub fn rows(&self) -> u32 {
+        match (self.shadowed, self.is_area()) {
+            (false, _) => 0,
+            (true, false) => 1,
+            (true, true) => SUPPORTS,
+        }
+    }
+
+    /// The lamp whose row is the `k`-th of this light: itself, or for a line or rect light a
+    /// hard lamp at support point `k`, reaching [`row_span`] farther (its own key, ground point,
+    /// height and radius, so the cache tells its row apart).
+    pub fn support(&self, k: u32) -> RowLight {
+        if !self.is_area() {
+            return *self;
+        }
+        let mut s = *self;
+        let g = &mut s.light;
+        let [t, v] = SUPPORT_TS[usize::from(g.direction_type[3] > 2.5)][k as usize];
+        let m = g.area_mask;
+        g.shadow[2] += t * m[0] + v * m[2];
+        g.shadow[3] += t * m[1] + v * m[3];
+        g.position_radius[2] += t * g.area[2] + v * across(g).z;
+        g.position_radius[3] += row_span(g);
+        s.key += u64::from(k);
+        s.size = 0.0;
+        s
     }
 }
 
@@ -217,6 +288,8 @@ uniform_block! {
         /// The light.
         pub light: GpuLight,
         /// x the lamp's row in the atlas, -1 without shadow; y source radius in world units.
+        /// A line or rect light's `light.profile` holds its support points' rows instead
+        /// (Chiaro's area light never reads a profile).
         pub row: [f32; 4],
     }
 }
@@ -380,14 +453,14 @@ impl RowSource {
 #[derive(Clone, Copy, Debug)]
 struct Slot {
     /// `RowLight::key`, [`FREE`] for a row never used.
-    key: u32,
+    key: u64,
     /// What the row holds; `None`: nothing valid.
     built: Option<RowSource>,
     /// Frame of the last use.
     used: u64,
 }
 
-const FREE: u32 = u32::MAX;
+const FREE: u64 = u64::MAX;
 
 /// Which lamp has which row of the atlas and whether the row is still right.
 ///
@@ -474,7 +547,7 @@ impl RowCache {
     }
 
     /// The row [`assign`](Self::assign) gave the lamp `key` this frame.
-    pub fn row_of(&self, key: u32) -> Option<u32> {
+    pub fn row_of(&self, key: u64) -> Option<u32> {
         let at = self.slots.iter().position(|s| s.key == key)?;
         (self.slots[at].used == self.frame).then_some(at as u32)
     }
@@ -492,6 +565,7 @@ mod tests {
     use knorke_math::det;
 
     fn light(key: u32, ground: [f32; 2]) -> RowLight {
+        let key = u64::from(key);
         RowLight {
             light: GpuLight {
                 position_radius: [0.0, 0.0, 2.0, 5.0],
@@ -556,15 +630,13 @@ mod tests {
             profiled.profile.is_some() && light_suits(&profiled, 100.0),
             "profile"
         );
-        for kind in [LightType::Line, LightType::Rect, LightType::Directional] {
-            assert!(!light_suits(
-                &LightDesc {
-                    kind,
-                    ..point.clone()
-                },
-                1.0
-            ));
-        }
+        let kind = |kind| LightDesc {
+            kind,
+            ..point.clone()
+        };
+        assert!(light_suits(&kind(LightType::Line), 1.0));
+        assert!(light_suits(&kind(LightType::Rect), 1.0));
+        assert!(!light_suits(&kind(LightType::Directional), 1.0));
         let filtered = LightDesc {
             shadow_filter: ShadowFilter::StaticOnly,
             ..point.clone()
@@ -694,6 +766,33 @@ mod tests {
         // A frame that was never recorded built nothing.
         cache.begin();
         assert_eq!(frame(&mut cache, &[moved], &still), [(0, true)]);
+    }
+
+    #[test]
+    fn an_area_light_has_a_row_per_support_point() {
+        let mut rect = light(2, [50.0, 50.0]);
+        // A window: 1.2 long along x, 0.5 half height (V upright), facing y; 5 texels a unit.
+        rect.light.direction_type = [0.0, 1.0, 0.0, 3.0];
+        rect.light.area = [1.2, 0.0, 0.0, 0.5];
+        rect.light.area_mask = [6.0, 0.0, 0.0, 0.0];
+        assert_eq!(rect.rows(), SUPPORTS);
+        // V = normal x U points down: s = 0.5 lies below the middle.
+        assert_eq!(row_span(&rect.light), 2.4);
+        let s = rect.support(3);
+        assert_eq!(s.key, rect.key + 3);
+        assert_eq!([s.light.shadow[2], s.light.shadow[3]], [53.0, 50.0]);
+        assert!((s.light.position_radius[2] - 1.75).abs() < 1e-6, "{s:?}");
+        assert_eq!(s.light.position_radius[3], 5.0 + 2.4);
+        assert_eq!(light(1, [0.0, 0.0]).support(0), light(1, [0.0, 0.0]));
+        // Every support point keeps its own row.
+        let mut cache = RowCache::default();
+        let still = mask([0, 0], MaskChange::None);
+        cache.begin();
+        let got: Vec<_> = (0..SUPPORTS)
+            .map(|k| cache.assign(&rect.support(k), &still).unwrap())
+            .collect();
+        assert_eq!(got, [(0, true), (1, true), (2, true), (3, true)]);
+        cache.commit();
     }
 
     #[test]

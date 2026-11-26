@@ -327,13 +327,18 @@ fn steady_state_light2d_paths_allocate_nothing() {
             change: MaskChange::Rects(plan.mask_rects()),
         };
         row_cache.begin();
+        assert!(row_list.rows.iter().any(|l| l.is_area() && l.shadowed));
         for light in &row_list.rows {
-            if let Some((row, _)) = row_cache.assign(light, &row_mask) {
-                let lamp = RowLamp {
-                    light: light.light,
-                    row: [row as f32, light.size, 0.0, 0.0],
-                };
-                let _ = lamp.to_bytes();
+            // A line light's support points, each a lamp of its own.
+            for k in 0..light.rows() {
+                let support = light.support(k);
+                if let Some((row, _)) = row_cache.assign(&support, &row_mask) {
+                    let lamp = RowLamp {
+                        light: support.light,
+                        row: [row as f32, support.size, 0.0, 0.0],
+                    };
+                    let _ = lamp.to_bytes();
+                }
             }
         }
         row_cache.commit();

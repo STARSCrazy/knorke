@@ -5,7 +5,8 @@
 // its own texel does not count that obstacle while the ray stays in it, as the row build does. A partly transparent
 // texel (mask opacity o below kOpaqueOpacity) multiplies by 1 - o once per crossing, as Chiaro's trace.
 // A lamp with a source radius R is Domain.w x Domain.w points: across the ray in the ground plane and upright,
-// each within +-R; the result is the mean of their marches.
+// each within +-R; the result is the mean of their marches. A line or rect light is Domain.w x Domain.w points
+// spread evenly over its emitter (a line repeats each point), the mean of their hard marches.
 #include "lightrow_surface.hlsli"
 
 static const float kStep = 0.25;
@@ -58,6 +59,19 @@ float March(float2 lamp, float zl, float2 start, float z)
 
 float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
 {
+    int points = int(Domain.w);
+    float sum = 0.0;
+    if (l.directionType.w > 1.5) {
+        [loop] for (int i = 0; i < points; ++i) {
+            [loop] for (int j = 0; j < points; ++j) {
+                float2 ground;
+                float zl;
+                EmitterPoint(l, (float2(i, j) + 0.5) / float(points) * 2.0 - 1.0, ground, zl);
+                sum += March(ground, zl, start, z);
+            }
+        }
+        return sum / float(points * points);
+    }
     float size = ROW_SIZE(l);
     if (size <= 0.0) {
         return March(ROW_GROUND(l), ROW_HEIGHT(l), start, z);
@@ -66,8 +80,6 @@ float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
     float2 across = float2(-dir.y, dir.x);
     // `size` world units across the ray, in mask texels.
     float texels = size / length(float2(dot(WorldFromMask.xy, across), dot(WorldFromMask.zw, across)));
-    float sum = 0.0;
-    int points = int(Domain.w);
     [loop] for (int i = 0; i < points; ++i) {
         [loop] for (int j = 0; j < points; ++j) {
             float2 at = (float2(i, j) + 0.5) / float(points) * 2.0 - 1.0;

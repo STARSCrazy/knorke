@@ -5,7 +5,6 @@
 #ifndef KNORKE_LIGHTROW_HLSLI
 #define KNORKE_LIGHTROW_HLSLI
 
-#define CHI_POINT_LIGHTS // point and spot lights only: no area varyings
 #include "light_common.hlsli"
 #include "surface.hlsli"
 
@@ -15,6 +14,7 @@ struct RowLamp
     GpuLight light;
     float4 row; // x the lamp's row in the row atlas, -1 = casts no shadow; y source radius in world units
 };
+// A line or rect light's light.profile holds the rows of its support points (Chiaro's area light reads no profile).
 
 // Every row program takes Chiaro's surface light varyings (lightrow.vert). Their `shadow.xy` are Chiaro's source
 // radius in mask texels and a copy of the height, neither read by the row programs, so they carry RowLamp.row.

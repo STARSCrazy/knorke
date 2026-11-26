@@ -1,15 +1,16 @@
 //! Measuring tool for the light rows (ADR 0019, plan 17.13): picture and frame time of the row
 //! lights of `knorke-light2d` against the Chiaro light and against a reference picture, on
 //! `iso_night_hard` cut down to what rows can draw: the point and spot lights that cast shadows
-//! (13), no profile, mask, pattern, animation, flicker, medium, area lights, sun, zones,
-//! material. Hard shadows, and soft ones with the lamp sizes of `plain.txt`; each as it is
-//! ("normal") and with every lamp four times ("last").
+//! (13), no profile, mask, pattern, animation, flicker, medium, sun, zones, material. Hard
+//! shadows, and soft ones with the lamp sizes of `plain.txt`; each as it is ("normal") and with
+//! every lamp four times ("last"); and the line and rect lights that cast shadows (4) alone
+//! ("flächen").
 //!
 //! - Today: [`Light2dRenderer`] with `light_rows` off.
 //! - New: the same with `light_rows` on.
 //! - True: the same light with an exact march per pixel (`lightrow_truth.frag`), the only part
-//!   this file draws itself; a lamp with a size is `KNORKE_PROBE_POINTS` squared points
-//!   (default 8).
+//!   this file draws itself; a lamp with a size and a line or rect light's emitter are
+//!   `KNORKE_PROBE_POINTS` squared points (default 8).
 //!
 //! The test always checks that the rows are closer to the reference than today's light.
 //! `KNORKE_PROBE_OUT=<dir>` writes `<scene>_heute.png`, `<scene>_neu.png`, `<scene>_wahr.png`,
@@ -47,7 +48,7 @@ use knorke_light2d::lighting::{
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassRecord, SceneStores, max_height};
 use knorke_light2d::projection::Projection;
-use knorke_light2d::rows::{RowLamp, RowLookupParams, RowSpace};
+use knorke_light2d::rows::{RowLamp, RowLookupParams, RowSpace, SUPPORTS};
 use knorke_light2d::settings::{GlowColor, LightSettings, Quality, QualitySettings, Resolutions};
 use knorke_light2d::shadow::{MaskAnchor, OcclusionDomain};
 use knorke_light2d::{LightStore, NoResources, ObstacleStore};
@@ -76,19 +77,21 @@ fn num(s: &str) -> f32 {
     s.parse().unwrap()
 }
 
-/// The scene text cut down to what the probe compares: the enabled point and spot lights that
-/// cast shadows (every extra switched off) and the enabled obstacles without their patterns,
-/// the two pattern fences with opacity `fence`.
-fn parse(text: &str, soft: bool, fence: f32) -> (Vec<LightDesc>, ObstacleStore) {
+/// The scene text cut down to what the probe compares: the enabled point and spot lights (with
+/// `area` the line and rect lights instead) that cast shadows (every extra switched off) and
+/// the enabled obstacles without their patterns, the two pattern fences with opacity `fence`.
+fn parse(text: &str, soft: bool, fence: f32, area: bool) -> (Vec<LightDesc>, ObstacleStore) {
     let (mut lights, mut obstacles) = (Vec::new(), ObstacleStore::new());
     for line in text.lines() {
         let f: Vec<&str> = line.split(' ').collect();
         let v = |i: usize| num(f[i]);
         match f[0] {
             "light" => {
-                let kind = match f[1] {
-                    "0" => LightType::Point,
-                    "1" => LightType::Spot,
+                let kind = match (f[1], area) {
+                    ("0", false) => LightType::Point,
+                    ("1", false) => LightType::Spot,
+                    ("3", true) => LightType::Line,
+                    ("4", true) => LightType::Rect,
                     _ => continue,
                 };
                 // CHI_LIGHT_NO_SHADOWS, _DISABLED; CHI_HEIGHT_AUTO is -1.
@@ -109,6 +112,9 @@ fn parse(text: &str, soft: bool, fence: f32) -> (Vec<LightDesc>, ObstacleStore) 
                 d.direction = Vec3::new(v(17), v(18), v(19));
                 d.inner_angle = v(20);
                 d.outer_angle = v(21);
+                d.two_sided = f[2].parse::<u32>().unwrap() & 4 != 0;
+                d.axis = Vec3::new(v(22), v(23), v(24));
+                d.half_width = v(25);
                 lights.push(d);
             }
             "shape" => {
@@ -400,13 +406,15 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// over 8): what was measured on 2026-11-26 (Vulkan, RX 6700 XT) plus a tenth. Measured:
 /// 0.348 / 0.66, 0.640 / 1.60, 0.631 / 2.31, 0.869 / 3.03; today's light 0.921 / 1.74,
 /// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24; "hart halb", the fences as 50 % walls: 0.314 / 1.25,
-/// today 0.724 / 2.56.
-const BOUNDS: [(&str, f64, f64); 5] = [
+/// today 0.724 / 2.56; "flächen" 0.002 / 0.01, today 0.020 / 0.11 (bound rounded up: a tenth of
+/// so little is below what a driver may change).
+const BOUNDS: [(&str, f64, f64); 6] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
     ("weich normal", 0.70, 2.55),
     ("weich last", 0.96, 3.34),
     ("hart halb", 0.35, 1.38),
+    ("flächen", 0.004, 0.02),
 ];
 
 #[test]
@@ -459,21 +467,26 @@ fn light_rows_against_chiaro_and_the_reference() {
         let offsets = [(0.0, 0.0), (0.7, 0.3), (-0.5, 0.6), (0.4, -0.7)];
         let scenes = [false, true]
             .into_iter()
-            .flat_map(|soft| [(soft, 1, 1.0), (soft, 4, 1.0)])
-            .chain([(false, 1, 0.5)]);
-        for ((soft, copies, fence), bound) in scenes.zip(BOUNDS) {
+            .flat_map(|soft| [(soft, 1, 1.0, false), (soft, 4, 1.0, false)])
+            .chain([(false, 1, 0.5, false), (false, 1, 1.0, true)]);
+        for ((soft, copies, fence, area), bound) in scenes.zip(BOUNDS) {
             let name = bound.0;
-            let (mut base, obstacles) = parse(&text, false, fence);
+            let (mut base, obstacles) = parse(&text, false, fence, area);
             if soft {
                 // The lamp sizes of the variant with soft shadows, on the same lamps.
-                let sized = parse(&plain, true, 1.0).0;
+                let sized = parse(&plain, true, 1.0, false).0;
                 assert_eq!(sized.len(), base.len());
                 for (d, s) in base.iter_mut().zip(&sized) {
                     assert_eq!(d.position, s.position);
                     d.source_radius = s.source_radius;
                 }
             }
-            assert_eq!(base.len(), 13, "the scene's shadowed point and spot lights");
+            let (expected, supports) = if area { (4, SUPPORTS) } else { (13, 1) };
+            assert_eq!(
+                base.len(),
+                expected,
+                "the scene's shadowed lights of the case"
+            );
             let descs: Vec<LightDesc> = offsets[..copies]
                 .iter()
                 .flat_map(|&(dx, dy)| {
@@ -497,6 +510,7 @@ fn light_rows_against_chiaro_and_the_reference() {
             let new = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
             let mut renderers = [new(), new(), new(), new()];
             let all = descs.len() as u32;
+            let rows_all = all * supports;
 
             let mut timed: [Vec<(f64, f64)>; 4] = Default::default();
             let mut step = 0u32;
@@ -520,7 +534,7 @@ fn light_rows_against_chiaro_and_the_reference() {
                     }
                     let stores = SceneStores::new(&moving, &obstacles);
                     let record = draw(gpu, r_moved, &frame(2), &stores, &rows);
-                    assert_eq!(record.lighting.rows_built, all);
+                    assert_eq!(record.lighting.rows_built, rows_all);
                 });
                 let floor = time(n, || {
                     let stores = SceneStores::new(&none, &obstacles);
@@ -529,7 +543,7 @@ fn light_rows_against_chiaro_and_the_reference() {
                 // The first frame builds the rows, from then on the lamps rest.
                 let first = draw(gpu, r_rest, &frame(1), &stores, &rows).lighting;
                 assert_eq!(first.row_lights, all, "every lamp is a row light");
-                assert_eq!(first.rows_built, if run == 0 { all } else { 0 });
+                assert_eq!(first.rows_built, if run == 0 { rows_all } else { 0 });
                 let rest = time(n, || {
                     let record = draw(gpu, r_rest, &frame(1), &stores, &rows);
                     assert_eq!(record.lighting.rows_built, 0);

@@ -16,7 +16,7 @@ use knorke_types::{Diagnostic, DiagnosticCode};
 
 use super::{
     MAX_ROWS, ROW_ANGLES, RowBuildParams, RowCache, RowEdgeParams, RowLamp, RowLight,
-    RowLookupParams, RowMask, RowSpace,
+    RowLookupParams, RowMask, RowSpace, SUPPORTS,
 };
 use crate::light_pipelines::MATERIAL_TARGET_FORMAT;
 use crate::lighting::{
@@ -74,8 +74,9 @@ const fn light_program(detail: DetailMode) -> usize {
     }
 }
 
-/// What the prepared frame draws. The lamp buffer holds the frame's row lights, then copies of
-/// those whose row is built, the ones with a source radius first (the edge pass draws only them).
+/// What the prepared frame draws. The lamp buffer holds the frame's row lights, then the lamps
+/// whose row is built (a line or rect light's support points), the ones with a source radius
+/// first (the edge pass draws only them).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RowsRecord {
     /// Row lights drawn.
@@ -94,7 +95,8 @@ pub struct RowLights<'d> {
     lamps: UploadBuffer<'d>,
     pipelines: Option<PipelineCache<'d>>,
     cache: RowCache,
-    /// Indices into the frame's row lights of those whose row is built; kept for its storage.
+    /// Rows built this frame: index into the frame's row lights times [`SUPPORTS`] plus the
+    /// support point; kept for its storage.
     dirty: Vec<u32>,
     frame: RowsRecord,
     detail: DetailMode,
@@ -169,11 +171,13 @@ impl<'d> RowLights<'d> {
         for _ in 0..2 {
             self.dirty.clear();
             for (i, light) in lights.iter().enumerate() {
-                if let Some((_, true)) = self.assign(light, mask.as_ref()) {
-                    self.dirty.push(i as u32);
+                for k in 0..light.rows() {
+                    if let Some((_, true)) = self.assign(&light.support(k), mask.as_ref()) {
+                        self.dirty.push(i as u32 * SUPPORTS + k);
+                    }
                 }
             }
-            let soft = self.dirty.iter().any(|&i| lights[i as usize].size > 0.0);
+            let soft = self.dirty.iter().any(|&i| built(lights, i).size > 0.0);
             let grown = self.ensure_atlases(soft)?;
             allocations += grown;
             if grown == 0 {
@@ -183,11 +187,11 @@ impl<'d> RowLights<'d> {
         }
         // The lamps with an edge row first.
         self.dirty
-            .sort_unstable_by_key(|&i| lights[i as usize].size <= 0.0);
+            .sort_unstable_by_key(|&i| built(lights, i).size <= 0.0);
         let edges = self
             .dirty
             .iter()
-            .filter(|&&i| lights[i as usize].size > 0.0)
+            .filter(|&&i| built(lights, i).size > 0.0)
             .count();
         self.frame = RowsRecord {
             lights: lights.len() as u32,
@@ -212,20 +216,32 @@ impl<'d> RowLights<'d> {
         let mut mapped = self.lamps.map()?;
         let bytes = mapped.bytes();
         let mut at = 0;
-        let order = (0..lights.len() as u32).chain(self.dirty.iter().copied());
-        for i in order {
-            let light = &lights[i as usize];
-            // Assigned above: asking again in the same frame returns the same row.
-            let row = self.cache.row_of(light.key).filter(|_| light.shadowed);
-            let lamp = RowLamp {
-                light: light.light,
-                row: [
-                    row.filter(|_| mask.is_some()).map_or(-1.0, |r| r as f32),
-                    light.size,
-                    0.0,
-                    0.0,
-                ],
+        let order = lights
+            .iter()
+            .copied()
+            .chain(self.dirty.iter().map(|&i| built(lights, i)));
+        // Assigned above: asking again in the same frame returns the same row. Without the mask
+        // no lamp has one.
+        let slot = |key| {
+            self.cache
+                .row_of(key)
+                .filter(|_| mask.is_some())
+                .map_or(-1.0, |r| r as f32)
+        };
+        for (n, light) in order.enumerate() {
+            let row = if light.shadowed {
+                slot(light.key)
+            } else {
+                -1.0
             };
+            let mut lamp = RowLamp {
+                light: light.light,
+                row: [row, light.size, 0.0, 0.0],
+            };
+            if n < lights.len() && light.is_area() && light.shadowed {
+                // Support point k's key is the light's plus k (`RowLight::support`).
+                lamp.light.profile = [0, 1, 2, 3].map(|k| slot(light.key + k));
+            }
             bytes[at..at + RowLamp::SIZE].copy_from_slice(&lamp.to_bytes());
             at += RowLamp::SIZE;
         }
@@ -456,6 +472,11 @@ impl<'d> RowLights<'d> {
             .and_then(|p| p.pipeline(program, format))
             .ok_or_else(|| missing("a row pipeline"))
     }
+}
+
+/// The lamp of a `dirty` entry.
+fn built(lights: &[RowLight], i: u32) -> RowLight {
+    lights[(i / SUPPORTS) as usize].support(i % SUPPORTS)
 }
 
 fn row_mask<'a>(s: &'a ShadowMaps<'a>) -> RowMask<'a> {

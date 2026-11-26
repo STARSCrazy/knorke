@@ -45,6 +45,8 @@ VSOutput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     o.spotCos = float4(light.spotCos.xy, light.shadow.y, light.spotCos.w);
     o.shadow = float4(lamp.row.xy, light.shadow.zw);
     o.profile = light.profile;
+    o.area = light.area;
+    o.areaMask = light.areaMask;
     if (AtlasRows > 0u) {
         o.scene = corner;
         o.position = float4(corner.x * 2.0 - 1.0, 1.0 - 2.0 * (lamp.row.x + corner.y) / float(AtlasRows), 0.0, 1.0);

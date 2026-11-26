@@ -169,8 +169,7 @@ fn row_lights_equal_chiaro_lights_without_obstacles() {
                         // Idempotent: the second and third mode find them gone.
                         for &id in &f.scene.light_ids {
                             let other = f.scene.lights.get(id).is_ok_and(|d| {
-                                let point = matches!(d.kind, LightType::Point | LightType::Spot);
-                                !point || d.mask.is_some()
+                                d.kind == LightType::Directional || d.mask.is_some()
                             });
                             if other {
                                 f.scene.lights.destroy(id).unwrap();
@@ -190,10 +189,13 @@ fn row_lights_equal_chiaro_lights_without_obstacles() {
                          row lights, largest difference {max}/255, mean {mean:.5}, {share:.3} % \
                          of the pixels"
                     );
-                    let profiled = (f.renderer.plan().lights().rows.iter())
-                        .filter(|l| l.light.profile[0] >= 0.0)
+                    let lights = &f.renderer.plan().lights().rows;
+                    let profiled = (lights.iter())
+                        .filter(|l| !l.is_area() && l.light.profile[0] >= 0.0)
                         .count();
+                    let area = lights.iter().filter(|l| l.is_area()).count();
                     assert!(rows > 0 && profiled > 0, "{profiled} profiled row lights");
+                    assert_eq!(area, 8, "the demo's line and rect lights");
                     // The direction sums are divided in the composite, which doubles a rounding.
                     let bound = if alone { 0 } else { 2 };
                     assert!(max <= bound, "{mode}: {max}/255");
@@ -273,7 +275,7 @@ fn pattern_obstacles_keep_only_the_lamps_reaching_them() {
                     .collect();
                 assert!(!near.is_empty(), "a lamp lights a fence");
                 let row_keys: Vec<u32> = (f.renderer.plan().lights().rows.iter())
-                    .map(|l| l.key)
+                    .map(|l| (l.key >> 2) as u32)
                     .collect();
                 assert!(
                     near.iter().all(|k| !row_keys.contains(k)),
@@ -329,7 +331,7 @@ fn half_transparent_walls_are_runs_of_the_row() {
                      from opaque walls to none",
                     shadow.len()
                 );
-                assert_eq!(rows, 25, "the row lights with opaque fences");
+                assert_eq!(rows, 33, "the row lights with opaque fences");
                 assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
                 assert!(shadow.len() > 500, "{} pixels", shadow.len());
                 assert!(row > 0.2 && row < 0.8, "neither dark nor lit: {row}");
