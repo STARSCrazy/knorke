@@ -34,6 +34,16 @@ cbuffer LookupParams : register(b1, space3)
     float4 WorldFromMask; // world = (dot(xy, m), dot(zw, m)) for a vector m in mask texels
 };
 
+// A point of a line or rect light's emitter at emitter coordinates ts (t along U, s along V): its ground point in
+// mask texels and its height. Chiaro's ray ends at the nearest such point (ShadowTarget in light_common.hlsli).
+void EmitterPoint(SurfaceLightVaryings l, float2 ts, out float2 ground, out float zl)
+{
+    LightParams p = CHI_LIGHT_PARAMS(l);
+    float3 v = IsRectLight(p) ? RectAcross(p) : float3(0.0, 0.0, 0.0);
+    ground = ROW_GROUND(l) + ts.x * l.areaMask.xy + ts.y * l.areaMask.zw;
+    zl = ROW_HEIGHT(l) + ts.x * l.area.z + ts.y * v.z;
+}
+
 // Share of the lamp the place `start` (mask texels) at height z sees, r > 0 texels from the lamp's ground point.
 float Sight(SurfaceLightVaryings i, float2 start, float z, float r);
 

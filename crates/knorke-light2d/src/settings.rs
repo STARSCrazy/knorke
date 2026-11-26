@@ -266,9 +266,10 @@ pub struct LightSettings {
     pub medium_height_step: Option<f32>,
     /// Which debug checks run ([`FrameWarnings`](crate::frame_warnings::FrameWarnings)). Default none.
     pub debug_checks: DebugChecks,
-    /// Transition to light rows (ADR 0019, plan 17.13): point and spot lights the rows can draw
-    /// ([`rows::light_suits`](crate::rows::light_suits)) take their shadow from one row per
-    /// lamp instead of a ray march per pixel; all others are drawn as before. Default off:
+    /// Transition to light rows (ADR 0019, plan 17.13): point, spot, line and rect lights the
+    /// rows can draw ([`rows::light_suits`](crate::rows::light_suits)) take their shadow from one
+    /// row per lamp (four for line and rect) instead of a ray march per pixel; all others are
+    /// drawn as before. Default off:
     /// then nothing changes.
     pub light_rows: bool,
 }

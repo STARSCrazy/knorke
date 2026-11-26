@@ -219,11 +219,12 @@ fn steady_state_light2d_paths_allocate_nothing() {
     let mut row_list = LightList::default();
     let mut row_cache = RowCache::default();
     let row_domain = OcclusionDomain::new(128, 64, 1.0);
-    // A partly transparent fence keeps the lamps reaching it from the rows.
+    // A tile grid with a pattern keeps the lamps reaching it from the rows.
     let mut fences = ObstacleStore::new();
-    let mut fence = ShapeDesc::rect(2.0, 1.0);
-    fence.common.opacity = 0.5;
-    let fence = fences.create_shape(&fence).unwrap();
+    let fence = fences
+        .create_tile_grid(&TileGridDesc::new(1, 1, &[1]))
+        .unwrap();
+    fences.set_pattern(fence, 1, &|_| Some(0.5)).unwrap();
     let mut row_blockers = RowBlockers::default();
 
     let mut step = |i: u32| {
@@ -327,19 +328,24 @@ fn steady_state_light2d_paths_allocate_nothing() {
             change: MaskChange::Rects(plan.mask_rects()),
         };
         row_cache.begin();
+        assert!(row_list.rows.iter().any(|l| l.is_area() && l.shadowed));
         for light in &row_list.rows {
-            if let Some((row, _)) = row_cache.assign(light, &row_mask) {
-                let lamp = RowLamp {
-                    light: light.light,
-                    row: [row as f32, light.size, 0.0, 0.0],
-                };
-                let _ = lamp.to_bytes();
+            // A line light's support points, each a lamp of its own.
+            for k in 0..light.rows() {
+                let support = light.support(k);
+                if let Some((row, _)) = row_cache.assign(&support, &row_mask) {
+                    let lamp = RowLamp {
+                        light: support.light,
+                        row: [row as f32, support.size, 0.0, 0.0],
+                    };
+                    let _ = lamp.to_bytes();
+                }
             }
         }
         row_cache.commit();
         let space = RowSpace::new(&Projection::IDENTITY, &row_domain);
         let _ = (
-            RowBuildParams::new(&space, row_mask.size).to_bytes(),
+            RowBuildParams::new(&space, row_mask.size, true).to_bytes(),
             RowEdgeParams::new(&space, row_cache.rows()).to_bytes(),
             RowLookupParams::new(&space, row_mask.size, row_cache.rows(), 0.05).to_bytes(),
         );

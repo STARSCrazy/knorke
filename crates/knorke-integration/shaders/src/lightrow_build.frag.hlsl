@@ -1,19 +1,26 @@
 // Light rows (ADR 0019): builds one lamp's row, one texel per angle.
 // Marches once outward from the lamp's ground point over the height texture of the occlusion mask, to the lamp's
 // radius. Consecutive texels with the same height interval are one run (rn, rf, base, top). A run is dropped if a
-// nearer run standing on the ground already blocks every slope it would block; of more than four the last slot
-// takes the hull of the rest, which can only hide too much. The run the lamp stands in is skipped.
+// nearer run standing on the ground already blocks every slope it would block; of more than four, two pieces of one
+// split obstacle become one (`Squeeze`), else the last slot takes the hull of the rest, which can only hide too
+// much. The run the lamp stands in is skipped.
+// A partly transparent run (E25: mask opacity below kOpaqueOpacity) carries the transmittance 1 - o of its first texel,
+// as Chiaro reads o where a crossing enters (the mask's rim texels of an obstacle may hold less); it never ends the
+// march and never hides a farther run. An angle with one keeps three runs (squeezed or hulled as above), the fourth
+// slot holds the transmittances (lightrow_runs.hlsli).
 // An edge lies where the ray enters
 // the texel of the first sample with another interval, not on the sample.
 #include "lightrow.hlsli"
 
 Texture2D<float4> Heights : register(t0, space2); // RGBA16F (-base, top); free texels hold -65504
+Texture2D<float4> Mask : register(t1, space2);    // opacity in r; read only in frames with a partly transparent one
 SamplerState HeightSampler : register(s0, space2); // nearest
+SamplerState MaskSampler : register(s1, space2);   // nearest
 
 cbuffer RowParams : register(b0, space3)
 {
     float4 WorldFromMask; // world = (dot(xy, m), dot(zw, m)) for a vector m in mask texels
-    float4 Domain;        // xy mask size in texels, z march step in texels
+    float4 Domain;        // xy mask size in texels, z march step in texels, w 1 if an obstacle is partly transparent
 };
 
 struct RowOutput
@@ -24,14 +31,22 @@ struct RowOutput
 
 static const int kMaxSteps = 1200;
 
-// (base, top) of the texel under p; top below base where nothing stands or p is outside the mask.
-float2 IntervalAt(float2 p)
+static const float3 kNothing = float3(1.0, -1.0, 0.0);
+
+// (base, top, transmittance) of the texel under p; top below base where nothing stands or p is outside the mask,
+// transmittance 0 where the obstacle is opaque.
+float3 SampleAt(float2 p)
 {
     if (any(p < 0.0) || any(p >= Domain.xy)) {
-        return float2(1.0, -1.0);
+        return kNothing;
     }
-    float2 i = Heights.SampleLevel(HeightSampler, (floor(p) + 0.5) / Domain.xy, 0.0).rg;
-    return i.y > -i.x ? float2(max(-i.x, 0.0), i.y) : float2(1.0, -1.0);
+    float2 uv = (floor(p) + 0.5) / Domain.xy;
+    float2 i = Heights.SampleLevel(HeightSampler, uv, 0.0).rg;
+    if (!(i.y > -i.x)) {
+        return kNothing;
+    }
+    float o = Domain.w > 0.5 ? Mask.SampleLevel(MaskSampler, uv, 0.0).r : 1.0;
+    return float3(max(-i.x, 0.0), i.y, o >= kOpaqueOpacity ? 0.0 : 1.0 - o);
 }
 
 // Where the ray lamp + dir * q enters the texel of its point at q = t, kept within the last step.
@@ -48,8 +63,38 @@ float Entry(float2 lamp, float2 dir, float t, float stepLength)
     return min(q, t);
 }
 
-// Adds a closed run to the kept ones; false once nothing behind it can matter.
-bool Keep(inout float4 runs[kRuns], inout int count, float4 run, float zl)
+float4 Hull(float4 near, float4 far)
+{
+    return float4(near.x, far.y, min(near.z, far.z), max(near.w, far.w));
+}
+
+// Frees one of the first n slots by joining two neighbouring runs that are one obstacle split: a ray grazing an
+// outline steps out of the mask's staircase and back in, which leaves two runs of one interval and kind within two
+// texels. The joined run lets through the product, as the two crossings do in Chiaro's trace. Used only when the
+// slots overflow, where the hull behind a split partly transparent obstacle (a low building and the facade beyond
+// it) hid the facade from all of the light. False if no two runs are such a pair.
+bool Squeeze(inout float4 runs[kRuns], inout float pass[kRuns], int n)
+{
+    for (int k = 0; k + 1 < n; ++k) {
+        if (all(runs[k].zw == runs[k + 1].zw) && (pass[k] > 0.0) == (pass[k + 1] > 0.0)
+            && runs[k + 1].x <= runs[k].y + 2.0) {
+            runs[k].y = runs[k + 1].y;
+            pass[k] *= pass[k + 1];
+            for (int j = k + 1; j + 1 < n; ++j) {
+                runs[j] = runs[j + 1];
+                pass[j] = pass[j + 1];
+            }
+            runs[n - 1] = float4(0.0, 0.0, 0.0, 0.0);
+            pass[n - 1] = 0.0;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Adds a closed run that lets `through` of the light pass to the kept ones; false once nothing behind it can matter.
+// The hull lets through the product of what it took: opaque if any of it is.
+bool Keep(inout float4 runs[kRuns], inout float pass[kRuns], inout int count, float4 run, float through, float zl)
 {
     run.x = max(run.x, 0.25); // a run that begins at the lamp: no division by zero
     float fall = (zl - run.w) / run.y;
@@ -57,18 +102,22 @@ bool Keep(inout float4 runs[kRuns], inout int count, float4 run, float zl)
     int n = min(count, kRuns);
     for (int k = 0; k < n; ++k) {
         float4 o = runs[k];
-        if (o.z <= 0.0 && (zl - o.w) / o.y <= fall && (zl - o.w) / o.x <= rise) {
+        if (pass[k] <= 0.0 && o.z <= 0.0 && (zl - o.w) / o.y <= fall && (zl - o.w) / o.x <= rise) {
             return true;
         }
     }
+    if (count == kRuns && Squeeze(runs, pass, kRuns)) {
+        --count;
+    }
     if (count < kRuns) {
         runs[count] = run;
+        pass[count] = through;
     } else {
-        float4 last = runs[kRuns - 1];
-        runs[kRuns - 1] = float4(last.x, run.y, min(last.z, run.z), max(last.w, run.w));
+        runs[kRuns - 1] = Hull(runs[kRuns - 1], run);
+        pass[kRuns - 1] *= through;
     }
     ++count;
-    return !(run.z <= 0.0 && run.w >= kInfiniteTop);
+    return !(through <= 0.0 && run.z <= 0.0 && run.w >= kInfiniteTop);
 }
 
 RowOutput main(SurfaceLightVaryings i)
@@ -81,31 +130,33 @@ RowOutput main(SurfaceLightVaryings i)
     float2 w = float2(dot(WorldFromMask.xy, dir), dot(WorldFromMask.zw, dir));
     int steps = min(int(i.positionRadius.w / length(w) / stepLength), kMaxSteps);
 
-    float2 own = IntervalAt(lamp);
+    float3 own = SampleAt(lamp);
     bool skipping = own.y >= own.x && own.x <= zl && zl <= own.y;
 
     float4 runs[kRuns];
+    float pass[kRuns];
     for (int k = 0; k < kRuns; ++k) {
         runs[k] = float4(0.0, 0.0, 0.0, 0.0);
+        pass[k] = 0.0;
     }
     int count = 0;
-    float2 current = float2(1.0, -1.0);
+    float3 current = kNothing;
     float begin = 0.0;
     float t = 0.0;
     [loop] for (int s = 1; s <= steps; ++s) {
         t = float(s) * stepLength;
-        float2 here = IntervalAt(lamp + dir * t);
+        float3 here = SampleAt(lamp + dir * t);
         if (skipping) {
             if (all(here == own)) {
-                here = float2(1.0, -1.0);
+                here = kNothing;
             } else {
                 skipping = false;
             }
         }
-        if (any(here != current)) {
+        if (any(here.xy != current.xy) || (here.z > 0.0) != (current.z > 0.0)) {
             float edge = Entry(lamp, dir, t, stepLength);
-            if (current.y >= current.x && !Keep(runs, count, float4(begin, edge, current), zl)) {
-                current = float2(1.0, -1.0);
+            if (current.y >= current.x && !Keep(runs, pass, count, float4(begin, edge, current.xy), current.z, zl)) {
+                current = kNothing;
                 break;
             }
             current = here;
@@ -113,10 +164,16 @@ RowOutput main(SurfaceLightVaryings i)
         }
     }
     if (current.y >= current.x) {
-        Keep(runs, count, float4(begin, t, current), zl);
+        Keep(runs, pass, count, float4(begin, t, current.xy), current.z, zl);
+    }
+    bool partial = pass[0] > 0.0 || pass[1] > 0.0 || pass[2] > 0.0 || pass[3] > 0.0;
+    if (partial && count > 3 && !Squeeze(runs, pass, kRuns)) {
+        runs[2] = Hull(runs[2], runs[3]);
+        pass[2] *= pass[3];
     }
     RowOutput o;
     o.first = float4(PackRun(runs[0]), PackRun(runs[1]));
-    o.second = float4(PackRun(runs[2]), PackRun(runs[3]));
+    o.second = float4(PackRun(runs[2]), partial ? PackPasses(pass[0], pass[1], pass[2]) : PackRun(runs[3]));
+    o.first.x = partial ? -1.0 - o.first.x : o.first.x;
     return o;
 }

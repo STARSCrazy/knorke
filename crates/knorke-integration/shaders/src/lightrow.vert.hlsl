@@ -41,10 +41,12 @@ VSOutput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     o.positionRadius = light.positionRadius;
     o.colorFalloff = light.colorFalloff;
     o.directionType = light.directionType;
-    // As light_surface.vert: the specular factor as spotCos.z, the light's height as shadow.y.
+    // As light_surface.vert: the specular factor as spotCos.z. shadow.xy carry the row (lightrow.hlsli).
     o.spotCos = float4(light.spotCos.xy, light.shadow.y, light.spotCos.w);
-    o.shadow = float4(light.shadow.x, light.positionRadius.z, light.shadow.zw);
-    o.profile = lamp.row;
+    o.shadow = float4(lamp.row.xy, light.shadow.zw);
+    o.profile = light.profile;
+    o.area = light.area;
+    o.areaMask = light.areaMask;
     if (AtlasRows > 0u) {
         o.scene = corner;
         o.position = float4(corner.x * 2.0 - 1.0, 1.0 - 2.0 * (lamp.row.x + corner.y) / float(AtlasRows), 0.0, 1.0);

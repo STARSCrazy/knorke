@@ -1,15 +1,18 @@
 //! Measuring tool for the light rows (ADR 0019, plan 17.13): picture and frame time of the row
 //! lights of `knorke-light2d` against the Chiaro light and against a reference picture, on
 //! `iso_night_hard` cut down to what rows can draw: the point and spot lights that cast shadows
-//! (13), no profile, mask, pattern, animation, flicker, medium, area lights, sun, zones,
-//! material. Hard shadows, and soft ones with the lamp sizes of `plain.txt`; each as it is
-//! ("normal") and with every lamp four times ("last").
+//! (13), no profile, mask, pattern, animation, flicker, medium, sun, zones, material. Hard
+//! shadows, and soft ones with the lamp sizes of `plain.txt`; each as it is ("normal") and with
+//! every lamp four times ("last"); the line and rect lights that cast shadows (4) alone
+//! ("flächen"); the shop sign's line light alone with a post close in front of it, a third
+//! along ("linie pfosten"); the point and spot lights with the demo's two pattern fences, hard
+//! and soft ("zaun").
 //!
 //! - Today: [`Light2dRenderer`] with `light_rows` off.
 //! - New: the same with `light_rows` on.
 //! - True: the same light with an exact march per pixel (`lightrow_truth.frag`), the only part
-//!   this file draws itself; a lamp with a size is `KNORKE_PROBE_POINTS` squared points
-//!   (default 8).
+//!   this file draws itself; a lamp with a size and a line or rect light's emitter are
+//!   `KNORKE_PROBE_POINTS` squared points (default 8).
 //!
 //! The test always checks that the rows are closer to the reference than today's light.
 //! `KNORKE_PROBE_OUT=<dir>` writes `<scene>_heute.png`, `<scene>_neu.png`, `<scene>_wahr.png`,
@@ -46,8 +49,10 @@ use knorke_light2d::lighting::{
 };
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassRecord, SceneStores, max_height};
+use knorke_light2d::pattern_occluders::PatternParams;
+use knorke_light2d::pattern_store::{PatternDesc, PatternStore, Sheet, SheetFormat, raw_id};
 use knorke_light2d::projection::Projection;
-use knorke_light2d::rows::{RowLamp, RowLookupParams, RowSpace};
+use knorke_light2d::rows::{RowLamp, RowLookupParams, RowSpace, SUPPORTS};
 use knorke_light2d::settings::{GlowColor, LightSettings, Quality, QualitySettings, Resolutions};
 use knorke_light2d::shadow::{MaskAnchor, OcclusionDomain};
 use knorke_light2d::{LightStore, NoResources, ObstacleStore};
@@ -76,10 +81,18 @@ fn num(s: &str) -> f32 {
     s.parse().unwrap()
 }
 
-/// The scene text cut down to what the probe compares: the enabled point and spot lights that
-/// cast shadows (every extra switched off) and the enabled obstacles without their patterns.
-fn parse(text: &str, soft: bool) -> (Vec<LightDesc>, ObstacleStore) {
+/// The scene text cut down to what the probe compares: the enabled lights of the types in
+/// `kinds` (Chiaro's numbers: 0 point, 1 spot, 3 line, 4 rect) that cast shadows (every extra
+/// switched off) and the enabled obstacles, the two pattern fences with opacity `fence` and
+/// without their patterns, or with them (`None`).
+fn parse(
+    text: &str,
+    soft: bool,
+    fence: Option<f32>,
+    kinds: &str,
+) -> (Vec<LightDesc>, ObstacleStore, PatternStore) {
     let (mut lights, mut obstacles) = (Vec::new(), ObstacleStore::new());
+    let (mut sheet, mut descs, mut fences) = (Vec::new(), Vec::new(), Vec::new());
     for line in text.lines() {
         let f: Vec<&str> = line.split(' ').collect();
         let v = |i: usize| num(f[i]);
@@ -88,10 +101,11 @@ fn parse(text: &str, soft: bool) -> (Vec<LightDesc>, ObstacleStore) {
                 let kind = match f[1] {
                     "0" => LightType::Point,
                     "1" => LightType::Spot,
-                    _ => continue,
+                    "3" => LightType::Line,
+                    _ => LightType::Rect,
                 };
-                // CHI_LIGHT_NO_SHADOWS, _DISABLED; CHI_HEIGHT_AUTO is -1.
-                if f[2].parse::<u32>().unwrap() & 3 != 0 || v(5) < 0.0 {
+                // CHI_LIGHT_NO_SHADOWS, _DISABLED; CHI_HEIGHT_AUTO is -1 (the moon's).
+                if !kinds.contains(f[1]) || f[2].parse::<u32>().unwrap() & 3 != 0 || v(5) < 0.0 {
                     continue;
                 }
                 let mut d = LightDesc::new(kind);
@@ -108,6 +122,9 @@ fn parse(text: &str, soft: bool) -> (Vec<LightDesc>, ObstacleStore) {
                 d.direction = Vec3::new(v(17), v(18), v(19));
                 d.inner_angle = v(20);
                 d.outer_angle = v(21);
+                d.two_sided = f[2].parse::<u32>().unwrap() & 4 != 0;
+                d.axis = Vec3::new(v(22), v(23), v(24));
+                d.half_width = v(25);
                 lights.push(d);
             }
             "shape" => {
@@ -118,7 +135,11 @@ fn parse(text: &str, soft: bool) -> (Vec<LightDesc>, ObstacleStore) {
                     rotation: v(5),
                     height: v(6),
                     base_height: v(7),
-                    opacity: 1.0,
+                    opacity: if f[12] == "0" {
+                        1.0
+                    } else {
+                        fence.unwrap_or(1.0)
+                    },
                     dynamic: flags & 1 != 0,
                     enabled: flags & 2 == 0,
                     shadow_footprint: false,
@@ -130,14 +151,46 @@ fn parse(text: &str, soft: bool) -> (Vec<LightDesc>, ObstacleStore) {
                         depth: v(11),
                     },
                 };
-                obstacles
+                let id = obstacles
                     .create_shape(&ShapeDesc { common, shape })
                     .unwrap();
+                if fence.is_none() && f[12] != "0" {
+                    fences.push((id, f[12].parse::<usize>().unwrap() - 1));
+                }
             }
+            "row" => {
+                for k in 0..f[1].len() / 2 {
+                    let alpha = u8::from_str_radix(&f[1][2 * k..2 * k + 2], 16).unwrap();
+                    sheet.extend_from_slice(&[255, 255, 255, alpha]);
+                }
+            }
+            "pattern" => descs.push(PatternDesc {
+                repeat_width: v(5),
+                repeat_height: v(6),
+                ..PatternDesc::new(v(1) as u32, v(2) as u32, v(3) as u32, v(4) as u32)
+            }),
             _ => {}
         }
     }
-    (lights, obstacles)
+    let mut patterns = PatternStore::new();
+    if !fences.is_empty() {
+        // `sheet 20 16` of the demo.
+        let sheet = Sheet {
+            width: 20,
+            height: 16,
+            pitch: 80,
+            format: SheetFormat::Rgba8,
+            pixels: &sheet,
+        };
+        let mut ids = Vec::new();
+        patterns.create(&sheet, &descs, &mut ids).unwrap();
+        for (id, k) in fences {
+            obstacles
+                .set_pattern(id, raw_id(ids[k]), &patterns)
+                .unwrap();
+        }
+    }
+    (lights, obstacles, patterns)
 }
 
 /// The demo's settings (`gpu_iso_night.rs`) without haze, at mask resolution `shadow`.
@@ -294,12 +347,19 @@ impl<'d> Truth<'d> {
             .upload_to_buffer(&self.lamps, (count * RowLamp::SIZE) as u32)?;
         let nearest = self.samplers.sampler(Filter::Nearest);
         let occlusion = renderer.plan().occlusion();
+        let patterns = renderer.plan().patterns().maps();
+        let scene = frame.scene;
         let textures = [
             frame.surface.unwrap(),
             occlusion.mask().unwrap(),
             occlusion.height().unwrap(),
+            patterns.map_or(scene, |p| p.ids),
+            patterns.map_or(scene, |p| p.atlas),
         ]
         .map(|t| SamplerBinding::new(t, nearest));
+        let lamps = self.lamps.buffer_ref().unwrap();
+        let records = patterns.map_or([lamps; 3], |p| [p.obstacles, p.records, p.data]);
+        let params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
         {
             let clear = Load::Clear(ambient_clear(light.ambient));
             let mut pass = cmd.render_pass(&[ColorTarget::new(self.light.texture_ref(), clear)])?;
@@ -307,13 +367,14 @@ impl<'d> Truth<'d> {
                 self.pipelines.pipeline(0, HALF).unwrap(),
                 &Bindings {
                     vertex: StageBindings {
-                        storage_buffers: &[self.lamps.buffer_ref().unwrap()],
+                        storage_buffers: &[lamps],
                         uniforms: &[&vertex],
                         ..Default::default()
                     },
                     fragment: StageBindings {
                         samplers: &textures,
-                        uniforms: &[&surface, &lookup],
+                        storage_buffers: &records,
+                        uniforms: &[&surface, &lookup, &params],
                         ..Default::default()
                     },
                 },
@@ -343,6 +404,17 @@ fn draw(
         .unwrap();
     cmd.submit_and_wait().unwrap();
     record
+}
+
+fn stores_of<'a>(
+    lights: &'a LightStore,
+    obstacles: &'a ObstacleStore,
+    patterns: Option<&'a PatternStore>,
+) -> SceneStores<'a> {
+    SceneStores {
+        patterns,
+        ..SceneStores::new(lights, obstacles)
+    }
 }
 
 /// Median and 95th percentile of `us`.
@@ -398,13 +470,69 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// Most the rows may differ from the reference per scene (mean of 255, percent of the pixels
 /// over 8): what was measured on 2026-11-26 (Vulkan, RX 6700 XT) plus a tenth. Measured:
 /// 0.348 / 0.66, 0.640 / 1.60, 0.631 / 2.31, 0.869 / 3.03; today's light 0.921 / 1.74,
-/// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24.
-const BOUNDS: [(&str, f64, f64); 4] = [
+/// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24; "hart halb", the fences as 50 % walls: 0.314 / 1.25,
+/// today 0.724 / 2.56; "flächen" 0.002 / 0.01, today 0.020 / 0.11 (bound rounded up: a tenth of
+/// so little is below what a driver may change); "zaun", the fences with their patterns, hard
+/// 0.675 / 1.53, today 0.994 / 2.10, soft 1.477 / 5.70, today 2.269 / 8.49.
+const BOUNDS: [(&str, f64, f64); 9] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
     ("weich normal", 0.70, 2.55),
     ("weich last", 0.96, 3.34),
+    ("hart halb", 0.35, 1.38),
+    ("flächen", 0.004, 0.02),
+    ("linie pfosten", 0.014, 0.03),
+    ("zaun hart", 0.75, 1.69),
+    ("zaun weich", 1.63, 6.27),
 ];
+
+/// The facade in "zaun hart" that the spot light beside the lattice tower lights through it
+/// (output pixels x, y, width, height), and the most the rows may differ from the reference
+/// there (mean of 255). Rays rising out through the tower's top read its pattern where they
+/// leave it, not at its far side; reading the far side lost the top of the lattice's shadow
+/// there. Where the light's ray grazes the tower, the mask's staircase splits it in two runs;
+/// hulling the low building and the facade behind them instead blackened the facade's south
+/// end (the build joins the pieces then, `Squeeze`). Measured 1.316 (2026-11-26, Vulkan,
+/// RX 6700 XT), hulled 1.951, at the far side 2.625; plus a tenth.
+const FACADE: ([usize; 4], f64) = ([560, 170, 160, 160], 1.45);
+
+/// Mean absolute difference of two pictures over the colour channels within `rect`.
+fn region_mean(a: &[u8], b: &[u8], [x, y, w, h]: [usize; 4]) -> f64 {
+    let row = OUT.0 as usize * 4;
+    let mut sum = 0u64;
+    for r in y..y + h {
+        let span = r * row + x * 4..r * row + (x + w) * 4;
+        for (p, q) in a[span.clone()]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b[span].as_chunks::<4>().0)
+        {
+            sum += (0..3).map(|c| u64::from(p[c].abs_diff(q[c]))).sum::<u64>();
+        }
+    }
+    sum as f64 / (w * h * 3) as f64
+}
+
+/// The post of "linie pfosten": a third along the shop sign's line light (at 31, 26.12, 2.4
+/// either way along x, 4.6 high), 0.7 in front of it and taller than it, so it cuts the light of
+/// one end off the ground behind it and a line light marched from its middle alone misses that.
+fn post() -> ShapeDesc<'static> {
+    let common = ObstacleCommon {
+        position: At::new(Vec2::new(31.0 - 2.4 + 4.8 / 3.0, 26.82)),
+        rotation: 0.0,
+        height: 6.0,
+        base_height: 0.0,
+        opacity: 1.0,
+        dynamic: false,
+        enabled: true,
+        shadow_footprint: false,
+    };
+    ShapeDesc {
+        common,
+        shape: Shape::Circle { radius: 0.25 },
+    }
+}
 
 #[test]
 fn light_rows_against_chiaro_and_the_reference() {
@@ -456,20 +584,39 @@ fn light_rows_against_chiaro_and_the_reference() {
         let offsets = [(0.0, 0.0), (0.7, 0.3), (-0.5, 0.6), (0.4, -0.7)];
         let scenes = [false, true]
             .into_iter()
-            .flat_map(|soft| [(soft, 1), (soft, 4)]);
-        for ((soft, copies), bound) in scenes.zip(BOUNDS) {
+            .flat_map(|soft| [(soft, 1, Some(1.0), "01"), (soft, 4, Some(1.0), "01")])
+            .chain([
+                (false, 1, Some(0.5), "01"),
+                (false, 1, Some(1.0), "34"),
+                (false, 1, Some(1.0), "3"),
+                (false, 1, None, "01"),
+                (true, 1, None, "01"),
+            ]);
+        for ((soft, copies, fence, kinds), bound) in scenes.zip(BOUNDS) {
             let name = bound.0;
-            let (mut base, obstacles) = parse(&text, false);
+            let (mut base, mut obstacles, patterns) = parse(&text, false, fence, kinds);
+            if kinds == "3" {
+                obstacles.create_shape(&post()).unwrap();
+            }
             if soft {
                 // The lamp sizes of the variant with soft shadows, on the same lamps.
-                let sized = parse(&plain, true).0;
+                let sized = parse(&plain, true, Some(1.0), kinds).0;
                 assert_eq!(sized.len(), base.len());
                 for (d, s) in base.iter_mut().zip(&sized) {
                     assert_eq!(d.position, s.position);
                     d.source_radius = s.source_radius;
                 }
             }
-            assert_eq!(base.len(), 13, "the scene's shadowed point and spot lights");
+            let (expected, supports) = match kinds {
+                "01" => (13, 1),
+                "34" => (4, SUPPORTS),
+                _ => (1, SUPPORTS),
+            };
+            assert_eq!(
+                base.len(),
+                expected,
+                "the scene's shadowed lights of the case"
+            );
             let descs: Vec<LightDesc> = offsets[..copies]
                 .iter()
                 .flat_map(|&(dx, dy)| {
@@ -490,9 +637,11 @@ fn light_rows_against_chiaro_and_the_reference() {
             let (lights, _) = store();
             let (mut moving, ids) = store();
             let none = LightStore::new();
+            let patterns = fence.is_none().then_some(&patterns);
             let new = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
             let mut renderers = [new(), new(), new(), new()];
             let all = descs.len() as u32;
+            let rows_all = all * supports;
 
             let mut timed: [Vec<(f64, f64)>; 4] = Default::default();
             let mut step = 0u32;
@@ -503,7 +652,7 @@ fn light_rows_against_chiaro_and_the_reference() {
                     break;
                 }
                 let [r_today, r_rest, r_moved, r_none] = &mut renderers;
-                let stores = SceneStores::new(&lights, &obstacles);
+                let stores = stores_of(&lights, &obstacles, patterns);
                 let t = time(n, || {
                     draw(gpu, r_today, &frame(0), &stores, &today);
                 });
@@ -514,18 +663,18 @@ fn light_rows_against_chiaro_and_the_reference() {
                         let at = At::new(d.position.raw() + Vec2::new(x, 0.0));
                         moving.set_position(id, at, d.height).unwrap();
                     }
-                    let stores = SceneStores::new(&moving, &obstacles);
+                    let stores = stores_of(&moving, &obstacles, patterns);
                     let record = draw(gpu, r_moved, &frame(2), &stores, &rows);
-                    assert_eq!(record.lighting.rows_built, all);
+                    assert_eq!(record.lighting.rows_built, rows_all);
                 });
                 let floor = time(n, || {
-                    let stores = SceneStores::new(&none, &obstacles);
+                    let stores = stores_of(&none, &obstacles, patterns);
                     draw(gpu, r_none, &frame(2), &stores, &rows);
                 });
                 // The first frame builds the rows, from then on the lamps rest.
                 let first = draw(gpu, r_rest, &frame(1), &stores, &rows).lighting;
                 assert_eq!(first.row_lights, all, "every lamp is a row light");
-                assert_eq!(first.rows_built, if run == 0 { all } else { 0 });
+                assert_eq!(first.rows_built, if run == 0 { rows_all } else { 0 });
                 let rest = time(n, || {
                     let record = draw(gpu, r_rest, &frame(1), &stores, &rows);
                     assert_eq!(record.lighting.rows_built, 0);
@@ -571,6 +720,14 @@ fn light_rows_against_chiaro_and_the_reference() {
                     save_png_rgba8(&file, px, OUT.0, OUT.1);
                 }
             }
+            let facade = (name == "zaun hart")
+                .then(|| region_mean(&pictures[1].1, &pictures[2].1, FACADE.0));
+            if let Some(facade) = facade {
+                let _ = writeln!(
+                    report,
+                    "{name:12} facade, neu against wahr: mean {facade:.3} of 255"
+                );
+            }
             eprint!("{report}");
             let (old, rows) = (numbers[0], numbers[1]);
             assert!(
@@ -580,6 +737,10 @@ fn light_rows_against_chiaro_and_the_reference() {
             assert!(
                 rows.0 <= bound.1 && rows.1 <= bound.2,
                 "{name}: rows against the reference {rows:?}, bound {bound:?}"
+            );
+            assert!(
+                facade.is_none_or(|f| f <= FACADE.1),
+                "{name}: the facade lit through the lattice tower {facade:?}, bound {FACADE:?}"
             );
             full.push_str(&report);
             report.clear();

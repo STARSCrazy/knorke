@@ -2,8 +2,21 @@
 // runs (rn, rf, base, top); a run blocks if the heights the ray passes over its piece before the receiver meet its
 // interval (ADR 0019, "Die Lichtzeile"). As in Chiaro's trace the last texel before the receiver does not count.
 // A lamp with a size reads two more texels, written by lightrow_edge.frag, and is soft along and across the ray.
+// A partly transparent run that blocks multiplies the light by its transmittance, once per run as Chiaro once per
+// crossing (shadow_trace.hlsli). For a lamp with a size that is decided on the ray to the lamp's middle and the result
+// is the smaller of it and the opaque runs' sight, as Chiaro's min(visibility, transmittance): Chiaro's thin fringe
+// outside such a shadow (opening narrowed by the opacity) is left out, its edge stays hard.
+// A pattern obstacle is such a run; where the pattern pass found its crossing, the pattern at the height of this
+// pixel's ray there takes the place of the run's transmittance (lightrow_pattern.hlsli), as Chiaro's crossing.
 // lightrow_light.frag, lightrow_light_exact.frag and lightrow_light_direction.frag are this file for the three
 // target layouts of the light pass (surface_light.hlsli).
+// The profile atlas after all other samplers, as in Chiaro's light_sdf_surface.frag: a lamp without a profile does
+// not read it (profile.hlsli).
+#ifdef CHI_MATERIAL_EXACT
+#define CHI_PROFILE_SLOT 8
+#else
+#define CHI_PROFILE_SLOT 7
+#endif
 #include "lightrow_surface.hlsli"
 
 Texture2D<float4> RowFirst : register(t3, space2);
@@ -15,7 +28,38 @@ Texture2D<float4> EdgeSecond : register(t6, space2);
 SamplerState EdgeFirstSampler : register(s5, space2);  // nearest
 SamplerState EdgeSecondSampler : register(s6, space2); // nearest
 
+// After the profile atlas, read only on angles with a partly transparent run in a frame with pattern obstacles: the
+// crossings of the pattern pass, Chiaro's pattern atlas, the records and the polygon corners (`Through`).
+#include "lightrow_pattern.hlsli"
+#define ROW_PATTERN_RESOURCES(cross, atlas, obstacles, patterns, data)                                         Texture2D<float4> RowCross : register(t##cross, space2);                                               SamplerState RowCrossSampler : register(s##cross, space2);                                             Texture2D<float4> PatternAtlas : register(t##atlas, space2);                                           SamplerState PatternAtlasSampler : register(s##atlas, space2);                                         StructuredBuffer<GpuPatternObstacle> PatternObstacles : register(t##obstacles, space2);                StructuredBuffer<GpuPattern> Patterns : register(t##patterns, space2); StructuredBuffer<uint> PatternData : register(t##data, space2);
+#ifdef CHI_MATERIAL_EXACT
+ROW_PATTERN_RESOURCES(9, 10, 11, 12, 13)
+#else
+ROW_PATTERN_RESOURCES(8, 9, 10, 11, 12)
+#endif
+
+// `PatternParams` of knorke-light2d; all 0 in a frame without pattern obstacles.
+cbuffer PatternParams : register(b2, space3)
+{
+    float4 PatternMaskToWorldX;
+    float4 PatternMaskToWorldY;
+    float4 PatternAtlasSize; // xy 1 / atlas size, zw atlas size
+};
+
+#define ROW_PATTERN_GEOMETRY
+#define ROW_PATTERN_LIGHT
+#include "lightrow_pattern.hlsli"
 #include "lightrow_runs.hlsli"
+
+// The crossings of angle texel `a` (lightrow_pattern.frag); none without a partly transparent run.
+float4 Crossings(float a, float row, float4 pass)
+{
+    if (PatternAtlasSize.z <= 0.0 || all(pass <= 0.0)) {
+        return float4(0.0, 0.0, 0.0, 0.0);
+    }
+    a -= RowSize.x * floor(a / RowSize.x);
+    return RowCross.SampleLevel(RowCrossSampler, float2((a + 0.5) / RowSize.x, (row + 0.5) / RowSize.y), 0.0);
+}
 
 // slope: the ray's height at distance q from the lamp is zl - slope * q.
 bool Blocks(float4 run, float zl, float slope, float r)
@@ -40,6 +84,44 @@ float2 Hidden(float4 run, float z, float r)
     float2 from = (run.z - z * q) / (1.0 - q);
     float2 to = (run.w - RowSize.w - z * q) / (1.0 - q);
     return float2(min(from.x, from.y), max(to.x, to.y));
+}
+
+// What the blocking runs let through: all of them (`hard`), or the partly transparent ones only. A run with a
+// crossing reads its pattern at the height the ray has there. A ray that leaves the run's interval before that
+// crossing (rising out through the top, falling out through the bottom) never reaches it: coming from the receiver
+// it enters where it leaves, so for a hard lamp its entry is sought around the last quarter texel still inside, on
+// this ray (`ground`, `dir`), as Chiaro and lightrow_truth.frag do. A lamp with a size keeps the stored crossing:
+// its one ray stands for many that blur the pattern, and the sharper entry measured worse there (probe "zaun weich").
+float Through(float4 runs[kRuns], float4 pass, float4 crossings, float2 ground, float2 dir, float zl, float slope,
+              float r, bool hard)
+{
+    float through = 1.0;
+    for (int k = 0; k < kRuns; ++k) {
+        if ((hard || pass[k] > 0.0) && Blocks(runs[k], zl, slope, r)) {
+            float open = pass[k];
+            for (int c = 0; c < 2; ++c) {
+                float f = crossings[2 * c];
+                float whole = floor(f);
+                if (f > 0.0 && floor(whole / 65536.0) == float(k)) {
+                    uint id = uint(whole) & 0xFFFFu;
+                    float q = runs[k].y - ((f - whole) * 4.0 - 1.0);
+                    float u = crossings[2 * c + 1];
+                    float h = zl - slope * q;
+                    float top = runs[k].w - RowSize.w;
+                    if (hard && (h >= top || h < runs[k].z)) {
+                        float leave = (zl - (h >= top ? top : runs[k].z)) / slope;
+                        float last = (ceil(leave * 4.0) - 1.0) * 0.25;
+                        float2 exit = PatternExit(id, ground, dir, last - 1.0, last + 1.0);
+                        q = exit.x;
+                        u = exit.y;
+                    }
+                    open = PatternPass(id, u, zl - slope * q, open);
+                }
+            }
+            through *= open;
+        }
+    }
+    return through;
 }
 
 static const float kFar = 1e30;
@@ -103,7 +185,11 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
     float a = floor(turn);
     float f = turn - a;
     float4 runs[kRuns];
-    Runs(a, ROW_SLOT(l), runs);
+    float4 pass;
+    Runs(a, ROW_SLOT(l), runs, pass);
+    float through = Through(runs, pass, Crossings(a, ROW_SLOT(l), pass), ROW_GROUND(l), toPlace / r, zl, (zl - z) / r,
+                            r, false);
+    OpaqueOnly(runs, pass);
     float2 uv = float2((a + 0.5) / RowSize.x, (ROW_SLOT(l) + 0.5) / RowSize.y);
     float4 first = EdgeFirst.SampleLevel(EdgeFirstSampler, uv, 0.0);
     float angle = kTwoPi / RowSize.x;
@@ -149,26 +235,50 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
         }
     }
     if (!some && all(other <= 0.0)) {
-        return 1.0; // most lit places: nothing hides any of it
+        return through; // most lit places: nothing hides any of it
     }
     float area = Half(left, share, begin.x, other.x, wide) + Half(right, share, begin.y, other.y, wide);
-    return 1.0 - area / (2.0 * wide);
+    return min(through, 1.0 - area / (2.0 * wide));
+}
+
+// Line and rect lights: the mean of the hard sight from four points on the emitter, each with its own row (the
+// middles of four equal pieces; SUPPORT_TS of `knorke_light2d::rows`). Chiaro traces one ray to the nearest point.
+static const float2 kSupports[2][4] = {
+    {float2(-0.75, 0.0), float2(-0.25, 0.0), float2(0.25, 0.0), float2(0.75, 0.0)},
+    {float2(-0.5, -0.5), float2(0.5, -0.5), float2(-0.5, 0.5), float2(0.5, 0.5)},
+};
+
+float HardSight(float2 ground, float zl, float row, float2 start, float z)
+{
+    float2 d = start - ground;
+    float r = length(d);
+    if (r < 1e-3) {
+        return 1.0;
+    }
+    float a = floor(frac(atan2(d.y, d.x) / kTwoPi) * RowSize.x);
+    float4 runs[kRuns];
+    float4 pass;
+    Runs(a, row, runs, pass);
+    return Through(runs, pass, Crossings(a, row, pass), ground, d / r, zl, (zl - z) / r, r, true);
 }
 
 float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
 {
+    if (l.directionType.w > 1.5) {
+        int rect = l.directionType.w > 2.5 ? 1 : 0;
+        float sum = 0.0;
+        [unroll] for (int k = 0; k < 4; ++k) {
+            float2 ground;
+            float zl;
+            EmitterPoint(l, kSupports[rect][k], ground, zl);
+            sum += HardSight(ground, zl, l.profile[k], start, z);
+        }
+        return sum * 0.25;
+    }
     float2 d = start - ROW_GROUND(l);
     float turn = frac(atan2(d.y, d.x) / kTwoPi) * RowSize.x; // texel a holds the ray at a + 0.5
     if (ROW_SIZE(l) > 0.0) {
         return SoftSight(l, d, turn, z, r);
     }
-    float zl = ROW_HEIGHT(l);
-    float slope = (zl - z) / r;
-    float4 runs[kRuns];
-    Runs(floor(turn), ROW_SLOT(l), runs);
-    bool blocked = false;
-    for (int k = 0; k < kRuns; ++k) {
-        blocked = blocked || Blocks(runs[k], zl, slope, r);
-    }
-    return blocked ? 0.0 : 1.0;
+    return HardSight(ROW_GROUND(l), ROW_HEIGHT(l), ROW_SLOT(l), start, z);
 }

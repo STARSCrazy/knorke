@@ -958,6 +958,11 @@ impl<'d> PassPlan<'d> {
         &self.occlusion
     }
 
+    /// The pattern obstacles of the frame (id texture, atlas, records; for tools and tests).
+    pub fn patterns(&self) -> &PatternOccluders<'d> {
+        &self.patterns
+    }
+
     /// The atlases (for tools and tests).
     pub fn atlases(&self) -> &LightAtlases<'d> {
         &self.atlases

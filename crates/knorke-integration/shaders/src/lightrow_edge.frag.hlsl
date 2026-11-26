@@ -34,7 +34,9 @@ EdgeOutput main(SurfaceLightVaryings i)
 {
     float a = floor(i.scene.x * RowSize.x);
     float4 own[kRuns];
-    Runs(a, ROW_SLOT(i), own);
+    float4 pass;
+    Runs(a, ROW_SLOT(i), own, pass);
+    OpaqueOnly(own, pass);
     EdgeOutput o;
     o.first = float4(0.0, 0.0, 0.0, 0.0);
     o.second = o.first;
@@ -64,7 +66,8 @@ EdgeOutput main(SurfaceLightVaryings i)
         away[side] = 0.0;
         [loop] for (int j = 1; j <= width; ++j) {
             float4 other[kRuns];
-            Runs(a + (side == 0 ? -float(j) : float(j)), ROW_SLOT(i), other);
+            Runs(a + (side == 0 ? -float(j) : float(j)), ROW_SLOT(i), other, pass);
+            OpaqueOnly(other, pass);
             bool taken[kRuns] = { false, false, false, false };
             bool following = false;
             for (int k = 0; k < kRuns; ++k) {

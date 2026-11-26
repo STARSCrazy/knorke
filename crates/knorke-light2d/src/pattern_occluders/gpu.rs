@@ -107,6 +107,8 @@ pub struct PatternMaps<'a> {
     pub data: BufferRef<'a>,
     /// The `PatternParams` block.
     pub params: [u8; PatternParams::SIZE],
+    /// The frame's pattern obstacles in record order ([`PatternOccluders::members`]).
+    pub members: &'a [(crate::obstacle::ObstacleId, u32)],
 }
 
 fn storage<'d>(gpu: Gpu<'d>, bytes: u32, name: &'static str) -> UploadBuffer<'d> {
@@ -494,6 +496,7 @@ impl<'d> PatternOccluders<'d> {
             records: self.record_buffer.buffer_ref()?,
             data: self.data_buffer.buffer_ref()?,
             params: self.params.to_bytes(),
+            members: &self.set.members,
         })
     }
 }

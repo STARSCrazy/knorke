@@ -1,5 +1,6 @@
 //! The row lights on the GPU: the row atlas (one row of [`ROW_ANGLES`] texels per lamp), the
-//! edge atlas of lamps with a source radius, their programs and what a frame records. Part of
+//! edge atlas of lamps with a source radius, the crossing atlas of frames with pattern obstacles,
+//! their programs and what a frame records. Part of
 //! the light pass ([`LightingStage`](crate::lighting::LightingStage) owns and drives it); it
 //! records into the host's command buffer and never submits or reads back (ADR 0002).
 
@@ -16,12 +17,14 @@ use knorke_types::{Diagnostic, DiagnosticCode};
 
 use super::{
     MAX_ROWS, ROW_ANGLES, RowBuildParams, RowCache, RowEdgeParams, RowLamp, RowLight,
-    RowLookupParams, RowMask, RowSpace,
+    RowLookupParams, RowMask, RowSpace, SUPPORTS,
 };
 use crate::light_pipelines::MATERIAL_TARGET_FORMAT;
 use crate::lighting::{
     DetailMode, LIGHT_FORMAT, LightSurfacePassParams, LightingFrame, ShadowMaps, height_tolerance,
 };
+use crate::obstacle::ObstacleId;
+use crate::pattern_occluders::PatternParams;
 
 /// A row program, atlas or buffer is missing at record: the frame was not prepared.
 pub const ROWS_INPUT_MISSING: DiagnosticCode =
@@ -34,6 +37,7 @@ const MIN_ROWS: u32 = 16;
 
 const BUILD: usize = 0;
 const EDGE: usize = 1;
+const PATTERN: usize = 5;
 
 const fn atlas_program(fragment: &'static str) -> ProgramDesc {
     ProgramDesc {
@@ -58,12 +62,13 @@ const fn material_program(fragment: &'static str) -> ProgramDesc {
 /// The light is one shader in three versions because the light pass has three target layouts
 /// (Chiaro's `surface_light.hlsli`): the light buffer alone, with the specular buffer, with the
 /// direction buffer.
-const PROGRAMS: [ProgramDesc; 5] = [
+const PROGRAMS: [ProgramDesc; 6] = [
     atlas_program("lightrow_build.frag"),
     atlas_program("lightrow_edge.frag"),
     ProgramDesc::new("lightrow.vert", "lightrow_light.frag", Blend::Additive),
     material_program("lightrow_light_exact.frag"),
     material_program("lightrow_light_direction.frag"),
+    ProgramDesc::new("lightrow.vert", "lightrow_pattern.frag", Blend::Opaque),
 ];
 
 const fn light_program(detail: DetailMode) -> usize {
@@ -74,8 +79,9 @@ const fn light_program(detail: DetailMode) -> usize {
     }
 }
 
-/// What the prepared frame draws. The lamp buffer holds the frame's row lights, then copies of
-/// those whose row is built, the ones with a source radius first (the edge pass draws only them).
+/// What the prepared frame draws. The lamp buffer holds the frame's row lights, then the lamps
+/// whose row is built (a line or rect light's support points), the ones with a source radius
+/// first (the edge pass draws only them).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RowsRecord {
     /// Row lights drawn.
@@ -91,10 +97,15 @@ pub struct RowsRecord {
 pub struct RowLights<'d> {
     rows: [RenderTarget<'d>; 2],
     edges: [RenderTarget<'d>; 2],
+    /// Where a ray crosses a pattern obstacle (`lightrow_pattern.frag`).
+    crossings: RenderTarget<'d>,
+    /// The pattern obstacles the crossings name by record index, in that order.
+    pattern_ids: Vec<ObstacleId>,
     lamps: UploadBuffer<'d>,
     pipelines: Option<PipelineCache<'d>>,
     cache: RowCache,
-    /// Indices into the frame's row lights of those whose row is built; kept for its storage.
+    /// Rows built this frame: index into the frame's row lights times [`SUPPORTS`] plus the
+    /// support point; kept for its storage.
     dirty: Vec<u32>,
     frame: RowsRecord,
     detail: DetailMode,
@@ -106,6 +117,8 @@ impl<'d> RowLights<'d> {
         Self {
             rows: [RenderTarget::new(gpu), RenderTarget::new(gpu)],
             edges: [RenderTarget::new(gpu), RenderTarget::new(gpu)],
+            crossings: RenderTarget::new(gpu),
+            pattern_ids: Vec::new(),
             lamps: UploadBuffer::new(
                 gpu,
                 SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
@@ -163,18 +176,34 @@ impl<'d> RowLights<'d> {
         }
         // Without the occlusion stage nothing casts a shadow this frame. (Not `height`: the
         // stage creates its textures when it records its first frame.)
-        let mask = frame.shadows.filter(|s| s.height_mode).map(row_mask);
+        let shadows = frame.shadows.filter(|s| s.height_mode);
+        let mask = shadows.map(row_mask);
+        let patterns = shadows.and_then(|s| s.patterns.as_ref());
+        // A crossing names its obstacle by record index, which moves when the frame's pattern
+        // obstacles change anywhere; and a row built without them has no crossings.
+        let members = patterns.map_or(&[][..], |p| p.members);
+        if !members
+            .iter()
+            .map(|m| m.0)
+            .eq(self.pattern_ids.iter().copied())
+        {
+            self.cache.invalidate();
+            self.pattern_ids.clear();
+            self.pattern_ids.extend(members.iter().map(|m| m.0));
+        }
         let mut allocations = 0;
         // Twice at most: growing the atlas loses its rows, so every lamp is assigned anew.
         for _ in 0..2 {
             self.dirty.clear();
             for (i, light) in lights.iter().enumerate() {
-                if let Some((_, true)) = self.assign(light, mask.as_ref()) {
-                    self.dirty.push(i as u32);
+                for k in 0..light.rows() {
+                    if let Some((_, true)) = self.assign(&light.support(k), mask.as_ref()) {
+                        self.dirty.push(i as u32 * SUPPORTS + k);
+                    }
                 }
             }
-            let soft = self.dirty.iter().any(|&i| lights[i as usize].size > 0.0);
-            let grown = self.ensure_atlases(soft)?;
+            let soft = self.dirty.iter().any(|&i| built(lights, i).size > 0.0);
+            let grown = self.ensure_atlases(soft, patterns.is_some())?;
             allocations += grown;
             if grown == 0 {
                 break;
@@ -183,11 +212,11 @@ impl<'d> RowLights<'d> {
         }
         // The lamps with an edge row first.
         self.dirty
-            .sort_unstable_by_key(|&i| lights[i as usize].size <= 0.0);
+            .sort_unstable_by_key(|&i| built(lights, i).size <= 0.0);
         let edges = self
             .dirty
             .iter()
-            .filter(|&&i| lights[i as usize].size > 0.0)
+            .filter(|&&i| built(lights, i).size > 0.0)
             .count();
         self.frame = RowsRecord {
             lights: lights.len() as u32,
@@ -206,26 +235,41 @@ impl<'d> RowLights<'d> {
         if edges > 0 {
             pipelines.get(shaders, EDGE, ROW_FORMAT)?;
         }
+        if self.frame.built > 0 && patterns.is_some() {
+            pipelines.get(shaders, PATTERN, ROW_FORMAT)?;
+        }
 
         let count = lights.len() + self.dirty.len();
         self.lamps.reserve((count * RowLamp::SIZE) as u64)?;
         let mut mapped = self.lamps.map()?;
         let bytes = mapped.bytes();
         let mut at = 0;
-        let order = (0..lights.len() as u32).chain(self.dirty.iter().copied());
-        for i in order {
-            let light = &lights[i as usize];
-            // Assigned above: asking again in the same frame returns the same row.
-            let row = self.cache.row_of(light.key).filter(|_| light.shadowed);
-            let lamp = RowLamp {
-                light: light.light,
-                row: [
-                    row.filter(|_| mask.is_some()).map_or(-1.0, |r| r as f32),
-                    light.size,
-                    0.0,
-                    0.0,
-                ],
+        let order = lights
+            .iter()
+            .copied()
+            .chain(self.dirty.iter().map(|&i| built(lights, i)));
+        // Assigned above: asking again in the same frame returns the same row. Without the mask
+        // no lamp has one.
+        let slot = |key| {
+            self.cache
+                .row_of(key)
+                .filter(|_| mask.is_some())
+                .map_or(-1.0, |r| r as f32)
+        };
+        for (n, light) in order.enumerate() {
+            let row = if light.shadowed {
+                slot(light.key)
+            } else {
+                -1.0
             };
+            let mut lamp = RowLamp {
+                light: light.light,
+                row: [row, light.size, 0.0, 0.0],
+            };
+            if n < lights.len() && light.is_area() && light.shadowed {
+                // Support point k's key is the light's plus k (`RowLight::support`).
+                lamp.light.profile = [0, 1, 2, 3].map(|k| slot(light.key + k));
+            }
             bytes[at..at + RowLamp::SIZE].copy_from_slice(&lamp.to_bytes());
             at += RowLamp::SIZE;
         }
@@ -237,10 +281,10 @@ impl<'d> RowLights<'d> {
         self.cache.assign(light, mask.filter(|_| light.shadowed)?)
     }
 
-    /// The atlases for the cache's rows; `soft` also the edge atlas. Returns how many targets
-    /// were (re)allocated for a new height of the row atlas (the edge atlas alone loses nothing:
-    /// a lamp's edge row is built with its row).
-    fn ensure_atlases(&mut self, soft: bool) -> Result<u32, Diagnostic> {
+    /// The atlases for the cache's rows; `soft` also the edge atlas, `patterns` also the crossing
+    /// atlas. Returns how many targets were (re)allocated for a new height of the row or the
+    /// crossing atlas (the edge atlas alone loses nothing: a lamp's edge row is built with its row).
+    fn ensure_atlases(&mut self, soft: bool, patterns: bool) -> Result<u32, Diagnostic> {
         let height = self.cache.rows().next_power_of_two().max(MIN_ROWS);
         if self.cache.rows() == 0 {
             return Ok(0);
@@ -253,6 +297,11 @@ impl<'d> RowLights<'d> {
             for target in &mut self.edges {
                 target.ensure(ROW_ANGLES, height, ROW_FORMAT)?;
             }
+        }
+        if patterns {
+            grown += u32::from(self.crossings.ensure(ROW_ANGLES, height, ROW_FORMAT)?);
+        } else {
+            self.crossings.release();
         }
         Ok(grown)
     }
@@ -310,8 +359,11 @@ impl<'d> RowLights<'d> {
                 BUILD,
                 self.frame.built,
                 [first, second],
-                &[SamplerBinding::new(heights, nearest)],
-                RowBuildParams::new(&space, mask).to_bytes(),
+                &[
+                    SamplerBinding::new(heights, nearest),
+                    SamplerBinding::new(shadows.mask, nearest),
+                ],
+                RowBuildParams::new(&space, mask, shadows.any_partial).to_bytes(),
             ),
             (
                 EDGE,
@@ -352,6 +404,30 @@ impl<'d> RowLights<'d> {
             )?;
             pass.draw_instanced(6, count)?;
         }
+        if let Some(p) = &shadows.patterns {
+            // After the build: it reads the runs.
+            let lookup = RowLookupParams::new(&space, mask, rows, 0.0).to_bytes();
+            let target =
+                (self.crossings.texture_ref()).ok_or_else(|| missing("the crossing atlas"))?;
+            let mut pass = cmd.render_pass(&[ColorTarget::new(target, Load::Load)])?;
+            pass.bind_program(
+                self.pipeline(PATTERN, ROW_FORMAT)?,
+                &Bindings {
+                    vertex: StageBindings {
+                        storage_buffers: &lamps,
+                        uniforms: &vertex_uniforms,
+                        ..Default::default()
+                    },
+                    fragment: StageBindings {
+                        samplers: &[first, second, p.ids].map(|t| SamplerBinding::new(t, nearest)),
+                        storage_buffers: &[p.obstacles, p.data],
+                        uniforms: &[&lookup, &p.params],
+                        ..Default::default()
+                    },
+                },
+            )?;
+            pass.draw_instanced(6, self.frame.built)?;
+        }
         Ok(())
     }
 
@@ -373,14 +449,21 @@ impl<'d> RowLights<'d> {
         }
         let nearest = samplers.sampler(Filter::Nearest);
         // What a frame does not have is not read: the scene stands in (lamps without a row
-        // return before the mask, lamps without a size before the edges).
+        // return before the mask, lamps without a size before the edges, lamps without a
+        // profile before the profile atlas, a frame without pattern obstacles has all-zero
+        // pattern params and reads no crossing); the lamp buffer stands in for the records.
         let stand_in = frame.scene;
         let shadows = frame.shadows.filter(|s| s.height_mode);
+        let patterns = shadows.and_then(|s| s.patterns.as_ref());
+        let lamps = self
+            .lamps
+            .buffer_ref()
+            .ok_or_else(|| missing("the lamp buffer"))?;
         let rows = self.rows[0].texture_ref().zip(self.rows[1].texture_ref());
         let edges = self.edges[0].texture_ref().zip(self.edges[1].texture_ref());
         let (row0, row1) = rows.unwrap_or((stand_in, stand_in));
         let (edge0, edge1) = edges.unwrap_or((stand_in, stand_in));
-        let textures = [
+        let mut textures = [
             frame.surface.unwrap_or(stand_in),
             shadows.map_or(stand_in, |s| s.mask),
             shadows.and_then(|s| s.height).unwrap_or(stand_in),
@@ -389,9 +472,18 @@ impl<'d> RowLights<'d> {
             edge0,
             edge1,
             frame.material.unwrap_or(stand_in),
+            frame.profile_atlas.unwrap_or(stand_in),
+            self.crossings.texture_ref().unwrap_or(stand_in),
+            patterns.map_or(stand_in, |p| p.atlas),
         ]
         .map(|t| SamplerBinding::new(t, nearest));
+        // The rest follows the material buffer, which only the exact program reads.
         let exact = self.detail == DetailMode::Exact;
+        if !exact {
+            textures.copy_within(8.., 7);
+        }
+        let records = patterns.map_or([lamps; 3], |p| [p.obstacles, p.records, p.data]);
+        let pattern_params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
         let lookup = match shadows {
             Some(s) => RowLookupParams::new(
                 &RowSpace::new(frame.projection, &s.domain),
@@ -402,23 +494,20 @@ impl<'d> RowLights<'d> {
             None => RowLookupParams::default(),
         }
         .to_bytes();
-        let lamps = [self
-            .lamps
-            .buffer_ref()
-            .ok_or_else(|| missing("the lamp buffer"))?];
         let vertex = Self::pass_params(frame, 0, 0);
         let vertex_uniforms: [&[u8]; 1] = [&vertex];
-        let fragment_uniforms: [&[u8]; 2] = [surface_params, &lookup];
+        let fragment_uniforms: [&[u8]; 3] = [surface_params, &lookup, &pattern_params];
         pass.bind_program(
             self.pipeline(light_program(self.detail), LIGHT_FORMAT)?,
             &Bindings {
                 vertex: StageBindings {
-                    storage_buffers: &lamps,
+                    storage_buffers: &[lamps],
                     uniforms: &vertex_uniforms,
                     ..Default::default()
                 },
                 fragment: StageBindings {
-                    samplers: &textures[..if exact { 8 } else { 7 }],
+                    samplers: &textures[..if exact { 11 } else { 10 }],
+                    storage_buffers: &records,
                     uniforms: &fragment_uniforms,
                     ..Default::default()
                 },
@@ -447,6 +536,11 @@ impl<'d> RowLights<'d> {
             .and_then(|p| p.pipeline(program, format))
             .ok_or_else(|| missing("a row pipeline"))
     }
+}
+
+/// The lamp of a `dirty` entry.
+fn built(lights: &[RowLight], i: u32) -> RowLight {
+    lights[(i / SUPPORTS) as usize].support(i % SUPPORTS)
 }
 
 fn row_mask<'a>(s: &'a ShadowMaps<'a>) -> RowMask<'a> {

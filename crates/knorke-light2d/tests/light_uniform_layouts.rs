@@ -19,6 +19,7 @@ use knorke_light2d::light_program::LIGHT_PROGRAMS;
 use knorke_light2d::lighting::{
     DirectionalParams, LightPassParams, LightSurfacePassParams, SurfaceParams, SurfaceShadowParams,
 };
+use knorke_light2d::pattern_occluders::{GpuPattern, GpuPatternObstacle, PatternParams};
 use knorke_light2d::rows::{RowBuildParams, RowEdgeParams, RowLamp, RowLookupParams};
 
 /// `(HLSL member, Rust offset, Rust size)`; members named `Pad` are padding.
@@ -149,19 +150,39 @@ const ROW_LOOKUP: Layout = &[
     f!(RowLookupParams, "Domain", domain, 4),
     f!(RowLookupParams, "WorldFromMask", world_from_mask, 4),
 ];
+/// Chiaro's pattern records and block, which the row programs read too.
+const PATTERN_PARAMS: Layout = &[
+    f!(PatternParams, "PatternMaskToWorldX", mask_to_world_x, 4),
+    f!(PatternParams, "PatternMaskToWorldY", mask_to_world_y, 4),
+    f!(PatternParams, "PatternAtlasSize", atlas_size, 4),
+];
+const PATTERN: Layout = &[
+    f!(GpuPattern, "rect", rect, 4),
+    f!(GpuPattern, "mean", mean, 4),
+    f!(GpuPattern, "repeat", repeat, 4),
+];
+const PATTERN_OBSTACLE: Layout = &[
+    f!(GpuPatternObstacle, "kind", kind, 4),
+    f!(GpuPatternObstacle, "transform", transform, 4),
+    f!(GpuPatternObstacle, "shape", shape, 4),
+    f!(GpuPatternObstacle, "heights", heights, 4),
+    f!(GpuPatternObstacle, "data", data, 4),
+    f!(GpuPatternObstacle, "table", table, 4),
+];
 /// The row programs (`rows::gpu`), with the reference program of the tests.
-const ROW_SHADERS: [&str; 7] = [
+const ROW_SHADERS: [&str; 8] = [
     "lightrow.vert",
     "lightrow_build.frag",
     "lightrow_edge.frag",
     "lightrow_light.frag",
     "lightrow_light_exact.frag",
     "lightrow_light_direction.frag",
+    "lightrow_pattern.frag",
     "lightrow_truth.frag",
 ];
 
 /// SPIR-V struct name, Rust layout, Rust size in bytes.
-const STRUCTS: [(&str, Layout, usize); 12] = [
+const STRUCTS: [(&str, Layout, usize); 15] = [
     ("RowLamp", ROW_LAMP, size_of::<RowLamp>()),
     (
         "type.LightRowPass",
@@ -197,6 +218,17 @@ const STRUCTS: [(&str, Layout, usize); 12] = [
         "type.DirectionalParams",
         DIRECTIONAL,
         size_of::<DirectionalParams>(),
+    ),
+    (
+        "type.PatternParams",
+        PATTERN_PARAMS,
+        size_of::<PatternParams>(),
+    ),
+    ("GpuPattern", PATTERN, size_of::<GpuPattern>()),
+    (
+        "GpuPatternObstacle",
+        PATTERN_OBSTACLE,
+        size_of::<GpuPatternObstacle>(),
     ),
 ];
 
