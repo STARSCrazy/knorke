@@ -844,12 +844,13 @@ fn light_rows_against_chiaro_and_the_reference() {
 /// The cameras of the sun case and the most the sun map may differ from the reference there
 /// (mean of 255, percent of the pixels over 8): what was measured plus a tenth. Camera B is
 /// moved by a fraction of a pixel, so the mask lies differently under the pixels. Measured on
-/// 2026-11-26 (Vulkan, RX 6700 XT): A map 0.0435 / 0.178 (today 0.0763 / 0.321), B map
-/// 0.0280 / 0.122 (today 0.0638 / 0.291). Timed on A (240 frames, 5 runs, release): today
-/// 192 us, map kept 102 us, map built every frame 1042 us.
+/// 2026-11-26 (Vulkan, RX 6700 XT), the map's lattice fixed in the world: A map 0.0413 / 0.176
+/// (today 0.0763 / 0.321), B map 0.0284 / 0.120 (today 0.0638 / 0.291). Timed on A (240 frames,
+/// 5 runs, release): today 180 us, map kept 100 us, map built every frame 1077 us; scrolling one
+/// mask texel a frame today 238 us, map 162 us (+x) and 166 us (-x).
 const SUN_CAMERAS: [(&str, [f32; 2], f64, f64); 2] = [
-    ("A", [18.0, 14.0], 0.048, 0.196),
-    ("B", [18.037, 14.021], 0.031, 0.134),
+    ("A", [18.0, 14.0], 0.046, 0.194),
+    ("B", [18.037, 14.021], 0.032, 0.132),
 ];
 
 /// Radians the moon of the timed case "maps rebuilt" turns to and fro between frames.
@@ -861,7 +862,8 @@ const TURN: f32 = 0.002;
 /// (`lightrow_sun_truth.frag`), on both [`SUN_CAMERAS`]. The map must be closer to the reference
 /// than today's light. `KNORKE_PROBE_OUT` writes `sonne_<camera>_{heute,neu,wahr}.png`, the
 /// differences times 8 and `sonne.txt`; with `KNORKE_PROBE_FRAMES` camera A times today, the
-/// rows with the map kept and with the map built every frame (the moon turning).
+/// rows with the map kept and with the map built every frame (the moon turning), and today and
+/// the map with the camera scrolling one mask texel a frame (the map updated in bands).
 #[test]
 fn sun_map_against_chiaro_and_the_reference() {
     let out: Option<PathBuf> = std::env::var("KNORKE_PROBE_OUT").ok().map(PathBuf::from);
@@ -898,6 +900,7 @@ fn sun_map_against_chiaro_and_the_reference() {
             let params = SunParams::new(
                 &sun,
                 [domain.width, domain.height],
+                MaskAnchor::compute(&projection, &domain).snapped,
                 height_tolerance(&rows.light),
                 obstacles.max_finite_top(),
             );
@@ -932,7 +935,14 @@ fn sun_map_against_chiaro_and_the_reference() {
                 let mut moving = LightStore::new();
                 let turning = moving.create(moon, &NoResources).unwrap();
                 let mut step = 0u32;
-                let mut timed: [Vec<(f64, f64)>; 3] = Default::default();
+                let mut timed: [Vec<(f64, f64)>; 6] = Default::default();
+                // The camera scrolling along x by one mask texel a frame, `sign` the way.
+                let texel = 1.0 / domain.texels_per_scene[0];
+                let scrolled = |k: usize, sign: f32| {
+                    let mut p = projection;
+                    p.origin = At::new(Vec2::new(x + sign * k as f32 * texel, y));
+                    p
+                };
                 for _ in 0..runs {
                     let t = time(frames, |wait| {
                         draw(gpu, &mut r_today, &frame(0), &stores, &today, wait);
@@ -959,11 +969,41 @@ fn sun_map_against_chiaro_and_the_reference() {
                         // Back to the resting moon, untimed.
                         draw(gpu, &mut r_rows, &frame(1), &stores, &rows, true);
                     }
-                    for (list, value) in timed.iter_mut().zip([t, rest, built]) {
+                    let mut k = 0;
+                    let today_scrolling = time(frames, |wait| {
+                        k += 1;
+                        let p = scrolled(k, 1.0);
+                        let f = layers.frame(targets[0].texture_ref(), &p, LayerSet::NONE);
+                        draw(gpu, &mut r_today, &f, &stores, &today, wait);
+                    });
+                    draw(gpu, &mut r_today, &frame(0), &stores, &today, true);
+                    let mut scroll = |sign: f32| {
+                        let mut k = 0;
+                        let timed = time(frames, |wait| {
+                            k += 1;
+                            let p = scrolled(k, sign);
+                            let f = layers.frame(targets[1].texture_ref(), &p, LayerSet::NONE);
+                            let r = draw(gpu, &mut r_rows, &f, &stores, &rows, wait).lighting;
+                            assert_eq!((r.row_suns, r.suns_built, r.suns_updated), (1, 0, 1));
+                        });
+                        // Back, untimed (a jump that far builds the map whole).
+                        draw(gpu, &mut r_rows, &frame(1), &stores, &rows, true);
+                        timed
+                    };
+                    let (ahead, back) = (scroll(1.0), scroll(-1.0));
+                    let all = [t, rest, built, today_scrolling, ahead, back];
+                    for (list, value) in timed.iter_mut().zip(all) {
                         list.push(value);
                     }
                 }
-                let cases = ["today", "map kept", "map built every frame"];
+                let cases = [
+                    "today",
+                    "map kept",
+                    "map built every frame",
+                    "today scrolling",
+                    "map scrolling +x",
+                    "map scrolling -x",
+                ];
                 for (case, list) in cases.into_iter().zip(&timed) {
                     let _ = writeln!(report, "{}", summary("sonne", case, list));
                 }

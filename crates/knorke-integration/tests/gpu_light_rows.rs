@@ -588,29 +588,36 @@ fn a_sprite_mask_casts_row_shadows() {
     });
 }
 
-/// A row is built when its lamp or the mask in its reach changed, and not otherwise; whatever
-/// was kept, the picture is that of a plan that builds every row.
+/// A row is built when its lamp or the mask in its reach changed, and not otherwise; the moon's
+/// map whole when the moon turns, in part (the texels whose rays reach the change) when an
+/// obstacle moves or the camera pans by whole mask texels. Whatever was kept, the picture is
+/// that of a plan that builds every row and map.
 #[test]
 fn rows_are_built_only_when_lamp_or_mask_change() {
     with_chiaro_pack(|gpu, pack| {
         iso_night::with_demo("hard", 44, "", |demo| {
             demo.with_frames(gpu, pack, &with_rows, &mut |f| {
                 drop_patterns(&mut f.scene);
+                // Rows built, sun maps built whole, sun maps updated, sun map texels drawn.
                 let check = |f: &mut DemoFrames<'_, '_>, what: &str| {
                     let (pixels, record) = f.frame();
-                    let (built, suns) = (record.lighting.rows_built, record.lighting.suns_built);
-                    assert_eq!(record.lighting.row_suns, 1, "{what}: the moon has a map");
+                    let l = record.lighting;
+                    assert_eq!(l.row_suns, 1, "{what}: the moon has a map");
                     let (max, _, share) = diff(&pixels, &f.fresh_frame(pack));
                     eprintln!(
-                        "{what}: {built} rows and {suns} sun maps built; against a new plan: \
-                         largest difference {max}/255, {share:.3} % of the pixels"
+                        "{what}: {} rows built, sun map {} whole / {} in part, {} texels; \
+                         against a new plan: largest difference {max}/255, {share:.3} % of the \
+                         pixels",
+                        l.rows_built, l.suns_built, l.suns_updated, l.sun_texels
                     );
-                    (built, suns, max)
+                    assert_eq!(max, 0, "{what}");
+                    (l.rows_built, l.suns_built, l.suns_updated, l.sun_texels)
                 };
+                let rest = (0, 0, 0, 0);
 
-                let (all, suns, max) = check(f, "first frame");
-                assert!(all > 1 && suns == 1 && max == 0);
-                assert_eq!(check(f, "resting"), (0, 0, 0));
+                let (all, suns, _, whole) = check(f, "first frame");
+                assert!(all > 1 && suns == 1 && whole > 0);
+                assert_eq!(check(f, "resting"), rest);
                 let stats = f.renderer.plan().stats();
                 assert_eq!((stats.rows_built, stats.suns_built), (u64::from(all), 1));
 
@@ -625,8 +632,8 @@ fn rows_are_built_only_when_lamp_or_mask_change() {
                     .unwrap();
                 let moved = At::new(at.0.raw() + Vec2::new(0.3, 0.0));
                 f.scene.lights.set_position(id, moved, at.1).unwrap();
-                assert_eq!(check(f, "one lamp moved"), (1, 0, 0));
-                assert_eq!(check(f, "resting"), (0, 0, 0));
+                assert_eq!(check(f, "one lamp moved"), (1, 0, 0, 0));
+                assert_eq!(check(f, "resting"), rest);
 
                 // The moon turns a little: its map, no row.
                 let moon = *(f.scene.light_ids.iter())
@@ -635,11 +642,11 @@ fn rows_are_built_only_when_lamp_or_mask_change() {
                 f.scene.change_light(moon, |d| {
                     d.direction = (d.direction + Vec3::new(0.02, 0.0, 0.0)).normalize_or_zero();
                 });
-                assert_eq!(check(f, "the moon turned"), (0, 1, 0));
-                assert_eq!(check(f, "resting"), (0, 0, 0));
+                assert_eq!(check(f, "the moon turned"), (0, 1, 0, whole));
+                assert_eq!(check(f, "resting"), rest);
 
                 // One dynamic obstacle (a static one redraws the whole mask): the lamps that
-                // reach its old or new place.
+                // reach its old or new place, the map texels whose rays reach it.
                 let (id, pose) = (f.scene.obstacles.iter())
                     .filter(|(_, o)| o.common.dynamic)
                     .map(|(id, o)| (id, (o.common.position, o.common.rotation)))
@@ -647,25 +654,35 @@ fn rows_are_built_only_when_lamp_or_mask_change() {
                     .unwrap();
                 let moved = At::new(pose.0.raw() + Vec2::new(0.5, 0.0));
                 f.scene.obstacles.set_transform(id, moved, pose.1).unwrap();
-                let (built, suns, max) = check(f, "one dynamic obstacle moved");
+                let (built, full, part, texels) = check(f, "one dynamic obstacle moved");
+                assert!(built >= 1 && built < all, "{built} of {all}");
                 assert!(
-                    built >= 1 && built < all && suns == 1 && max == 0,
-                    "{built} of {all}"
+                    full == 0 && part == 1 && texels < whole / 4,
+                    "{texels} of {whole}"
                 );
-                assert_eq!(check(f, "resting"), (0, 0, 0));
+                assert_eq!(check(f, "resting"), rest);
 
                 // The camera, half a mask texel: the mask stays where it is in the world.
                 f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(1.0, 0.0));
-                assert_eq!(check(f, "camera moved half a mask texel"), (0, 0, 0));
-                // Twelve whole texels: only lamps reaching over the mask's rim see new mask; the
-                // moon's rays cross the rim always.
-                f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(23.0, 8.0));
-                let (built, suns, max) = check(f, "camera moved 12 x 4 mask texels");
-                assert!(built < all && suns == 1 && max == 0, "{built} of {all}");
-                assert_eq!(check(f, "resting"), (0, 0, 0));
+                assert_eq!(check(f, "camera moved half a mask texel"), rest);
+                // One whole texel, then twelve by four: only lamps reaching over the mask's rim
+                // see new mask; the map rebuilds the texels whose rays reach its rim strips.
+                for (what, pan) in [
+                    ("camera moved 1 mask texel", Vec2::new(1.0, 0.0)),
+                    ("camera moved 12 x 4 mask texels", Vec2::new(23.0, 8.0)),
+                ] {
+                    f.projection.origin = At::new(f.projection.origin.raw() + pan);
+                    let (built, full, part, texels) = check(f, what);
+                    assert!(built < all, "{built} of {all}");
+                    assert!(
+                        full == 0 && part == 1 && texels < whole / 2,
+                        "{texels} of {whole}"
+                    );
+                    assert_eq!(check(f, "resting"), rest);
+                }
 
                 f.renderer.plan_mut().invalidate();
-                assert_eq!(check(f, "invalidated"), (all, 1, 0));
+                assert_eq!(check(f, "invalidated"), (all, 1, 0, whole));
             });
         });
     });
