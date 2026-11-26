@@ -144,6 +144,9 @@ fn pattern_scene_matches_chiaro_through_light2d_renderer() {
     let settings = Light2dSettings {
         light: LightSettings {
             ambient: Vec3::new(0.03, 0.03, 0.04),
+            // Chiaro's light: the picture is compared with Chiaro's. The row light differs along
+            // shadow edges (2026-11-26: mean 0.085 of 255, 22 pixels over STRICT's tolerance).
+            light_rows: false,
             ..LightSettings::default()
         },
         post: PostSettings::default(),

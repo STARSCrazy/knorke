@@ -521,7 +521,7 @@ impl<'d> PassPlan<'d> {
             settings.surface_height_step,
         );
         let builds_medium = medium_map_builds(frame.medium.is_some(), stores.lights);
-        let rows = frame_suits(settings, frame.surface.is_some(), builds_medium, max_top);
+        let rows = frame_suits(settings, builds_medium, max_top);
         self.row_blockers.collect(
             rows,
             obstacles,
@@ -581,7 +581,10 @@ impl<'d> PassPlan<'d> {
         // Steps 1 and 2: occlusion (Chiaro OcclusionStage::Prepare).
         let active = obstacles.iter().any(|(_, o)| o.is_active());
         let shadows = if any_shadow_caster(&self.lights) && (active || sprite) {
-            let height_mode = obstacles.any_finite_height() || normal_mode;
+            // Rows are built from the height texture; in a flat frame without finite heights the
+            // obstacles' heights are then all infinite, and Chiaro's height programs light as the
+            // flat ones.
+            let height_mode = obstacles.any_finite_height() || normal_mode || rows;
             let mut input = MaskPlanInput::new(
                 obstacles,
                 frame.projection,

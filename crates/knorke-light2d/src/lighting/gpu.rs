@@ -700,7 +700,8 @@ impl<'d> LightingStage<'d> {
         let nearest = samplers.sampler(Filter::Nearest);
         let linear = samplers.sampler(Filter::Linear);
         let surface_texture = frame.surface.or(frame.material);
-        let surface_params = if normal_mode {
+        // The flat row light reads the projection from it too (lightrow_surface.hlsli).
+        let surface_params = if normal_mode || self.rows.frame().lights > 0 {
             SurfaceParams::new(p, w, h, frame.settings, &domain, frame.surface.is_some())
         } else {
             SurfaceParams::default()

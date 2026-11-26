@@ -448,6 +448,28 @@ fn the_hall_window_is_a_row_light() {
     });
 }
 
+/// A frame without surface and material buffer draws row lights, lit as by Chiaro's flat
+/// programs (no Lambert term); the picture differs from Chiaro's along shadow edges only. (With
+/// the material buffer alone the row light is Chiaro's surface light: `gpu_light2d_scenes`,
+/// `minimal_normal_map`, bit-identical; a soft lamp on the ground: `gate_sprite_shadow`.)
+#[test]
+fn a_frame_without_surface_buffer_draws_row_lights() {
+    with_chiaro_pack(|gpu, pack| {
+        iso_night::with_demo("hard", 44, "", |demo| {
+            demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                f.skip = LayerSet::of(Layer::Surface).with(Layer::Material);
+                let (on, off, rows) = on_and_off(f);
+                let (max, mean, share) = diff(&on, &off);
+                eprintln!(
+                    "iso_night_hard without surface buffer: {rows} row lights; against rows off:                      largest difference {max}/255, mean {mean:.4}, {share:.2} % of the pixels"
+                );
+                assert!(rows > 0, "row lights");
+                assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
+            });
+        });
+    });
+}
+
 /// The application's sprite mask (E21) casts row shadows: its heights are in the height texture
 /// the rows are built from. Squares of sprite all over the demo. Chiaro's light differs a lot
 /// here, and it is the one further off: with the same squares in `gpu_lightrow_probe`
