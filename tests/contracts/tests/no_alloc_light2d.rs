@@ -337,6 +337,9 @@ fn steady_state_light2d_paths_allocate_nothing() {
                     let lamp = RowLamp {
                         light: support.light,
                         row: [row as f32, support.size, 0.0, 0.0],
+                        mask: support.mask.unwrap_or_default(),
+                        window: support.window[0],
+                        window_v: support.window[1],
                     };
                     let _ = lamp.to_bytes();
                 }

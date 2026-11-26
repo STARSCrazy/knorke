@@ -3,7 +3,7 @@
 // radius. Consecutive texels with the same height interval are one run (rn, rf, base, top). A run is dropped if a
 // nearer run standing on the ground already blocks every slope it would block; of more than four, two pieces of one
 // split obstacle become one (`Squeeze`), else the last slot takes the hull of the rest, which can only hide too
-// much. The run the lamp stands in is skipped.
+// much. The run the lamp stands in is skipped; a window lamp's march begins at its window (`WindowStart`).
 // A partly transparent run (E25: mask opacity below kOpaqueOpacity) carries the transmittance 1 - o of its first texel,
 // as Chiaro reads o where a crossing enters (the mask's rim texels of an obstacle may hold less); it never ends the
 // march and never hides a farther run. An angle with one keeps three runs (squeezed or hulled as above), the fourth
@@ -61,6 +61,48 @@ float Entry(float2 lamp, float2 dir, float t, float stepLength)
         q = max(q, (cell.y + (dir.y < 0.0 ? 1.0 : 0.0) - lamp.y) / dir.y);
     }
     return min(q, t);
+}
+
+float Cross(float2 a, float2 b)
+{
+    return a.x * b.y - a.y * b.x;
+}
+
+// A window lamp's row (RowLamp.window, carried as i.area and i.areaMask) begins where the ray enters the window's
+// rectangle on the ground, plus the 1.5 texels by which Chiaro's ray stops short of a window (MaskShadowStop in
+// light_common.hlsli): nothing nearer the lamp counts for a place the window lights (lightrow_light.hlsli clips at
+// that place's own crossing), and an infinitely tall wall the window sits in must not end the march. An upright
+// window's rectangle is a line on the ground, met at one distance; a tilted one is met over a stretch, whose near
+// end counts. 0 without a window, or where the ray misses a tilted one; past every place a ray behind an upright
+// one reaches (the window lights none of them).
+float WindowStart(float4 window, float4 windowV, float2 dir)
+{
+    float2 c = window.xy;
+    float2 u = window.zw;
+    float2 v = windowV.xy;
+    if (dot(u, u) + dot(v, v) <= 0.0) {
+        return 0.0;
+    }
+    float area = Cross(u, v);
+    if (abs(area) < 0.25) {
+        float2 l = dot(u, u) >= dot(v, v) ? u : v;
+        float s = Cross(dir, l);
+        float q = abs(s) > 1e-6 ? Cross(c, l) / s : -1.0;
+        return q > 0.0 ? q + 1.5 : 1e30;
+    }
+    // c + a u + b v with |a|, |b| <= 1: |q k - m| <= |area| for (k, m) of a and of b.
+    float2 range = float2(0.0, 1e30);
+    float2 k = float2(Cross(dir, v), Cross(u, dir));
+    float2 m = float2(Cross(c, v), Cross(u, c));
+    for (int j = 0; j < 2; ++j) {
+        if (abs(k[j]) > 1e-6) {
+            float2 q = (m[j] + float2(-1.0, 1.0) * abs(area)) / k[j];
+            range = float2(max(range.x, min(q.x, q.y)), min(range.y, max(q.x, q.y)));
+        } else if (abs(m[j]) > abs(area)) {
+            range = float2(1.0, 0.0);
+        }
+    }
+    return range.x <= range.y ? range.x + 1.5 : 0.0;
 }
 
 float4 Hull(float4 near, float4 far)
@@ -130,8 +172,9 @@ RowOutput main(SurfaceLightVaryings i)
     float2 w = float2(dot(WorldFromMask.xy, dir), dot(WorldFromMask.zw, dir));
     int steps = min(int(i.positionRadius.w / length(w) / stepLength), kMaxSteps);
 
+    float start = WindowStart(i.area, i.areaMask, dir);
     float3 own = SampleAt(lamp);
-    bool skipping = own.y >= own.x && own.x <= zl && zl <= own.y;
+    bool skipping = start <= 0.0 && own.y >= own.x && own.x <= zl && zl <= own.y;
 
     float4 runs[kRuns];
     float pass[kRuns];
@@ -143,7 +186,7 @@ RowOutput main(SurfaceLightVaryings i)
     float3 current = kNothing;
     float begin = 0.0;
     float t = 0.0;
-    [loop] for (int s = 1; s <= steps; ++s) {
+    [loop] for (int s = max(1, int(ceil(min(start, 1e6) / stepLength))); s <= steps; ++s) {
         t = float(s) * stepLength;
         float3 here = SampleAt(lamp + dir * t);
         if (skipping) {

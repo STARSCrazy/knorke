@@ -30,7 +30,9 @@
 use crate::animation::{AnimationStore, rotate_about_z};
 use crate::area_light::{AreaEmitter, AreaKind, area_normalization, rect_across};
 use crate::gpu_light::{GpuDirectional, GpuLight, GpuMask};
-use crate::light::{Height, LightDesc, LightRef, LightType, ProfileId, ShadowFilter, StoredLight};
+use crate::light::{
+    Height, LightDesc, LightRef, LightType, MaskMode, ProfileId, ShadowFilter, StoredLight,
+};
 use crate::light_mask::{make_gpu_mask, make_mask_placement};
 use crate::light_math::{
     NEAR_FIELD_SHARE, SceneQuad, flicker_noise, ground_radius, light_quad, quad_intersects_scene,
@@ -199,7 +201,8 @@ pub struct LightList {
     pub rows: Vec<RowLight>,
     /// Rows the entries of `rows` need ([`RowLight::rows`]); 0: none casts shadows.
     pub row_shadows: u32,
-    /// Visible masked lights (`masked_ordered.len()`).
+    /// Visible masked lights: `masked_ordered.len()` and the masked entries of `rows` (they
+    /// read the mask atlas too).
     pub masked_lights: u32,
     /// `mask_atlas_blocks` of the mask store when the list was made (the `GpuMask` atlas v).
     pub mask_blocks: u32,
@@ -656,6 +659,7 @@ pub fn collect_lights(
                 Some(g) => gpu_mask = Some(g),
                 None => continue,
             }
+            out.masked_lights += 1;
         }
         let auto_height = d.height == Height::Auto;
         if modes.normal_mode && !auto_height && z <= 0.0 {
@@ -667,6 +671,7 @@ pub fn collect_lights(
         let stored: &StoredLight = &animated.stored;
         g.spot_cos[2] = ground; // half extent of the quad
         out.profiled_lights += u32::from(profiled);
+        let mut window = [[0.0; 4]; 2];
         if d.cast_shadows {
             // The ray runs in the mask (ground plane) from the pixel to the ground point of the
             // light; with heights (E22) it rises to the height of the light, `position_radius[2]`,
@@ -678,18 +683,25 @@ pub fn collect_lights(
             }
             g.shadow[2] = mask.x - anchor.remainder[0];
             g.shadow[3] = mask.y - anchor.remainder[1];
+            // The ground image of a world vector in mask texels.
+            let to_mask = |x: f32, y: f32| {
+                [
+                    (x * projection.x_axis.x + y * projection.y_axis.x) * tx,
+                    (x * projection.x_axis.y + y * projection.y_axis.y) * ty,
+                ]
+            };
             if area {
-                // The ground images of U and V in mask texels: the ray of a pixel ends at
-                // `shadow.zw + t U + s V`.
-                let to_mask = |x: f32, y: f32| {
-                    [
-                        (x * projection.x_axis.x + y * projection.y_axis.x) * tx,
-                        (x * projection.x_axis.y + y * projection.y_axis.y) * ty,
-                    ]
-                };
+                // The ray of a pixel ends at `shadow.zw + t U + s V`.
                 let [ux, uy] = to_mask(stored.axis.x, stored.axis.y);
                 let [vx, vy] = to_mask(across.x, across.y);
                 g.area_mask = [ux, uy, vx, vy];
+            }
+            if gpu_mask.is_some() && d.mask_mode == MaskMode::Window {
+                let p = d.position.raw();
+                let [cx, cy] = to_mask(d.mask_center.x - p.x, d.mask_center.y - p.y);
+                let [ux, uy] = to_mask(d.mask_u.x, d.mask_u.y);
+                let [vx, vy] = to_mask(d.mask_v.x, d.mask_v.y);
+                window = [[cx, cy, ux, uy], [vx, vy, 0.0, 0.0]];
             }
         }
         if modes.rows {
@@ -699,6 +711,8 @@ pub fn collect_lights(
                 shadowed: d.cast_shadows,
                 reach: row_space.reach(d.radius + row_span(&g)),
                 size: d.source_radius,
+                mask: gpu_mask,
+                window,
             };
             // Beyond the atlas's rows, or reaching a blocker (from the emitter's middle, as far
             // as its support points' rows), a shadowed light stays with Chiaro's programs.
@@ -720,7 +734,6 @@ pub fn collect_lights(
             Casters::All
         };
         if let Some(mask) = gpu_mask {
-            out.masked_lights += 1;
             out.masked_ordered.push(g, mask);
             if let Some(i) = casters.filter_index() {
                 out.masked_filtered[i].push(g, mask);

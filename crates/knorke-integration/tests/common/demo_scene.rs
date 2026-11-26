@@ -353,6 +353,14 @@ impl Scene {
             ..SceneStores::new(&self.lights, &self.obstacles)
         }
     }
+
+    /// Changes light `id` with `change`.
+    pub(crate) fn change_light(&mut self, id: LightId, change: impl FnOnce(&mut LightDesc)) {
+        let mut d = self.lights.get(id).unwrap().clone();
+        change(&mut d);
+        let res = StoreResources::new(&self.animations, &self.masks).with_profiles(&self.profiles);
+        self.lights.update(id, &d, &res).unwrap();
+    }
 }
 
 /// A `CHI_LightDesc` line as a [`LightDesc`].

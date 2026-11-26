@@ -6,13 +6,17 @@
 #define KNORKE_LIGHTROW_HLSLI
 
 #include "light_common.hlsli"
+#include "light_mask.hlsli" // GpuMask; the atlas only where CHI_MASK_SLOT is defined
 #include "surface.hlsli"
 
-// `RowLamp` of knorke-light2d: Chiaro's light record and where its row lies.
+// `RowLamp` of knorke-light2d: Chiaro's light record, where its row lies and its mask.
 struct RowLamp
 {
     GpuLight light;
     float4 row; // x the lamp's row in the row atlas, -1 = casts no shadow; y source radius in world units
+    GpuMask mask; // read by the `_mask` programs only (masked point and spot lights)
+    float4 window;  // a window mask's rectangle on the ground in mask texels from the lamp's ground point: xy its
+    float4 windowV; // middle, zw and windowV.xy its half sides; zero without. The row build begins there.
 };
 // A line or rect light's light.profile holds the rows of its support points (Chiaro's area light reads no profile).
 

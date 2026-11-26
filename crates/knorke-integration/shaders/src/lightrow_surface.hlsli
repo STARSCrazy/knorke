@@ -36,6 +36,7 @@ cbuffer LookupParams : register(b1, space3)
 
 // A point of a line or rect light's emitter at emitter coordinates ts (t along U, s along V): its ground point in
 // mask texels and its height. Chiaro's ray ends at the nearest such point (ShadowTarget in light_common.hlsli).
+#ifndef CHI_POINT_LIGHTS
 void EmitterPoint(SurfaceLightVaryings l, float2 ts, out float2 ground, out float zl)
 {
     LightParams p = CHI_LIGHT_PARAMS(l);
@@ -43,11 +44,16 @@ void EmitterPoint(SurfaceLightVaryings l, float2 ts, out float2 ground, out floa
     ground = ROW_GROUND(l) + ts.x * l.areaMask.xy + ts.y * l.areaMask.zw;
     zl = ROW_HEIGHT(l) + ts.x * l.area.z + ts.y * v.z;
 }
+#endif
 
-// Share of the lamp the place `start` (mask texels) at height z sees, r > 0 texels from the lamp's ground point.
-float Sight(SurfaceLightVaryings i, float2 start, float z, float r);
+// Share of the lamp the place `start` (mask texels) at height z sees, r > 0 texels from the lamp's ground point;
+// nothing nearer the lamp than `from` texels counts.
+float Sight(SurfaceLightVaryings i, float2 start, float z, float r, float from);
 
-float Visibility(SurfaceLightVaryings i, Surface s)
+// maskT: the share of the way from the lamp at which the ray passes a window mask, 0 without one (a projector
+// mask, no mask). Chiaro's ray then ends there and stops 1.5 texels before it (MaskShadowStop in
+// light_common.hlsli); the receiver rule looks toward the window.
+float Visibility(SurfaceLightVaryings i, Surface s, float maskT)
 {
     if (ROW_SLOT(i) < 0.0) {
         return 1.0; // the lamp casts no shadow; mask and heights are stand-ins then
@@ -58,13 +64,18 @@ float Visibility(SurfaceLightVaryings i, Surface s)
     // Receiver rule: a ground pixel on an obstacle that stands on the ground is lit as if nothing occluded it.
     if (!s.present && ReceiverInObstacle(Mask, MaskSampler, start, Domain.xy)
         && 0.0 >= -FetchTexel(Heights, HeightSampler, int2(floor(start)), 1.0 / Domain.xy).r) {
-        return ExemptVisibility(Mask, MaskSampler, start, ROW_GROUND(i), Domain.xy);
+        return ExemptVisibility(Mask, MaskSampler, start, lerp(ROW_GROUND(i), start, maskT), Domain.xy);
     }
     float r = length(start - ROW_GROUND(i));
-    return r < 1e-3 ? 1.0 : Sight(i, start, z, r);
+    float from = maskT > 0.0 ? maskT * r + 1.5 : 0.0;
+    return r < 1e-3 ? 1.0 : Sight(i, start, z, r, from);
 }
 
-#define CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest) Visibility(i, s)
+#ifdef CHI_LIGHT_MASK // maskT: a local of the bodies in surface_light.hlsli
+#define CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest) Visibility(i, s, maskT)
+#else
+#define CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest) Visibility(i, s, 0.0)
+#endif
 #include "surface_light.hlsli"
 
 #endif

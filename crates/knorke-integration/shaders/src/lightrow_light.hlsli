@@ -10,12 +10,20 @@
 // pixel's ray there takes the place of the run's transmittance (lightrow_pattern.hlsli), as Chiaro's crossing.
 // lightrow_light.frag, lightrow_light_exact.frag and lightrow_light_direction.frag are this file for the three
 // target layouts of the light pass (surface_light.hlsli).
+// The *_mask programs (CHI_LIGHT_MASK with CHI_POINT_LIGHTS, masked point and spot lights) multiply by the mask as
+// Chiaro's (surface_light.hlsli); a window mask's ray ends at the window: the runs nearer the lamp than the window
+// do not count (`Clip`). The lamp keeps its size, as Chiaro's ray to the window keeps the angle of the lamp's.
 // The profile atlas after all other samplers, as in Chiaro's light_sdf_surface.frag: a lamp without a profile does
-// not read it (profile.hlsli).
+// not read it (profile.hlsli); the mask atlas after the pattern resources.
 #ifdef CHI_MATERIAL_EXACT
 #define CHI_PROFILE_SLOT 8
 #else
 #define CHI_PROFILE_SLOT 7
+#endif
+#if defined(CHI_LIGHT_MASK) && defined(CHI_MATERIAL_EXACT)
+#define CHI_MASK_SLOT 11
+#elif defined(CHI_LIGHT_MASK)
+#define CHI_MASK_SLOT 10
 #endif
 #include "lightrow_surface.hlsli"
 
@@ -32,7 +40,12 @@ SamplerState EdgeSecondSampler : register(s6, space2); // nearest
 // crossings of the pattern pass, Chiaro's pattern atlas, the records and the polygon corners (`Through`).
 #include "lightrow_pattern.hlsli"
 #define ROW_PATTERN_RESOURCES(cross, atlas, obstacles, patterns, data)                                         Texture2D<float4> RowCross : register(t##cross, space2);                                               SamplerState RowCrossSampler : register(s##cross, space2);                                             Texture2D<float4> PatternAtlas : register(t##atlas, space2);                                           SamplerState PatternAtlasSampler : register(s##atlas, space2);                                         StructuredBuffer<GpuPatternObstacle> PatternObstacles : register(t##obstacles, space2);                StructuredBuffer<GpuPattern> Patterns : register(t##patterns, space2); StructuredBuffer<uint> PatternData : register(t##data, space2);
-#ifdef CHI_MATERIAL_EXACT
+// The storage buffers follow all samplers, the mask atlas too.
+#if defined(CHI_LIGHT_MASK) && defined(CHI_MATERIAL_EXACT)
+ROW_PATTERN_RESOURCES(9, 10, 12, 13, 14)
+#elif defined(CHI_LIGHT_MASK)
+ROW_PATTERN_RESOURCES(8, 9, 11, 12, 13)
+#elif defined(CHI_MATERIAL_EXACT)
 ROW_PATTERN_RESOURCES(9, 10, 11, 12, 13)
 #else
 ROW_PATTERN_RESOURCES(8, 9, 10, 11, 12)
@@ -84,6 +97,20 @@ float2 Hidden(float4 run, float z, float r)
     float2 from = (run.z - z * q) / (1.0 - q);
     float2 to = (run.w - RowSize.w - z * q) / (1.0 - q);
     return float2(min(from.x, from.y), max(to.x, to.y));
+}
+
+// A window mask's ray ends `from` texels from the lamp (0: at the lamp): the part of a run nearer the lamp does not
+// count, a run wholly nearer is an empty slot.
+float4 Clip(float4 run, float from)
+{
+    return run.y <= from ? float4(0.0, 0.0, 0.0, 0.0) : float4(max(run.x, from), run.yzw);
+}
+
+void ClipRuns(inout float4 runs[kRuns], float from)
+{
+    for (int k = 0; k < kRuns; ++k) {
+        runs[k] = Clip(runs[k], from);
+    }
 }
 
 // What the blocking runs let through: all of them (`hard`), or the partly transparent ones only. A run with a
@@ -176,7 +203,7 @@ float Half(float reach[kRuns], float share[kRuns], float begin, float other, flo
 // The lit part of a lamp with a size: one minus the part of its square the runs hide together. The row's four runs
 // reach as far across as the edge pass counted; the nearest run of the angles to the left and to the right that
 // this angle does not hold begins where it was found.
-float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, float r)
+float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, float r, float from)
 {
     float zl = ROW_HEIGHT(l);
     float size = ROW_SIZE(l);
@@ -187,6 +214,7 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
     float4 runs[kRuns];
     float4 pass;
     Runs(a, ROW_SLOT(l), runs, pass);
+    ClipRuns(runs, from);
     float through = Through(runs, pass, Crossings(a, ROW_SLOT(l), pass), ROW_GROUND(l), toPlace / r, zl, (zl - z) / r,
                             r, false);
     OpaqueOnly(runs, pass);
@@ -223,13 +251,13 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
         float2 middle = float2(0.5, 0.5);
         if (away.x > 0.0) {
             float2 angles = float2(-kFar, (1.0 - away.x - f) * angle);
-            float3 part = Part(UnpackRun(second.xy), angles, middle, zl, size, wide, z, r);
+            float3 part = Part(Clip(UnpackRun(second.xy), from), angles, middle, zl, size, wide, z, r);
             begin.x = -part.y;
             other.x = part.z;
         }
         if (away.y > 0.0) {
             float2 angles = float2((away.y - f) * angle, kFar);
-            float3 part = Part(UnpackRun(second.zw), angles, middle, zl, size, wide, z, r);
+            float3 part = Part(Clip(UnpackRun(second.zw), from), angles, middle, zl, size, wide, z, r);
             begin.y = part.x;
             other.y = part.z;
         }
@@ -248,7 +276,7 @@ static const float2 kSupports[2][4] = {
     {float2(-0.5, -0.5), float2(0.5, -0.5), float2(-0.5, 0.5), float2(0.5, 0.5)},
 };
 
-float HardSight(float2 ground, float zl, float row, float2 start, float z)
+float HardSight(float2 ground, float zl, float row, float2 start, float z, float from)
 {
     float2 d = start - ground;
     float r = length(d);
@@ -259,11 +287,13 @@ float HardSight(float2 ground, float zl, float row, float2 start, float z)
     float4 runs[kRuns];
     float4 pass;
     Runs(a, row, runs, pass);
+    ClipRuns(runs, from);
     return Through(runs, pass, Crossings(a, row, pass), ground, d / r, zl, (zl - z) / r, r, true);
 }
 
-float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
+float Sight(SurfaceLightVaryings l, float2 start, float z, float r, float from)
 {
+#ifndef CHI_POINT_LIGHTS
     if (l.directionType.w > 1.5) {
         int rect = l.directionType.w > 2.5 ? 1 : 0;
         float sum = 0.0;
@@ -271,14 +301,15 @@ float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
             float2 ground;
             float zl;
             EmitterPoint(l, kSupports[rect][k], ground, zl);
-            sum += HardSight(ground, zl, l.profile[k], start, z);
+            sum += HardSight(ground, zl, l.profile[k], start, z, 0.0);
         }
         return sum * 0.25;
     }
+#endif
     float2 d = start - ROW_GROUND(l);
     float turn = frac(atan2(d.y, d.x) / kTwoPi) * RowSize.x; // texel a holds the ray at a + 0.5
     if (ROW_SIZE(l) > 0.0) {
-        return SoftSight(l, d, turn, z, r);
+        return SoftSight(l, d, turn, z, r, from);
     }
-    return HardSight(ROW_GROUND(l), ROW_HEIGHT(l), ROW_SLOT(l), start, z);
+    return HardSight(ROW_GROUND(l), ROW_HEIGHT(l), ROW_SLOT(l), start, z, from);
 }
