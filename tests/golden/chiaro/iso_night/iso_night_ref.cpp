@@ -1,4 +1,5 @@
-// iso_night reference (Knorke Chiaro port): the scene of examples/iso_night_demo of Chiaro @ 9bc5b9b at --time 5,
+// iso_night reference (Knorke Chiaro port): the scene of examples/iso_night_demo of Chiaro @ 9bc5b9b (plus the one
+// Scene.cpp fix below) at --time 5,
 // in the five variants of the P3 goldens, rendered once like the demo's --screenshot frame:
 //   plain: --no-heights --no-surface --no-haze --no-fog --no-moon-shadows      hard: --hard --no-haze
 //   t5: no arguments      cutaway: --cutaway      grade_crt: --grade look --crt subtle --dither
@@ -9,7 +10,9 @@
 // surface.rgba, medium.rgba), the eight fog puff shapes (puffs.rgba, 128x1024, variant k in rows 128k ...) and
 // frame.rgba (the 1280x720 R8G8B8A8_UNORM frame, compared with tests/golden/chiaro/iso_night_<variant>.png outside
 // the HUD rect).
-// The demo's Scene.cpp is compiled into this file unchanged, straight from the Chiaro tree; `private` is opened
+// The demo's Scene.cpp is compiled into this file straight from the Chiaro tree: 9bc5b9b with one fix in
+// PatternSheet(), `closed = x < 2;` instead of `closed = x >= 2;` (the slat column at u = 0 is drawn as a slat, so it
+// must block; it let light pass before), committed in Chiaro as e8a149a. `private` is opened
 // for it to read the scene's descs. main() repeats what the demo's main.cpp sets up for these variants; change
 // both together. The HUD overlay is left out: the golden is compared outside its rect (manifest.toml).
 // Build (MSVC x64, against an out-of-tree Chiaro 9bc5b9b build <b>), from a directory outside the repo:

@@ -469,11 +469,11 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 
 /// Most the rows may differ from the reference per scene (mean of 255, percent of the pixels
 /// over 8): what was measured on 2026-11-26 (Vulkan, RX 6700 XT) plus a tenth. Measured:
-/// 0.348 / 0.66, 0.640 / 1.60, 0.631 / 2.31, 0.869 / 3.03; today's light 0.921 / 1.74,
-/// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24; "hart halb", the fences as 50 % walls: 0.314 / 1.25,
+/// 0.348 / 0.66, 0.626 / 1.59, 0.631 / 2.31, 0.856 / 3.03; today's light 0.921 / 1.74,
+/// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24; "hart halb", the fences as 50 % walls: 0.250 / 0.88,
 /// today 0.724 / 2.56; "flächen" 0.002 / 0.01, today 0.020 / 0.11 (bound rounded up: a tenth of
 /// so little is below what a driver may change); "zaun", the fences with their patterns, hard
-/// 0.675 / 1.53, today 0.994 / 2.10, soft 1.477 / 5.70, today 2.269 / 8.49.
+/// 0.554 / 1.25, today 1.004 / 2.06, soft 1.395 / 5.62, today 2.228 / 8.55.
 const BOUNDS: [(&str, f64, f64); 9] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
