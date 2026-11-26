@@ -4,6 +4,13 @@
 // A lamp with a size reads two more texels, written by lightrow_edge.frag, and is soft along and across the ray.
 // lightrow_light.frag, lightrow_light_exact.frag and lightrow_light_direction.frag are this file for the three
 // target layouts of the light pass (surface_light.hlsli).
+// The profile atlas after all other samplers, as in Chiaro's light_sdf_surface.frag: a lamp without a profile does
+// not read it (profile.hlsli).
+#ifdef CHI_MATERIAL_EXACT
+#define CHI_PROFILE_SLOT 8
+#else
+#define CHI_PROFILE_SLOT 7
+#endif
 #include "lightrow_surface.hlsli"
 
 Texture2D<float4> RowFirst : register(t3, space2);

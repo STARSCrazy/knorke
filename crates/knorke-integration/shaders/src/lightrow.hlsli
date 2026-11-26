@@ -16,12 +16,12 @@ struct RowLamp
     float4 row; // x the lamp's row in the row atlas, -1 = casts no shadow; y source radius in world units
 };
 
-// Every row program takes Chiaro's surface light varyings (lightrow.vert). The row programs have no profiles, so
-// `profile` carries RowLamp.row instead.
-#define ROW_SLOT(i) i.profile.x
-#define ROW_SIZE(i) i.profile.y
-#define ROW_GROUND(i) i.shadow.zw // the lamp's ground point in mask texels
-#define ROW_HEIGHT(i) i.shadow.y  // the lamp's height
+// Every row program takes Chiaro's surface light varyings (lightrow.vert). Their `shadow.xy` are Chiaro's source
+// radius in mask texels and a copy of the height, neither read by the row programs, so they carry RowLamp.row.
+#define ROW_SLOT(i) i.shadow.x
+#define ROW_SIZE(i) i.shadow.y
+#define ROW_GROUND(i) i.shadow.zw        // the lamp's ground point in mask texels
+#define ROW_HEIGHT(i) i.positionRadius.z // the lamp's height
 
 static const float kTwoPi = 6.28318530718;
 static const int kRuns = 4;                // runs kept per angle

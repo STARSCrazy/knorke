@@ -135,13 +135,12 @@ fn touches(list: &DirtyRectList, ground: [f32; 2], reach: f32) -> bool {
 }
 
 /// Whether a light can be a row light in a frame [`frame_suits`] accepts: a point or spot light
-/// without profile and mask; if it casts shadows also without a caster filter (E53: a row is
+/// without mask; if it casts shadows also without a caster filter (E53: a row is
 /// built from the mask of all casters), not marked `inside_obstacle` (E147: the row skips only
 /// the obstacle a lamp's height lies in) and with a reach of at most [`MAX_REACH`] mask texels.
-/// Animation, flicker and a turning cone change nothing a row holds.
+/// Animation, flicker, a turning cone and a profile change nothing a row holds.
 pub fn light_suits(d: &LightDesc, reach: f32) -> bool {
     matches!(d.kind, LightType::Point | LightType::Spot)
-        && d.profile.is_none()
         && d.mask.is_none()
         && (!d.cast_shadows
             || (d.shadow_filter == ShadowFilter::All && !d.inside_obstacle && reach <= MAX_REACH))
@@ -543,6 +542,14 @@ mod tests {
             ..point.clone()
         };
         assert!(light_suits(&spot, 100.0), "flicker changes brightness only");
+        let profiled = LightDesc {
+            profile: crate::light::ProfileId::from_bits(1 << 32),
+            ..point.clone()
+        };
+        assert!(
+            profiled.profile.is_some() && light_suits(&profiled, 100.0),
+            "profile"
+        );
         for kind in [LightType::Line, LightType::Rect, LightType::Directional] {
             assert!(!light_suits(
                 &LightDesc {

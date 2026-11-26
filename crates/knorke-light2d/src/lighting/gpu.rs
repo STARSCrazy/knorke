@@ -462,7 +462,10 @@ impl<'d> LightingStage<'d> {
             self.lights
                 .reserve(u64::from(count) * GpuLight::SIZE as u64)?;
         }
-        if count > 0 && list.profiled_lights > 0 && frame.profile_atlas.is_none() {
+        if (count > 0 || !list.rows.is_empty())
+            && list.profiled_lights > 0
+            && frame.profile_atlas.is_none()
+        {
             return Err(atlas_missing("profiled lights without a profile atlas"));
         }
         let masked = draws.masked();

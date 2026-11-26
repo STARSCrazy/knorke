@@ -94,8 +94,8 @@ fn the_plain_variant_draws_row_lights() {
     });
 }
 
-/// Without obstacles a row light is Chiaro's light: the same falloff, cone, Lambert term,
-/// highlight, wet ground and direction sample into the same targets, in all three material
+/// Without obstacles a row light is Chiaro's light: the same falloff, cone, profile, Lambert
+/// term, highlight, wet ground and direction sample into the same targets, in all three material
 /// modes. Next to Chiaro's lights only the order of the additive draws differs (the row lights
 /// come last), which moves a 16-bit float sum by a rounding; with the row lights alone the
 /// order is the same and so is every bit.
@@ -150,7 +150,7 @@ fn row_lights_equal_chiaro_lights_without_obstacles() {
                         for &id in &f.scene.light_ids {
                             let other = f.scene.lights.get(id).is_ok_and(|d| {
                                 let point = matches!(d.kind, LightType::Point | LightType::Spot);
-                                !point || d.profile.is_some() || d.mask.is_some()
+                                !point || d.mask.is_some()
                             });
                             if other {
                                 f.scene.lights.destroy(id).unwrap();
@@ -170,7 +170,10 @@ fn row_lights_equal_chiaro_lights_without_obstacles() {
                          row lights, largest difference {max}/255, mean {mean:.5}, {share:.3} % \
                          of the pixels"
                     );
-                    assert!(rows > 0);
+                    let profiled = (f.renderer.plan().lights().rows.iter())
+                        .filter(|l| l.light.profile[0] >= 0.0)
+                        .count();
+                    assert!(rows > 0 && profiled > 0, "{profiled} profiled row lights");
                     // The direction sums are divided in the composite, which doubles a rounding.
                     let bound = if alone { 0 } else { 2 };
                     assert!(max <= bound, "{mode}: {max}/255");

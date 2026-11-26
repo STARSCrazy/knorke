@@ -373,14 +373,15 @@ impl<'d> RowLights<'d> {
         }
         let nearest = samplers.sampler(Filter::Nearest);
         // What a frame does not have is not read: the scene stands in (lamps without a row
-        // return before the mask, lamps without a size before the edges).
+        // return before the mask, lamps without a size before the edges, lamps without a
+        // profile before the profile atlas).
         let stand_in = frame.scene;
         let shadows = frame.shadows.filter(|s| s.height_mode);
         let rows = self.rows[0].texture_ref().zip(self.rows[1].texture_ref());
         let edges = self.edges[0].texture_ref().zip(self.edges[1].texture_ref());
         let (row0, row1) = rows.unwrap_or((stand_in, stand_in));
         let (edge0, edge1) = edges.unwrap_or((stand_in, stand_in));
-        let textures = [
+        let mut textures = [
             frame.surface.unwrap_or(stand_in),
             shadows.map_or(stand_in, |s| s.mask),
             shadows.and_then(|s| s.height).unwrap_or(stand_in),
@@ -389,9 +390,14 @@ impl<'d> RowLights<'d> {
             edge0,
             edge1,
             frame.material.unwrap_or(stand_in),
+            frame.profile_atlas.unwrap_or(stand_in),
         ]
         .map(|t| SamplerBinding::new(t, nearest));
+        // The profile atlas follows the material buffer, which only the exact program reads.
         let exact = self.detail == DetailMode::Exact;
+        if !exact {
+            textures[7] = textures[8];
+        }
         let lookup = match shadows {
             Some(s) => RowLookupParams::new(
                 &RowSpace::new(frame.projection, &s.domain),
@@ -418,7 +424,7 @@ impl<'d> RowLights<'d> {
                     ..Default::default()
                 },
                 fragment: StageBindings {
-                    samplers: &textures[..if exact { 8 } else { 7 }],
+                    samplers: &textures[..if exact { 9 } else { 8 }],
                     uniforms: &fragment_uniforms,
                     ..Default::default()
                 },
