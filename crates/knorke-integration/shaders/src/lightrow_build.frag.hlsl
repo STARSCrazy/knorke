@@ -72,23 +72,24 @@ float Cross(float2 a, float2 b)
 // rectangle on the ground, plus the 1.5 texels by which Chiaro's ray stops short of a window (MaskShadowStop in
 // light_common.hlsli): nothing nearer the lamp counts for a place the window lights (lightrow_light.hlsli clips at
 // that place's own crossing), and an infinitely tall wall the window sits in must not end the march. An upright
-// window's rectangle is a line on the ground, met at one distance; a tilted one is met over a stretch, whose near
-// end counts. 0 without a window, or where the ray misses a tilted one; past every place a ray behind an upright
+// window's rectangle is a line on the ground, met at one distance; a tilted one is met over a stretch, (near end,
+// far end): a run beginning within it counts for some places only, so it neither hides a farther run nor ends the
+// march (`Keep`). 0 without a window, or where the ray misses a tilted one; past every place a ray behind an upright
 // one reaches (the window lights none of them).
-float WindowStart(float4 window, float4 windowV, float2 dir)
+float2 WindowStart(float4 window, float4 windowV, float2 dir)
 {
     float2 c = window.xy;
     float2 u = window.zw;
     float2 v = windowV.xy;
     if (dot(u, u) + dot(v, v) <= 0.0) {
-        return 0.0;
+        return float2(0.0, 0.0);
     }
     float area = Cross(u, v);
     if (abs(area) < 0.25) {
         float2 l = dot(u, u) >= dot(v, v) ? u : v;
         float s = Cross(dir, l);
         float q = abs(s) > 1e-6 ? Cross(c, l) / s : -1.0;
-        return q > 0.0 ? q + 1.5 : 1e30;
+        return (q > 0.0 ? q + 1.5 : 1e30).xx;
     }
     // c + a u + b v with |a|, |b| <= 1: |q k - m| <= |area| for (k, m) of a and of b.
     float2 range = float2(0.0, 1e30);
@@ -102,7 +103,7 @@ float WindowStart(float4 window, float4 windowV, float2 dir)
             range = float2(1.0, 0.0);
         }
     }
-    return range.x <= range.y ? range.x + 1.5 : 0.0;
+    return range.x <= range.y ? range + 1.5 : float2(0.0, 0.0);
 }
 
 float4 Hull(float4 near, float4 far)
@@ -135,8 +136,10 @@ bool Squeeze(inout float4 runs[kRuns], inout float pass[kRuns], int n)
 }
 
 // Adds a closed run that lets `through` of the light pass to the kept ones; false once nothing behind it can matter.
-// The hull lets through the product of what it took: opaque if any of it is.
-bool Keep(inout float4 runs[kRuns], inout float pass[kRuns], inout int count, float4 run, float through, float zl)
+// The hull lets through the product of what it took: opaque if any of it is. A run beginning before `whole` (the far
+// end of a tilted window's stretch) may be cut short by the light, so it hides nothing.
+bool Keep(inout float4 runs[kRuns], inout float pass[kRuns], inout int count, float4 run, float through, float zl,
+          float whole)
 {
     run.x = max(run.x, 0.25); // a run that begins at the lamp: no division by zero
     float fall = (zl - run.w) / run.y;
@@ -144,7 +147,7 @@ bool Keep(inout float4 runs[kRuns], inout float pass[kRuns], inout int count, fl
     int n = min(count, kRuns);
     for (int k = 0; k < n; ++k) {
         float4 o = runs[k];
-        if (pass[k] <= 0.0 && o.z <= 0.0 && (zl - o.w) / o.y <= fall && (zl - o.w) / o.x <= rise) {
+        if (pass[k] <= 0.0 && o.z <= 0.0 && o.x >= whole && (zl - o.w) / o.y <= fall && (zl - o.w) / o.x <= rise) {
             return true;
         }
     }
@@ -159,7 +162,7 @@ bool Keep(inout float4 runs[kRuns], inout float pass[kRuns], inout int count, fl
         pass[kRuns - 1] *= through;
     }
     ++count;
-    return !(through <= 0.0 && run.z <= 0.0 && run.w >= kInfiniteTop);
+    return !(through <= 0.0 && run.z <= 0.0 && run.w >= kInfiniteTop && run.x >= whole);
 }
 
 RowOutput main(SurfaceLightVaryings i)
@@ -172,7 +175,8 @@ RowOutput main(SurfaceLightVaryings i)
     float2 w = float2(dot(WorldFromMask.xy, dir), dot(WorldFromMask.zw, dir));
     int steps = min(int(i.positionRadius.w / length(w) / stepLength), kMaxSteps);
 
-    float start = WindowStart(i.area, i.areaMask, dir);
+    float2 window = WindowStart(i.area, i.areaMask, dir);
+    float start = window.x;
     float3 own = SampleAt(lamp);
     bool skipping = start <= 0.0 && own.y >= own.x && own.x <= zl && zl <= own.y;
 
@@ -198,7 +202,7 @@ RowOutput main(SurfaceLightVaryings i)
         }
         if (any(here.xy != current.xy) || (here.z > 0.0) != (current.z > 0.0)) {
             float edge = Entry(lamp, dir, t, stepLength);
-            if (current.y >= current.x && !Keep(runs, pass, count, float4(begin, edge, current.xy), current.z, zl)) {
+            if (current.y >= current.x && !Keep(runs, pass, count, float4(begin, edge, current.xy), current.z, zl, window.y)) {
                 current = kNothing;
                 break;
             }
@@ -207,7 +211,7 @@ RowOutput main(SurfaceLightVaryings i)
         }
     }
     if (current.y >= current.x) {
-        Keep(runs, pass, count, float4(begin, t, current.xy), current.z, zl);
+        Keep(runs, pass, count, float4(begin, t, current.xy), current.z, zl, window.y);
     }
     bool partial = pass[0] > 0.0 || pass[1] > 0.0 || pass[2] > 0.0 || pass[3] > 0.0;
     if (partial && count > 3 && !Squeeze(runs, pass, kRuns)) {
