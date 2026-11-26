@@ -51,14 +51,14 @@ use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
 use knorke_light2d::lighting::{
     LightSurfacePassParams, ShadowDomain, SurfaceParams, ambient_clear, height_tolerance,
 };
-use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
+use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc, TileGridDesc};
 use knorke_light2d::pass_plan::{PassRecord, SceneStores, max_height};
 use knorke_light2d::pattern_occluders::PatternParams;
 use knorke_light2d::pattern_store::{PatternDesc, PatternStore, Sheet, SheetFormat, raw_id};
 use knorke_light2d::projection::Projection;
 use knorke_light2d::rows::{RowLamp, RowLookupParams, RowSpace, SUPPORTS, SunParams};
 use knorke_light2d::settings::{GlowColor, LightSettings, Quality, QualitySettings, Resolutions};
-use knorke_light2d::shadow::{MaskAnchor, OcclusionDomain};
+use knorke_light2d::shadow::{CellRect, MaskAnchor, OcclusionDomain};
 use knorke_light2d::{LightStore, NoResources, ObstacleStore};
 use knorke_math::{At, Vec2, Vec3};
 use knorke_post::output_rect::ScaleMode;
@@ -85,18 +85,29 @@ fn num(s: &str) -> f32 {
     s.parse().unwrap()
 }
 
+/// What [`parse`] makes of the demo's two pattern fences.
+#[derive(Clone, Copy, Debug)]
+enum Fences {
+    /// Walls of this opacity without their patterns.
+    Walls(f32),
+    /// The fences with their patterns.
+    Patterns,
+    /// Tile grids with patterns in their place ([`fence_grid`]).
+    Grids,
+}
+
 /// The scene text cut down to what the probe compares: the enabled lights of the types in
 /// `kinds` (Chiaro's numbers: 0 point, 1 spot, 2 directional, 3 line, 4 rect) that cast shadows (every extra
-/// switched off) and the enabled obstacles, the two pattern fences with opacity `fence` and
-/// without their patterns, or with them (`None`).
+/// switched off) and the enabled obstacles, the two pattern fences as `fence` says.
 fn parse(
     text: &str,
     soft: bool,
-    fence: Option<f32>,
+    fence: Fences,
     kinds: &str,
 ) -> (Vec<LightDesc>, ObstacleStore, PatternStore) {
     let (mut lights, mut obstacles) = (Vec::new(), ObstacleStore::new());
     let (mut sheet, mut descs, mut fences) = (Vec::new(), Vec::new(), Vec::new());
+    let mut grids = Vec::new();
     for line in text.lines() {
         let f: Vec<&str> = line.split(' ').collect();
         let v = |i: usize| num(f[i]);
@@ -143,10 +154,9 @@ fn parse(
                     rotation: v(5),
                     height: v(6),
                     base_height: v(7),
-                    opacity: if f[12] == "0" {
-                        1.0
-                    } else {
-                        fence.unwrap_or(1.0)
+                    opacity: match fence {
+                        Fences::Walls(o) if f[12] != "0" => o,
+                        _ => 1.0,
                     },
                     dynamic: flags & 1 != 0,
                     enabled: flags & 2 == 0,
@@ -159,11 +169,16 @@ fn parse(
                         depth: v(11),
                     },
                 };
+                let pattern = f[12].parse::<usize>().unwrap().checked_sub(1);
+                if let (Some(k), Fences::Grids) = (pattern, fence) {
+                    grids.push((common, Vec2::new(v(10), v(11)), k));
+                    continue;
+                }
                 let id = obstacles
                     .create_shape(&ShapeDesc { common, shape })
                     .unwrap();
-                if fence.is_none() && f[12] != "0" {
-                    fences.push((id, f[12].parse::<usize>().unwrap() - 1));
+                if let (Some(k), Fences::Patterns) = (pattern, fence) {
+                    fences.push((id, k));
                 }
             }
             "row" => {
@@ -181,7 +196,7 @@ fn parse(
         }
     }
     let mut patterns = PatternStore::new();
-    if !fences.is_empty() {
+    if !fences.is_empty() || !grids.is_empty() {
         // `sheet 20 16` of the demo.
         let sheet = Sheet {
             width: 20,
@@ -197,8 +212,64 @@ fn parse(
                 .set_pattern(id, raw_id(ids[k]), &patterns)
                 .unwrap();
         }
+        let ids: Vec<u32> = ids.into_iter().map(raw_id).collect();
+        for (common, size, k) in grids {
+            fence_grid(&mut obstacles, &patterns, common, size, &ids, k);
+        }
     }
     (lights, obstacles, patterns)
+}
+
+/// Fence `k` of the demo (box of `size`, rotation 0) as a tile grid with patterns over the same
+/// ground: the picket fence (0) a column of cells 0.8 long, every fourth empty (a gap), every
+/// third with the tower's pattern from the grid's table; the lattice tower (1) four hollow cells
+/// (edge strips 0.1 wide) whose tops lie 9, 6, 9 and 4 levels of 1 up, the third half
+/// transparent. So the rows and the map meet a grid's cells, table, strips, levels and cell
+/// opacities.
+fn fence_grid(
+    obstacles: &mut ObstacleStore,
+    patterns: &PatternStore,
+    mut common: ObstacleCommon,
+    size: Vec2,
+    ids: &[u32],
+    k: usize,
+) {
+    assert_eq!(
+        common.rotation, 0.0,
+        "the demo's fences stand along the axes"
+    );
+    common.position = At::new(common.position.raw() - size * 0.5);
+    let id = if k == 0 {
+        let rows = (size.y / 0.8).round() as u32;
+        let solid: Vec<u8> = (0..rows).map(|i| u8::from(i % 4 != 3)).collect();
+        let mut grid = TileGridDesc::new(1, rows, &solid);
+        grid.common = common;
+        grid.cell_size = Vec2::new(size.x, size.y / rows as f32);
+        let id = obstacles.create_tile_grid(&grid).unwrap();
+        obstacles
+            .set_tile_pattern_table(id, &[ids[1]], patterns)
+            .unwrap();
+        let cells: Vec<u8> = (0..rows).map(|i| u8::from(i % 3 == 2)).collect();
+        let all = CellRect {
+            x0: 0,
+            y0: 0,
+            x1: 1,
+            y1: rows,
+        };
+        obstacles.set_tile_pattern_cells(id, all, &cells).unwrap();
+        id
+    } else {
+        let (solid, opacity, edges) = ([9, 6, 9, 4], [255, 255, 128, 255], [15; 4]);
+        let mut grid = TileGridDesc::new(2, 2, &solid);
+        grid.common = common;
+        grid.cell_size = size * 0.5;
+        grid.level_height = 1.0;
+        grid.edge_width = 0.1;
+        grid.opacity = Some(&opacity);
+        grid.edges = Some(&edges);
+        obstacles.create_tile_grid(&grid).unwrap()
+    };
+    obstacles.set_pattern(id, ids[k], patterns).unwrap();
 }
 
 /// The demo's settings (`gpu_iso_night.rs`) without haze, at mask resolution `shadow`.
@@ -574,8 +645,20 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24; "hart halb", the fences as 50 % walls: 0.250 / 0.88,
 /// today 0.724 / 2.56; "flächen" 0.002 / 0.01, today 0.020 / 0.11 (bound rounded up: a tenth of
 /// so little is below what a driver may change); "zaun", the fences with their patterns, hard
-/// 0.554 / 1.25, today 1.004 / 2.06, soft 1.395 / 5.62, today 2.228 / 8.55.
-const BOUNDS: [(&str, f64, f64); 9] = [
+/// 0.554 / 1.25, today 1.004 / 2.06, soft 1.395 / 5.62, today 2.228 / 8.55; "gitter", the fences
+/// as tile grids with patterns ([`fence_grid`], 2026-11-27), hard 0.817 / 1.59, today
+/// 1.658 / 3.75, soft 1.148 / 3.71, today 2.333 / 7.31. (Part of today's distance there is
+/// Chiaro's own: a lamp beside the tower stands in a widened strip of its hollow cells, whose
+/// crossing Chiaro reads while the rows and the reference skip the obstacle a lamp stands in.)
+///
+/// Timed 2026-11-27 (240 frames, 5 runs, release, medians in us), today / rows resting / rows
+/// all built / today scrolling / rows scrolling (the camera one mask texel a frame, 30 to and
+/// fro; 1.9 of 13 rows rebuilt a frame): "hart normal" 284 / 177 / 303 / 348 / 356, "hart
+/// last" 836 / 404 / 691 / 888 / 602, "weich normal" 310 / 219 / 410 / 364 / 438, "weich
+/// last" 900 / 564 / 992 / 940 / 789, "hart halb" 299 / 174 / 311 / 356 / 372, "zaun hart"
+/// 416 / 176 / 317 / 465 / 379, "zaun weich" 449 / 216 / 431 / 496 / 455, "gitter hart"
+/// 794 / 212 / 381 / 777 / 435, "gitter weich" 820 / 246 / 482 / 803 / 508.
+const BOUNDS: [(&str, f64, f64); 11] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
     ("weich normal", 0.70, 2.55),
@@ -585,6 +668,8 @@ const BOUNDS: [(&str, f64, f64); 9] = [
     ("linie pfosten", 0.014, 0.03),
     ("zaun hart", 0.75, 1.69),
     ("zaun weich", 1.63, 6.27),
+    ("gitter hart", 0.90, 1.75),
+    ("gitter weich", 1.27, 4.09),
 ];
 
 /// The facade in "zaun hart" that the spot light beside the lattice tower lights through it
@@ -687,19 +772,39 @@ fn light_rows_against_chiaro_and_the_reference() {
         let layers = demo_layers(gpu);
         let targets = [target(gpu), target(gpu), target(gpu)];
         let frame = |i: usize| layers.frame(targets[i].texture_ref(), &projection, LayerSet::NONE);
+        // A frame of target i seen through p (a closure cannot return the frame borrowing p).
+        macro_rules! frame_at {
+            ($i:expr, $p:expr) => {
+                layers.frame(targets[$i].texture_ref(), $p, LayerSet::NONE)
+            };
+        }
+        // Frame k of the camera scrolling along x one mask texel a frame, 30 texels to and fro.
+        let domain = OcclusionDomain::new(W, H, today.light.resolutions().shadow);
+        let texel = 1.0 / domain.texels_per_scene[0];
+        let scrolled = |k: u32| {
+            let mut p = projection;
+            let x = 30.0 - (30.0 - (k % 60) as f32).abs();
+            p.origin = At::new(projection.origin.raw() + Vec2::new(x * texel, 0.0));
+            p
+        };
         let mut truth = Truth::new(gpu, pack).unwrap();
 
         // The load scene: every lamp four times, slightly apart.
         let offsets = [(0.0, 0.0), (0.7, 0.3), (-0.5, 0.6), (0.4, -0.7)];
         let scenes = [false, true]
             .into_iter()
-            .flat_map(|soft| [(soft, 1, Some(1.0), "01"), (soft, 4, Some(1.0), "01")])
+            .flat_map(|soft| {
+                let walls = Fences::Walls(1.0);
+                [(soft, 1, walls, "01"), (soft, 4, walls, "01")]
+            })
             .chain([
-                (false, 1, Some(0.5), "01"),
-                (false, 1, Some(1.0), "34"),
-                (false, 1, Some(1.0), "3"),
-                (false, 1, None, "01"),
-                (true, 1, None, "01"),
+                (false, 1, Fences::Walls(0.5), "01"),
+                (false, 1, Fences::Walls(1.0), "34"),
+                (false, 1, Fences::Walls(1.0), "3"),
+                (false, 1, Fences::Patterns, "01"),
+                (true, 1, Fences::Patterns, "01"),
+                (false, 1, Fences::Grids, "01"),
+                (true, 1, Fences::Grids, "01"),
             ]);
         for ((soft, copies, fence, kinds), bound) in scenes.zip(BOUNDS) {
             let name = bound.0;
@@ -709,7 +814,7 @@ fn light_rows_against_chiaro_and_the_reference() {
             }
             if soft {
                 // The lamp sizes of the variant with soft shadows, on the same lamps.
-                let sized = parse(&plain, true, Some(1.0), kinds).0;
+                let sized = parse(&plain, true, Fences::Walls(1.0), kinds).0;
                 assert_eq!(sized.len(), base.len());
                 for (d, s) in base.iter_mut().zip(&sized) {
                     assert_eq!(d.position, s.position);
@@ -746,13 +851,14 @@ fn light_rows_against_chiaro_and_the_reference() {
             let (lights, _) = store();
             let (mut moving, ids) = store();
             let none = LightStore::new();
-            let patterns = fence.is_none().then_some(&patterns);
+            let patterns = (!matches!(fence, Fences::Walls(_))).then_some(&patterns);
             let new = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
             let mut renderers = [new(), new(), new(), new()];
             let all = descs.len() as u32;
             let rows_all = all * supports;
 
-            let mut timed: [Vec<(f64, f64)>; 4] = Default::default();
+            let mut timed: [Vec<(f64, f64)>; 6] = Default::default();
+            let mut scroll_rows = 0;
             let mut step = 0u32;
             for run in 0..=runs {
                 // Run 0 draws the pictures; the timed runs take the cases in turn.
@@ -789,12 +895,48 @@ fn light_rows_against_chiaro_and_the_reference() {
                     assert_eq!(record.lighting.rows_built, 0);
                 });
                 if run > 0 {
-                    for (list, value) in timed.iter_mut().zip([t, rest, moved, floor]) {
+                    let mut k = 0;
+                    let t_scroll = time(n, |wait| {
+                        k += 1;
+                        draw(
+                            gpu,
+                            r_today,
+                            &frame_at!(0, &scrolled(k)),
+                            &stores,
+                            &today,
+                            wait,
+                        );
+                    });
+                    let mut k = 0;
+                    let scroll = time(n, |wait| {
+                        k += 1;
+                        let p = scrolled(k);
+                        let f = frame_at!(1, &p);
+                        scroll_rows += draw(gpu, r_rest, &f, &stores, &rows, wait)
+                            .lighting
+                            .rows_built;
+                    });
+                    // Back where the next run begins, untimed.
+                    draw(gpu, r_today, &frame(0), &stores, &today, true);
+                    draw(gpu, r_rest, &frame(1), &stores, &rows, true);
+                    let all = [t, rest, moved, floor, t_scroll, scroll];
+                    for (list, value) in timed.iter_mut().zip(all) {
                         list.push(value);
                     }
                     eprintln!(
-                        "{name} run {run}: today {:.1} / {:.1}, rows resting {:.1} / {:.1}, rows all built {:.1} / {:.1}, no lights {:.1} / {:.1} us (median / p95)",
-                        t.0, t.1, rest.0, rest.1, moved.0, moved.1, floor.0, floor.1
+                        "{name} run {run}: today {:.1} / {:.1}, rows resting {:.1} / {:.1}, rows all built {:.1} / {:.1}, no lights {:.1} / {:.1}, scrolling today {:.1} / {:.1}, rows {:.1} / {:.1} us (median / p95)",
+                        t.0,
+                        t.1,
+                        rest.0,
+                        rest.1,
+                        moved.0,
+                        moved.1,
+                        floor.0,
+                        floor.1,
+                        t_scroll.0,
+                        t_scroll.1,
+                        scroll.0,
+                        scroll.1
                     );
                 }
             }
@@ -816,10 +958,22 @@ fn light_rows_against_chiaro_and_the_reference() {
                 numbers.push((mean, over));
             }
             if frames > 0 {
-                let cases = ["today", "rows, lamps rest", "rows, all built", "no lights"];
+                let cases = [
+                    "today",
+                    "rows, lamps rest",
+                    "rows, all built",
+                    "no lights",
+                    "today scrolling",
+                    "rows scrolling",
+                ];
                 for (case, list) in cases.into_iter().zip(&timed) {
                     let _ = writeln!(report, "{}", summary(name, case, list));
                 }
+                let per_frame = f64::from(scroll_rows) / (frames * runs) as f64;
+                let _ = writeln!(
+                    report,
+                    "{name:12} rows built per frame while scrolling: {per_frame:.2} of {rows_all}"
+                );
             }
             if let Some(dir) = &out {
                 std::fs::create_dir_all(dir).unwrap();
@@ -865,9 +1019,13 @@ fn light_rows_against_chiaro_and_the_reference() {
 const SUN_CAMERAS: [(&str, [f32; 2]); 2] = [("A", [18.0, 14.0]), ("B", [18.037, 14.021])];
 
 /// The fences of the sun cases: as opaque walls ("mauer"), with the demo's patterns ("zaun"), as
-/// half transparent walls ("halb"); `parse`'s `fence`.
-const SUN_FENCES: [(&str, Option<f32>); 3] =
-    [("mauer", Some(1.0)), ("zaun", None), ("halb", Some(0.5))];
+/// half transparent walls ("halb"), as tile grids with patterns ("gitter"); `parse`'s `fence`.
+const SUN_FENCES: [(&str, Fences); 4] = [
+    ("mauer", Fences::Walls(1.0)),
+    ("zaun", Fences::Patterns),
+    ("halb", Fences::Walls(0.5)),
+    ("gitter", Fences::Grids),
+];
 
 /// The most the sun map may differ from the reference (mean of 255, percent of the pixels over
 /// 8), per fences ([`SUN_FENCES`]), moon (hard, soft) and camera: what was measured plus a
@@ -887,9 +1045,13 @@ const SUN_FENCES: [(&str, Option<f32>); 3] =
 /// 324 / 162 / 2022 / 360 / 259 / 245; "halb" hard 217 / 125 / 1928 / 292 / 209 / 208, soft
 /// 240 / 149 / 2011 / 314 / 237 / 231. ("mauer" earlier that day, before partly transparent
 /// runs: hard 181 / 97 / 1103 / 243 / 173 / 166, soft 215 / 112 / 1273 / 264 / 184 / 175; the
-/// later runs were slower as a whole, today's light too.) While "zaun" scrolls, the map is built whole in 5 of 2400
+/// later runs were slower as a whole, today's light too.) "gitter" (the fences as tile grids
+/// with patterns, 2026-11-27): hard A 0.1147 / 0.567 (today 0.1726 / 0.638), B 0.1048 / 0.535
+/// (today 0.1682 / 0.626); soft A 0.1372 / 0.620 (today 0.2317 / 1.007), B 0.1463 / 0.619
+/// (today 0.2420 / 0.989); timed hard 362 / 110 / 1614 / 320 / 193 / 183, soft
+/// 394 / 160 / 1702 / 342 / 228 / 220. While "zaun" or "gitter" scrolls, the map is built whole in 5 of 2400
 /// frames: a fence leaves the mask and the other's record index moves.
-const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 3] = [
+const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 4] = [
     [
         [(0.046, 0.194), (0.032, 0.132)],
         [(0.076, 0.232), (0.085, 0.206)],
@@ -901,6 +1063,10 @@ const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 3] = [
     [
         [(0.042, 0.161), (0.034, 0.162)],
         [(0.078, 0.182), (0.086, 0.175)],
+    ],
+    [
+        [(0.127, 0.624), (0.116, 0.589)],
+        [(0.151, 0.682), (0.161, 0.681)],
     ],
 ];
 
@@ -934,7 +1100,7 @@ fn sun_map_against_chiaro_and_the_reference() {
         rows.light.light_rows = true;
         let layers = demo_layers(gpu);
         let targets = [target(gpu), target(gpu), target(gpu)];
-        let (moons, _, _) = parse(&text, false, Some(1.0), "2");
+        let (moons, _, _) = parse(&text, false, Fences::Walls(1.0), "2");
         assert_eq!(moons.len(), 1, "the scene's moon");
         let hard = moons[0].clone();
         assert_eq!(hard.source_radius, 0.0, "a hard moon");
@@ -959,7 +1125,7 @@ fn sun_map_against_chiaro_and_the_reference() {
             });
         for ((fences, fence), (kind, moon), bounds) in cases {
             let (_, obstacles, patterns) = parse(&text, false, fence, "2");
-            let patterns = fence.is_none().then_some(&patterns);
+            let patterns = (!matches!(fence, Fences::Walls(_))).then_some(&patterns);
             let kind = format!("{fences} {kind}");
             let mut lights = LightStore::new();
             lights.create(moon, &NoResources).unwrap();

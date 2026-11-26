@@ -726,9 +726,8 @@ fn rows_are_built_only_when_lamp_or_mask_change() {
 /// (the map keeps their runs), built whole once, kept while nothing changes, updated in part when
 /// a half-transparent box appears in the picture or the camera pans by a mask texel, and right
 /// after a pattern fence moved. Built whole when a fence loses its pattern (the other's record index moves) and
-/// when the moon gets a size. A tile grid with a pattern in the picture takes the map away (the
-/// map finds crossings of boxes, circles and polygons only); far outside it gives it back. Each
-/// picture is that of a plan that builds every row and map.
+/// when the moon gets a size. A tile grid with a pattern in the picture is a run of the map too, and
+/// so is it moved far outside. Each picture is that of a plan that builds every row and map.
 #[test]
 fn pattern_and_partial_obstacles_keep_the_suns_map() {
     with_chiaro_pack(|gpu, pack| {
@@ -818,7 +817,7 @@ fn pattern_and_partial_obstacles_keep_the_suns_map() {
                     .obstacles
                     .set_pattern(id, pattern, &f.scene.patterns)
                     .unwrap();
-                assert_eq!(check(f, "a tile grid with a pattern in the picture").0, 0);
+                assert_eq!(check(f, "a tile grid with a pattern in the picture").0, 1);
                 let far = At::new(Vec2::new(-500.0, -500.0));
                 f.scene.obstacles.set_transform(id, far, 0.0).unwrap();
                 assert_eq!(check(f, "the grid far outside").0, 1);
