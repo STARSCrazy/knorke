@@ -9,9 +9,9 @@
 //! ray. In frames with pattern obstacles a third row says where a ray crosses one (the pattern
 //! pass); the light reads the pattern there at the height of its own ray. A row depends only on
 //! the lamp and the mask around it, so it is kept until one of them changes ([`RowCache`]).
-//! A hard sun takes its shadow from a map turned to it, kept the same way ([`SunCache`], module
-//! `sun`); a pan or a redrawn rectangle rebuilds only the map texels whose rays reach the change
-//! ([`sun_bands`]).
+//! A sun (hard or soft) takes its shadow from a map turned to it, kept the same way
+//! ([`SunCache`], module `sun`); a pan or a redrawn rectangle rebuilds only the map texels
+//! whose rays reach the change ([`sun_bands`]).
 //!
 //! This is the transition of plan 17.13: with [`LightSettings::light_rows`] the pass plan draws
 //! every light [`light_suits`] accepts in a frame [`frame_suits`] accepts with the row
@@ -103,12 +103,17 @@ pub fn frame_suits(settings: &LightSettings, medium_map: bool, max_top: f32) -> 
 pub struct RowBlockers {
     /// In mask texels of the frame; overflowed: every lamp counts as reaching one.
     rects: DirtyRectList,
+    /// An active partly transparent obstacle (or one with partial cells or a pattern) lies in
+    /// the mask: no sun takes its shadow from a map (it holds opaque obstacles only).
+    partial_in_mask: bool,
     /// World points of [`obstacle_grid_rect`], kept so steady frames do not allocate.
     scratch: Vec<At<World2, Vec2>>,
 }
 
 impl RowBlockers {
-    /// Collects the frame's blockers (none if the frame draws no row lights).
+    /// Collects the frame's blockers (none if the frame draws no row lights). The suns' test
+    /// looks at every partial obstacle: a ray toward the sun reaches across the whole mask, so
+    /// only one outside it cannot meet a sun's ray.
     pub fn collect(
         &mut self,
         rows: bool,
@@ -117,16 +122,28 @@ impl RowBlockers {
         domain: &OcclusionDomain,
     ) {
         self.rects.clear();
-        if !rows || !obstacles.any_pattern() {
+        self.partial_in_mask = false;
+        if !rows || !obstacles.any_partial() {
             return;
         }
         let [sx, sy] = MaskAnchor::compute(p, domain).snapped;
+        let [w, h] = [domain.width, domain.height].map(|v| v as i32);
         for (id, s) in obstacles.iter() {
-            if s.is_active() && s.patterns.refs > 0 && s.is_tile_grid() {
-                let r = obstacle_grid_rect(obstacles, id, p, domain, &mut self.scratch);
-                self.rects.add(r.offset(sx, sy));
+            let pattern = s.patterns.refs > 0 && s.is_tile_grid();
+            if !s.is_active() || !s.is_partial() || (self.partial_in_mask && !pattern) {
+                continue;
+            }
+            let r = obstacle_grid_rect(obstacles, id, p, domain, &mut self.scratch).offset(sx, sy);
+            self.partial_in_mask |= r.x0 < w && r.x1 > 0 && r.y0 < h && r.y1 > 0;
+            if pattern {
+                self.rects.add(r);
             }
         }
+    }
+
+    /// See [`RowBlockers::partial_in_mask`](Self): a sun of this frame keeps Chiaro's programs.
+    pub fn partial_in_mask(&self) -> bool {
+        self.partial_in_mask
     }
 
     /// A lamp with this ground point and reach (`RowLight::reach`) can meet a blocker.

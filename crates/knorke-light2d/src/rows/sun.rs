@@ -1,4 +1,4 @@
-//! Hard suns as row-style lights (plan 17.13, L3): a directional light's shadow from a shadow map
+//! Suns as row-style lights (plan 17.13, L3): a directional light's shadow from a shadow map
 //! built once instead of Chiaro's march per pixel through the distance field.
 //!
 //! The map lies over the occlusion mask turned to the sun: a texel is [`SUN_ALONG`] mask texels
@@ -7,6 +7,11 @@
 //! hulled); a pixel reads the nearest texel and moves its height exactly along the light, so only
 //! the offset across the light (at most an eighth of a texel) is an error. Measured against an
 //! exact march: about half of the error of Chiaro's march (plan 17.13, L3).
+//!
+//! A soft sun (a source radius) keeps how far along the ray each interval's ends lie in a second
+//! target; its pixel blends the four nearest texels and widens the ends to ramps as high as the
+//! sun's disc spreads the rays' rise there (`LightList::directional_rise`). The rays' spread
+//! across the light is not in the map. Again about half of the error of Chiaro's march.
 //!
 //! The texels sit on a lattice fixed in the world ([`SunGrid`]) and are stored wrapped around
 //! the texture (texel (i, j) of the lattice at (i mod w, j mod h)), and the build marches in
@@ -17,7 +22,7 @@
 //!
 //! The shaders are `lightrow_sun*` in `knorke-integration/shaders`.
 
-use knorke_math::uniform_block;
+use knorke_math::{det, uniform_block};
 
 use super::{MaskChange, Refresh, RowMask, Source};
 use crate::gpu_light::GpuDirectional;
@@ -39,16 +44,11 @@ const SUN_RECEIVER_GAP: f32 = 1.0;
 
 /// Whether a directional light of [`LightList::directional`](crate::light_culling::LightList)
 /// can take its shadow from a map, in a frame [`super::frame_suits`] accepts whose obstacles are
-/// all opaque without pattern: it casts shadows from every caster (E53), has no source radius
-/// (`dir_slope[3]` is its penumbra), does not stand overhead and does not shine from below the
-/// horizon. All others stay with Chiaro's programs.
+/// all opaque without pattern: it casts shadows from every caster (E53), does not stand overhead
+/// and does not shine from below the horizon. All others stay with Chiaro's programs.
 pub fn sun_suits(g: &GpuDirectional, casters: Casters) -> bool {
-    let [x, y, slope, penumbra] = g.dir_slope;
-    g.color[3] > 0.5
-        && casters == Casters::All
-        && penumbra == 0.0
-        && (x != 0.0 || y != 0.0)
-        && slope > 0.0
+    let [x, y, slope, _] = g.dir_slope;
+    g.color[3] > 0.5 && casters == Casters::All && (x != 0.0 || y != 0.0) && slope > 0.0
 }
 
 /// How a sun's map lies over the mask. Lattice texel (I, J)'s middle is at
@@ -141,7 +141,8 @@ uniform_block! {
         /// [`SunGrid::inverse`].
         pub inverse: [f32; 4],
         /// x texels before the receiver that do not count (Chiaro: 1), y the lowest receiver
-        /// height a map texel stands in for.
+        /// height a map texel stands in for, z a soft sun's rise (`LightList::directional_rise`,
+        /// 0: hard), w the height the build's march rises by per texel.
         pub build: [f32; 4],
         /// The bits of `i32`s: xy [`SunGrid::corner`], zw [`SunGrid::offset`].
         pub lattice: [f32; 4],
@@ -149,10 +150,12 @@ uniform_block! {
 }
 
 impl SunParams {
-    /// The block of `light` over a mask of `mask` texels anchored at `snapped` with Chiaro's
-    /// `tolerance` below a top and the highest finite top `top`.
+    /// The block of `light` (soft with `rise` > 0, `LightList::directional_rise`) over a mask of
+    /// `mask` texels anchored at `snapped` with Chiaro's `tolerance` below a top and the highest
+    /// finite top `top`.
     pub fn new(
         light: &GpuDirectional,
+        rise: f32,
         mask: [u32; 2],
         snapped: [i32; 2],
         tolerance: f32,
@@ -169,7 +172,14 @@ impl SunParams {
             inverse: g.inverse(),
             // A ground receiver reads a texel whose middle lies up to half a texel farther from
             // the sun, so its height there is down to half a texel's rise below the ground.
-            build: [SUN_RECEIVER_GAP, -slope * SUN_ALONG - 0.1, 0.0, 0.0],
+            // A soft sun's lowest ray rises slower and meets obstacles farther away; near the
+            // horizon the disc's lower half is cut at half the slope.
+            build: [
+                SUN_RECEIVER_GAP,
+                -slope * SUN_ALONG - 0.1,
+                rise,
+                det::max(slope - rise, 0.5 * slope),
+            ],
             lattice: [g.corner[0], g.corner[1], g.offset[0], g.offset[1]].map(bits),
         }
     }
@@ -177,8 +187,7 @@ impl SunParams {
     /// Mask texels a ray from a map texel walks at most toward the sun: until it rises above the
     /// highest finite top from the lowest receiver.
     fn reach(&self) -> f64 {
-        let slope = f64::from(self.light.dir_slope[2]);
-        (f64::from(self.domain[3]) - f64::from(self.build[1])) / slope
+        (f64::from(self.domain[3]) - f64::from(self.build[1])) / f64::from(self.build[3])
     }
 }
 
@@ -186,8 +195,8 @@ impl SunParams {
 /// direction in the world, which only the light reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SunSource {
-    /// `dir_slope` xyz.
-    aim: [f32; 3],
+    /// `dir_slope` xyz and the rise (a soft map has a second target).
+    aim: [f32; 4],
     /// Mask size.
     size: [u32; 2],
     /// `MaskAnchor::snapped` of the frame.
@@ -201,7 +210,7 @@ impl SunSource {
     pub fn new(params: &SunParams, mask: &RowMask<'_>) -> Self {
         let [x, y, slope, _] = params.light.dir_slope;
         Self {
-            aim: [x, y, slope],
+            aim: [x, y, slope, params.build[2]],
             size: mask.size,
             snapped: mask.snapped,
             heights: [params.domain[2], params.domain[3]],
@@ -463,7 +472,7 @@ mod tests {
             dir_slope: [hard.dir_slope[0], hard.dir_slope[1], 0.5, 0.01],
             ..hard
         };
-        assert!(!sun_suits(&soft, Casters::All), "source radius");
+        assert!(sun_suits(&soft, Casters::All), "source radius");
         let unshadowed = GpuDirectional {
             color: [1.0, 1.0, 1.0, 0.0],
             ..hard
@@ -544,7 +553,7 @@ mod tests {
             change,
         };
         let source = |light: &GpuDirectional, m: &RowMask<'_>| {
-            SunSource::new(&SunParams::new(light, m.size, m.snapped, 0.05, 3.0), m)
+            SunSource::new(&SunParams::new(light, 0.0, m.size, m.snapped, 0.05, 3.0), m)
         };
         let mut frame = |light: &GpuDirectional, m: &RowMask<'_>| {
             cache.begin();
@@ -589,6 +598,15 @@ mod tests {
             ..panned
         };
         assert_eq!(frame(&sun(1.0, 2.1, 0.6), &wide), (0, Refresh::Build));
+        // A size: the map gets its second target, and its lowest ray reaches farther.
+        let light = sun(1.0, 2.1, 0.6);
+        let soft = SunParams::new(&light, 0.01, wide.size, wide.snapped, 0.05, 3.0);
+        let hard = SunParams::new(&light, 0.0, wide.size, wide.snapped, 0.05, 3.0);
+        assert!(soft.reach() > hard.reach());
+        cache.begin();
+        let refresh = cache.assign(0, SunSource::new(&soft, &wide), none);
+        cache.commit();
+        assert_eq!(refresh, Some((0, Refresh::Build)));
     }
 
     #[test]
@@ -601,7 +619,7 @@ mod tests {
                 snapped,
                 change: MaskChange::None,
             };
-            let params = SunParams::new(&a, mask, snapped, 0.05, 3.0);
+            let params = SunParams::new(&a, 0.0, mask, snapped, 0.05, 3.0);
             (params, SunSource::new(&params, &m))
         };
         let (params, before) = at([0, 0]);

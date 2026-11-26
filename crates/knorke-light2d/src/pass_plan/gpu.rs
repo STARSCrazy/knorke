@@ -245,6 +245,7 @@ struct ShadowState {
     anchor: MaskAnchor,
     height_mode: bool,
     any_partial: bool,
+    partial_in_mask: bool,
     shadow_top: f32,
     scene_max_top: f32,
 }
@@ -309,6 +310,7 @@ impl ShadowState {
             },
             height_mode: self.height_mode,
             any_partial: self.any_partial,
+            partial_in_mask: self.partial_in_mask,
             shadow_top: self.shadow_top,
             scene_max_top: self.scene_max_top,
             casters: [mask.caster_maps(0), mask.caster_maps(1)],
@@ -649,6 +651,7 @@ impl<'d> PassPlan<'d> {
                 height_mode,
                 // The crossing path must run to read a pattern (Chiaro E25).
                 any_partial: obstacles.any_partial() || self.patterns.is_active(),
+                partial_in_mask: self.row_blockers.partial_in_mask(),
                 shadow_top: if sprite || obstacles.any_infinite_enabled() {
                     INFINITE_TOP
                 } else {

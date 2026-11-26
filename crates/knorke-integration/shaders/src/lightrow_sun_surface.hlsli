@@ -1,4 +1,4 @@
-// Light rows (ADR 0019, plan 17.13 L3): a hard sun's light at a surface pixel, one fullscreen draw into the targets
+// Light rows (ADR 0019, plan 17.13 L3): a sun's light at a surface pixel, one fullscreen draw into the targets
 // of Chiaro's light pass. The light is Chiaro's directional_surface.frag without the medium and pattern variants
 // (CHI_MATERIAL_EXACT: Lambert with the detail normal, the highlight to SV_Target1; CHI_MATERIAL_DIRECTION: the
 // direction sample to SV_Target1), KNORKE_FLAT Chiaro's directional.frag (no surface and no material buffer: every
@@ -23,8 +23,8 @@ SamplerState SurfaceSampler : register(s0, space2); // nearest
 SamplerState MaskSampler : register(s1, space2);    // nearest
 SamplerState HeightSampler : register(s2, space2);  // nearest
 #ifdef CHI_MATERIAL_EXACT // after the map of lightrow_sun_light.hlsli
-Texture2D<float4> MaterialTex : register(t4, space2);
-SamplerState MaterialSampler : register(s4, space2); // nearest
+Texture2D<float4> MaterialTex : register(t5, space2);
+SamplerState MaterialSampler : register(s5, space2); // nearest
 #endif
 
 cbuffer SurfaceParams : register(b0, space3)
