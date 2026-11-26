@@ -6,8 +6,9 @@
 //! four obstacle runs (near, far, base, top) a ray meets on its way out through the occlusion
 //! mask. The light looks its shadow up in the row; a lamp with a source radius reads a second
 //! row, written by the edge pass, that says where the outlines of those obstacles lie across the
-//! ray. A row depends only on the lamp and the mask around it, so it is kept until one of them
-//! changes ([`RowCache`]).
+//! ray. In frames with pattern obstacles a third row says where a ray crosses one (the pattern
+//! pass); the light reads the pattern there at the height of its own ray. A row depends only on
+//! the lamp and the mask around it, so it is kept until one of them changes ([`RowCache`]).
 //!
 //! This is the transition of plan 17.13: with [`LightSettings::light_rows`] the pass plan draws
 //! every light [`light_suits`] accepts in a frame [`frame_suits`] accepts with the row
@@ -69,8 +70,8 @@ pub const GROUND_TOLERANCE: f32 = 1e-3;
 /// - with a sprite occlusion mask (not examined with rows yet),
 /// - with a finite obstacle top (`max_top`, the highest) of [`MAX_TOP`] or more.
 ///
-/// Pattern obstacles exclude only the lamps that reach them ([`RowBlockers`]); partly
-/// transparent ones are runs of the row.
+/// Tile grids with a pattern exclude only the lamps that reach them ([`RowBlockers`]); partly
+/// transparent obstacles and the other pattern obstacles are runs of the row.
 pub fn frame_suits(
     settings: &LightSettings,
     surface: bool,
@@ -81,10 +82,11 @@ pub fn frame_suits(
     settings.light_rows && surface && !medium_map && !sprite && max_top < MAX_TOP
 }
 
-/// Mask rectangles of the active pattern obstacles: a row knows a run's transmittance but not
-/// the pattern at the crossing, so a shadow-casting lamp whose reach meets one stays with
-/// Chiaro's programs. One that meets none is exact as a row light: its row describes the mask
-/// within its reach only, and an obstacle beyond can shadow nothing it lights.
+/// Mask rectangles of the active tile grids with a pattern: the pattern pass finds crossings of
+/// boxes, circles and polygons only (`lightrow_pattern.hlsli`), so a shadow-casting lamp whose
+/// reach meets such a grid stays with Chiaro's programs. One that meets none is exact as a row
+/// light: its row describes the mask within its reach only, and an obstacle beyond can shadow
+/// nothing it lights.
 ///
 /// A lamp switching between the two ways sits the other's frames out, so its row is rebuilt
 /// when it comes back ([`RowCache::assign`]).
@@ -111,7 +113,7 @@ impl RowBlockers {
         }
         let [sx, sy] = MaskAnchor::compute(p, domain).snapped;
         for (id, s) in obstacles.iter() {
-            if s.is_active() && s.patterns.refs > 0 {
+            if s.is_active() && s.patterns.refs > 0 && s.is_tile_grid() {
                 let r = obstacle_grid_rect(obstacles, id, p, domain, &mut self.scratch);
                 self.rects.add(r.offset(sx, sy));
             }
@@ -658,8 +660,8 @@ mod tests {
     }
 
     #[test]
-    fn pattern_obstacles_block_only_the_lamps_reaching_them() {
-        use crate::obstacle::ShapeDesc;
+    fn patterned_tile_grids_block_only_the_lamps_reaching_them() {
+        use crate::obstacle::{ShapeDesc, TileGridDesc};
         const SQUARE: [knorke_math::Vec2; 4] = [
             knorke_math::Vec2::new(0.0, 0.0),
             knorke_math::Vec2::new(1.0, 0.0),
@@ -675,9 +677,14 @@ mod tests {
         let glass = store.create_shape(&glass).unwrap();
         store.set_transform(glass, at(-20.0, 0.0), 0.0).unwrap();
         let fence = store.create_shape(&ShapeDesc::polygon(&SQUARE)).unwrap();
-        store.set_transform(fence, at(10.0, 0.0), 0.0).unwrap();
+        store.set_transform(fence, at(-30.0, 0.0), 0.0).unwrap();
+        let grid = store
+            .create_tile_grid(&TileGridDesc::new(1, 1, &[1]))
+            .unwrap();
+        store.set_transform(grid, at(10.0, 0.0), 0.0).unwrap();
         let patterns = |_| Some(0.5);
         store.set_pattern(fence, 1, &patterns).unwrap();
+        store.set_pattern(grid, 1, &patterns).unwrap();
 
         let p = Projection::iso(at(3.0, 4.0), 48.0, 0.5, 1280, 720);
         let domain = OcclusionDomain::new(1280, 720, 0.5);
@@ -695,7 +702,7 @@ mod tests {
             let (g, reach) = lamp(x, r);
             b.meet(g, reach)
         };
-        assert!(meets(&blockers, 12.0, 2.0), "beside the fence");
+        assert!(meets(&blockers, 12.0, 2.0), "beside the grid");
         assert!(meets(&blockers, 0.0, 10.0), "reaching it from afar");
         // The test is conservative: a square of the reach in the mask.
         assert!(!meets(&blockers, 0.0, 3.0), "short of it");
@@ -704,9 +711,13 @@ mod tests {
             !meets(&blockers, -20.0, 2.0),
             "a partly transparent one is in the row"
         );
-        store.set_transform(fence, at(30.0, 0.0), 0.0).unwrap();
+        assert!(
+            !meets(&blockers, -30.0, 2.0),
+            "a pattern shape is in the row"
+        );
+        store.set_transform(grid, at(30.0, 0.0), 0.0).unwrap();
         blockers.collect(true, &store, &p, &domain);
-        assert!(!meets(&blockers, 12.0, 2.0), "the fence moved away");
+        assert!(!meets(&blockers, 12.0, 2.0), "the grid moved away");
         blockers.collect(false, &store, &p, &domain);
         assert!(!meets(&blockers, 30.0, 2.0), "a frame without rows");
     }

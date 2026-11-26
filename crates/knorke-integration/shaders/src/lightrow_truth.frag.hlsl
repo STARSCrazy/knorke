@@ -3,11 +3,33 @@
 // the way needs, no distance field. A sample blocks if the ray's height there lies in the texel's interval, with
 // Chiaro's tolerance below a top (shadow_trace.hlsli, WithinInterval). A lamp whose height lies in the interval of
 // its own texel does not count that obstacle while the ray stays in it, as the row build does. A partly transparent
-// texel (mask opacity o below kOpaqueOpacity) multiplies by 1 - o once per crossing, as Chiaro's trace.
+// texel (mask opacity o below kOpaqueOpacity) multiplies by 1 - o once per crossing, as Chiaro's trace; on a pattern
+// obstacle by what its pattern lets through where a ray from the receiver enters it, at the height of this ray
+// (lightrow_pattern.hlsli, the same steps as the rows without their angle steps and packing).
 // A lamp with a source radius R is Domain.w x Domain.w points: across the ray in the ground plane and upright,
 // each within +-R; the result is the mean of their marches. A line or rect light is Domain.w x Domain.w points
 // spread evenly over its emitter (a line repeats each point), the mean of their hard marches.
 #include "lightrow_surface.hlsli"
+#include "lightrow_pattern.hlsli"
+
+Texture2D<float4> PatternIds : register(t3, space2); // read only with pattern obstacles (PatternAtlasSize.z > 0)
+Texture2D<float4> PatternAtlas : register(t4, space2);
+SamplerState PatternIdSampler : register(s3, space2);    // nearest
+SamplerState PatternAtlasSampler : register(s4, space2); // nearest
+StructuredBuffer<GpuPatternObstacle> PatternObstacles : register(t5, space2);
+StructuredBuffer<GpuPattern> Patterns : register(t6, space2);
+StructuredBuffer<uint> PatternData : register(t7, space2);
+
+cbuffer PatternParams : register(b2, space3)
+{
+    float4 PatternMaskToWorldX;
+    float4 PatternMaskToWorldY;
+    float4 PatternAtlasSize;
+};
+
+#define ROW_PATTERN_GEOMETRY
+#define ROW_PATTERN_LIGHT
+#include "lightrow_pattern.hlsli"
 
 static const float kStep = 0.25;
 
@@ -19,6 +41,23 @@ float2 IntervalAt(float2 p)
     }
     float2 i = Heights.SampleLevel(HeightSampler, (floor(p) + 0.5) / Domain.xy, 0.0).rg;
     return i.y > -i.x ? float2(max(-i.x, 0.0), i.y) : float2(1.0, -1.0);
+}
+
+// What a crossing of the ray lamp + dir * q that ends at q1 lets through: 1 - o of its first texel, or, if its last
+// sample lies on a pattern obstacle, its pattern where the ray from the receiver enters it (Chiaro's piece: from a
+// texel beyond the last sample to one texel before it).
+float Crossing(float2 lamp, float2 dir, float q1, float zl, float z, float r, float o)
+{
+    uint id = 0u;
+    if (PatternAtlasSize.z > 0.0) {
+        id = uint(FetchTexel(PatternIds, PatternIdSampler, int2(floor(lamp + dir * q1)), 1.0 / Domain.xy).r * 65535.0
+                  + 0.5);
+    }
+    if (id == 0u) { // HLSL's ?: would run both sides
+        return 1.0 - o;
+    }
+    float2 exit = PatternExit(id, lamp, dir, q1 - 1.0, q1 + 1.0);
+    return PatternPass(id, exit.y, lerp(zl, z, exit.x / r), 1.0 - o);
 }
 
 // The share of the light from the lamp point (mask texels, height zl) that reaches the place `start` at height z.
@@ -34,6 +73,8 @@ float March(float2 lamp, float zl, float2 start, float z)
     int steps = int(floor((r - RowSize.z) / kStep));
     float seen = 1.0;
     bool inside = false;
+    float last = 0.0; // the open crossing: its last sample and its first texel's opacity
+    float o0 = 0.0;
     [loop] for (int s = 1; s <= steps; ++s) {
         float q = float(s) * kStep;
         float2 here = IntervalAt(lamp + dir * q);
@@ -50,11 +91,14 @@ float March(float2 lamp, float zl, float2 start, float z)
             if (o >= kOpaqueOpacity) {
                 return 0.0;
             }
-            seen *= inside ? 1.0 : 1.0 - o;
+            o0 = inside ? o0 : o;
+            last = q;
+        } else if (inside) {
+            seen *= Crossing(lamp, dir, last, zl, z, r, o0);
         }
         inside = blocked;
     }
-    return seen;
+    return inside ? seen * Crossing(lamp, dir, last, zl, z, r, o0) : seen;
 }
 
 float Sight(SurfaceLightVaryings l, float2 start, float z, float r)

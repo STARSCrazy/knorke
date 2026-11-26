@@ -1,5 +1,6 @@
 //! The row lights on the GPU: the row atlas (one row of [`ROW_ANGLES`] texels per lamp), the
-//! edge atlas of lamps with a source radius, their programs and what a frame records. Part of
+//! edge atlas of lamps with a source radius, the crossing atlas of frames with pattern obstacles,
+//! their programs and what a frame records. Part of
 //! the light pass ([`LightingStage`](crate::lighting::LightingStage) owns and drives it); it
 //! records into the host's command buffer and never submits or reads back (ADR 0002).
 
@@ -22,6 +23,8 @@ use crate::light_pipelines::MATERIAL_TARGET_FORMAT;
 use crate::lighting::{
     DetailMode, LIGHT_FORMAT, LightSurfacePassParams, LightingFrame, ShadowMaps, height_tolerance,
 };
+use crate::obstacle::ObstacleId;
+use crate::pattern_occluders::PatternParams;
 
 /// A row program, atlas or buffer is missing at record: the frame was not prepared.
 pub const ROWS_INPUT_MISSING: DiagnosticCode =
@@ -34,6 +37,7 @@ const MIN_ROWS: u32 = 16;
 
 const BUILD: usize = 0;
 const EDGE: usize = 1;
+const PATTERN: usize = 5;
 
 const fn atlas_program(fragment: &'static str) -> ProgramDesc {
     ProgramDesc {
@@ -58,12 +62,13 @@ const fn material_program(fragment: &'static str) -> ProgramDesc {
 /// The light is one shader in three versions because the light pass has three target layouts
 /// (Chiaro's `surface_light.hlsli`): the light buffer alone, with the specular buffer, with the
 /// direction buffer.
-const PROGRAMS: [ProgramDesc; 5] = [
+const PROGRAMS: [ProgramDesc; 6] = [
     atlas_program("lightrow_build.frag"),
     atlas_program("lightrow_edge.frag"),
     ProgramDesc::new("lightrow.vert", "lightrow_light.frag", Blend::Additive),
     material_program("lightrow_light_exact.frag"),
     material_program("lightrow_light_direction.frag"),
+    ProgramDesc::new("lightrow.vert", "lightrow_pattern.frag", Blend::Opaque),
 ];
 
 const fn light_program(detail: DetailMode) -> usize {
@@ -92,6 +97,10 @@ pub struct RowsRecord {
 pub struct RowLights<'d> {
     rows: [RenderTarget<'d>; 2],
     edges: [RenderTarget<'d>; 2],
+    /// Where a ray crosses a pattern obstacle (`lightrow_pattern.frag`).
+    crossings: RenderTarget<'d>,
+    /// The pattern obstacles the crossings name by record index, in that order.
+    pattern_ids: Vec<ObstacleId>,
     lamps: UploadBuffer<'d>,
     pipelines: Option<PipelineCache<'d>>,
     cache: RowCache,
@@ -108,6 +117,8 @@ impl<'d> RowLights<'d> {
         Self {
             rows: [RenderTarget::new(gpu), RenderTarget::new(gpu)],
             edges: [RenderTarget::new(gpu), RenderTarget::new(gpu)],
+            crossings: RenderTarget::new(gpu),
+            pattern_ids: Vec::new(),
             lamps: UploadBuffer::new(
                 gpu,
                 SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
@@ -165,7 +176,21 @@ impl<'d> RowLights<'d> {
         }
         // Without the occlusion stage nothing casts a shadow this frame. (Not `height`: the
         // stage creates its textures when it records its first frame.)
-        let mask = frame.shadows.filter(|s| s.height_mode).map(row_mask);
+        let shadows = frame.shadows.filter(|s| s.height_mode);
+        let mask = shadows.map(row_mask);
+        let patterns = shadows.and_then(|s| s.patterns.as_ref());
+        // A crossing names its obstacle by record index, which moves when the frame's pattern
+        // obstacles change anywhere; and a row built without them has no crossings.
+        let members = patterns.map_or(&[][..], |p| p.members);
+        if !members
+            .iter()
+            .map(|m| m.0)
+            .eq(self.pattern_ids.iter().copied())
+        {
+            self.cache.invalidate();
+            self.pattern_ids.clear();
+            self.pattern_ids.extend(members.iter().map(|m| m.0));
+        }
         let mut allocations = 0;
         // Twice at most: growing the atlas loses its rows, so every lamp is assigned anew.
         for _ in 0..2 {
@@ -178,7 +203,7 @@ impl<'d> RowLights<'d> {
                 }
             }
             let soft = self.dirty.iter().any(|&i| built(lights, i).size > 0.0);
-            let grown = self.ensure_atlases(soft)?;
+            let grown = self.ensure_atlases(soft, patterns.is_some())?;
             allocations += grown;
             if grown == 0 {
                 break;
@@ -209,6 +234,9 @@ impl<'d> RowLights<'d> {
         }
         if edges > 0 {
             pipelines.get(shaders, EDGE, ROW_FORMAT)?;
+        }
+        if self.frame.built > 0 && patterns.is_some() {
+            pipelines.get(shaders, PATTERN, ROW_FORMAT)?;
         }
 
         let count = lights.len() + self.dirty.len();
@@ -253,10 +281,10 @@ impl<'d> RowLights<'d> {
         self.cache.assign(light, mask.filter(|_| light.shadowed)?)
     }
 
-    /// The atlases for the cache's rows; `soft` also the edge atlas. Returns how many targets
-    /// were (re)allocated for a new height of the row atlas (the edge atlas alone loses nothing:
-    /// a lamp's edge row is built with its row).
-    fn ensure_atlases(&mut self, soft: bool) -> Result<u32, Diagnostic> {
+    /// The atlases for the cache's rows; `soft` also the edge atlas, `patterns` also the crossing
+    /// atlas. Returns how many targets were (re)allocated for a new height of the row or the
+    /// crossing atlas (the edge atlas alone loses nothing: a lamp's edge row is built with its row).
+    fn ensure_atlases(&mut self, soft: bool, patterns: bool) -> Result<u32, Diagnostic> {
         let height = self.cache.rows().next_power_of_two().max(MIN_ROWS);
         if self.cache.rows() == 0 {
             return Ok(0);
@@ -269,6 +297,11 @@ impl<'d> RowLights<'d> {
             for target in &mut self.edges {
                 target.ensure(ROW_ANGLES, height, ROW_FORMAT)?;
             }
+        }
+        if patterns {
+            grown += u32::from(self.crossings.ensure(ROW_ANGLES, height, ROW_FORMAT)?);
+        } else {
+            self.crossings.release();
         }
         Ok(grown)
     }
@@ -371,6 +404,30 @@ impl<'d> RowLights<'d> {
             )?;
             pass.draw_instanced(6, count)?;
         }
+        if let Some(p) = &shadows.patterns {
+            // After the build: it reads the runs.
+            let lookup = RowLookupParams::new(&space, mask, rows, 0.0).to_bytes();
+            let target =
+                (self.crossings.texture_ref()).ok_or_else(|| missing("the crossing atlas"))?;
+            let mut pass = cmd.render_pass(&[ColorTarget::new(target, Load::Load)])?;
+            pass.bind_program(
+                self.pipeline(PATTERN, ROW_FORMAT)?,
+                &Bindings {
+                    vertex: StageBindings {
+                        storage_buffers: &lamps,
+                        uniforms: &vertex_uniforms,
+                        ..Default::default()
+                    },
+                    fragment: StageBindings {
+                        samplers: &[first, second, p.ids].map(|t| SamplerBinding::new(t, nearest)),
+                        storage_buffers: &[p.obstacles, p.data],
+                        uniforms: &[&lookup, &p.params],
+                        ..Default::default()
+                    },
+                },
+            )?;
+            pass.draw_instanced(6, self.frame.built)?;
+        }
         Ok(())
     }
 
@@ -393,9 +450,15 @@ impl<'d> RowLights<'d> {
         let nearest = samplers.sampler(Filter::Nearest);
         // What a frame does not have is not read: the scene stands in (lamps without a row
         // return before the mask, lamps without a size before the edges, lamps without a
-        // profile before the profile atlas).
+        // profile before the profile atlas, a frame without pattern obstacles has all-zero
+        // pattern params and reads no crossing); the lamp buffer stands in for the records.
         let stand_in = frame.scene;
         let shadows = frame.shadows.filter(|s| s.height_mode);
+        let patterns = shadows.and_then(|s| s.patterns.as_ref());
+        let lamps = self
+            .lamps
+            .buffer_ref()
+            .ok_or_else(|| missing("the lamp buffer"))?;
         let rows = self.rows[0].texture_ref().zip(self.rows[1].texture_ref());
         let edges = self.edges[0].texture_ref().zip(self.edges[1].texture_ref());
         let (row0, row1) = rows.unwrap_or((stand_in, stand_in));
@@ -410,13 +473,17 @@ impl<'d> RowLights<'d> {
             edge1,
             frame.material.unwrap_or(stand_in),
             frame.profile_atlas.unwrap_or(stand_in),
+            self.crossings.texture_ref().unwrap_or(stand_in),
+            patterns.map_or(stand_in, |p| p.atlas),
         ]
         .map(|t| SamplerBinding::new(t, nearest));
-        // The profile atlas follows the material buffer, which only the exact program reads.
+        // The rest follows the material buffer, which only the exact program reads.
         let exact = self.detail == DetailMode::Exact;
         if !exact {
-            textures[7] = textures[8];
+            textures.copy_within(8.., 7);
         }
+        let records = patterns.map_or([lamps, lamps], |p| [p.obstacles, p.records]);
+        let pattern_params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
         let lookup = match shadows {
             Some(s) => RowLookupParams::new(
                 &RowSpace::new(frame.projection, &s.domain),
@@ -427,23 +494,20 @@ impl<'d> RowLights<'d> {
             None => RowLookupParams::default(),
         }
         .to_bytes();
-        let lamps = [self
-            .lamps
-            .buffer_ref()
-            .ok_or_else(|| missing("the lamp buffer"))?];
         let vertex = Self::pass_params(frame, 0, 0);
         let vertex_uniforms: [&[u8]; 1] = [&vertex];
-        let fragment_uniforms: [&[u8]; 2] = [surface_params, &lookup];
+        let fragment_uniforms: [&[u8]; 3] = [surface_params, &lookup, &pattern_params];
         pass.bind_program(
             self.pipeline(light_program(self.detail), LIGHT_FORMAT)?,
             &Bindings {
                 vertex: StageBindings {
-                    storage_buffers: &lamps,
+                    storage_buffers: &[lamps],
                     uniforms: &vertex_uniforms,
                     ..Default::default()
                 },
                 fragment: StageBindings {
-                    samplers: &textures[..if exact { 9 } else { 8 }],
+                    samplers: &textures[..if exact { 11 } else { 10 }],
+                    storage_buffers: &records,
                     uniforms: &fragment_uniforms,
                     ..Default::default()
                 },

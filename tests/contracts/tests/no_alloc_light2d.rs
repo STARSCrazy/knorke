@@ -219,11 +219,12 @@ fn steady_state_light2d_paths_allocate_nothing() {
     let mut row_list = LightList::default();
     let mut row_cache = RowCache::default();
     let row_domain = OcclusionDomain::new(128, 64, 1.0);
-    // A partly transparent fence keeps the lamps reaching it from the rows.
+    // A tile grid with a pattern keeps the lamps reaching it from the rows.
     let mut fences = ObstacleStore::new();
-    let mut fence = ShapeDesc::rect(2.0, 1.0);
-    fence.common.opacity = 0.5;
-    let fence = fences.create_shape(&fence).unwrap();
+    let fence = fences
+        .create_tile_grid(&TileGridDesc::new(1, 1, &[1]))
+        .unwrap();
+    fences.set_pattern(fence, 1, &|_| Some(0.5)).unwrap();
     let mut row_blockers = RowBlockers::default();
 
     let mut step = |i: u32| {

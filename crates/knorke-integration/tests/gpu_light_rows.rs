@@ -235,10 +235,10 @@ fn row_lights_and_chiaro_lights_share_a_frame() {
     });
 }
 
-/// The demo as it is: its two pattern fences keep the lamps that reach them with Chiaro's
-/// programs, every other suitable lamp is a row light.
+/// The demo as it is: its two pattern fences are runs of the row whose crossings the pattern pass
+/// finds, so the lamps that reach them are row lights too.
 #[test]
-fn pattern_obstacles_keep_only_the_lamps_reaching_them() {
+fn pattern_obstacles_are_runs_of_the_row() {
     with_chiaro_pack(|gpu, pack| {
         iso_night::with_demo("hard", 44, "", |demo| {
             demo.with_frames(gpu, pack, &with_rows, &mut |f| {
@@ -253,7 +253,8 @@ fn pattern_obstacles_keep_only_the_lamps_reaching_them() {
                     "iso_night_hard: {rows} of {drawn} lights are row lights; against rows off: \
                      largest difference {max}/255, mean {mean:.4}, {share:.2} % of the pixels"
                 );
-                assert!(rows > 0 && rows < drawn);
+                // All but the sun, which is no row light.
+                assert_eq!(rows + 1, drawn);
                 assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
 
                 // Every shadowed lamp whose disc holds a corner of a fence triangle.
@@ -277,8 +278,10 @@ fn pattern_obstacles_keep_only_the_lamps_reaching_them() {
                 let row_keys: Vec<u32> = (f.renderer.plan().lights().rows.iter())
                     .map(|l| (l.key >> 2) as u32)
                     .collect();
+                // Five lamps at the fences; the sun's disc holds them too, and one lamp is
+                // out of the picture.
                 assert!(
-                    near.iter().all(|k| !row_keys.contains(k)),
+                    near.iter().filter(|k| row_keys.contains(k)).count() >= 5,
                     "lamps at the fences {near:?}, row lights {row_keys:?}"
                 );
             });

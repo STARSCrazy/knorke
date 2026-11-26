@@ -5,7 +5,8 @@
 //! shadows, and soft ones with the lamp sizes of `plain.txt`; each as it is ("normal") and with
 //! every lamp four times ("last"); the line and rect lights that cast shadows (4) alone
 //! ("flächen"); the shop sign's line light alone with a post close in front of it, a third
-//! along ("linie pfosten").
+//! along ("linie pfosten"); the point and spot lights with the demo's two pattern fences, hard
+//! and soft ("zaun").
 //!
 //! - Today: [`Light2dRenderer`] with `light_rows` off.
 //! - New: the same with `light_rows` on.
@@ -48,6 +49,8 @@ use knorke_light2d::lighting::{
 };
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassRecord, SceneStores, max_height};
+use knorke_light2d::pattern_occluders::PatternParams;
+use knorke_light2d::pattern_store::{PatternDesc, PatternStore, Sheet, SheetFormat, raw_id};
 use knorke_light2d::projection::Projection;
 use knorke_light2d::rows::{RowLamp, RowLookupParams, RowSpace, SUPPORTS};
 use knorke_light2d::settings::{GlowColor, LightSettings, Quality, QualitySettings, Resolutions};
@@ -80,10 +83,16 @@ fn num(s: &str) -> f32 {
 
 /// The scene text cut down to what the probe compares: the enabled lights of the types in
 /// `kinds` (Chiaro's numbers: 0 point, 1 spot, 3 line, 4 rect) that cast shadows (every extra
-/// switched off) and the enabled obstacles without their patterns, the two pattern fences with
-/// opacity `fence`.
-fn parse(text: &str, soft: bool, fence: f32, kinds: &str) -> (Vec<LightDesc>, ObstacleStore) {
+/// switched off) and the enabled obstacles, the two pattern fences with opacity `fence` and
+/// without their patterns, or with them (`None`).
+fn parse(
+    text: &str,
+    soft: bool,
+    fence: Option<f32>,
+    kinds: &str,
+) -> (Vec<LightDesc>, ObstacleStore, PatternStore) {
     let (mut lights, mut obstacles) = (Vec::new(), ObstacleStore::new());
+    let (mut sheet, mut descs, mut fences) = (Vec::new(), Vec::new(), Vec::new());
     for line in text.lines() {
         let f: Vec<&str> = line.split(' ').collect();
         let v = |i: usize| num(f[i]);
@@ -126,7 +135,11 @@ fn parse(text: &str, soft: bool, fence: f32, kinds: &str) -> (Vec<LightDesc>, Ob
                     rotation: v(5),
                     height: v(6),
                     base_height: v(7),
-                    opacity: if f[12] == "0" { 1.0 } else { fence },
+                    opacity: if f[12] == "0" {
+                        1.0
+                    } else {
+                        fence.unwrap_or(1.0)
+                    },
                     dynamic: flags & 1 != 0,
                     enabled: flags & 2 == 0,
                     shadow_footprint: false,
@@ -138,14 +151,46 @@ fn parse(text: &str, soft: bool, fence: f32, kinds: &str) -> (Vec<LightDesc>, Ob
                         depth: v(11),
                     },
                 };
-                obstacles
+                let id = obstacles
                     .create_shape(&ShapeDesc { common, shape })
                     .unwrap();
+                if fence.is_none() && f[12] != "0" {
+                    fences.push((id, f[12].parse::<usize>().unwrap() - 1));
+                }
             }
+            "row" => {
+                for k in 0..f[1].len() / 2 {
+                    let alpha = u8::from_str_radix(&f[1][2 * k..2 * k + 2], 16).unwrap();
+                    sheet.extend_from_slice(&[255, 255, 255, alpha]);
+                }
+            }
+            "pattern" => descs.push(PatternDesc {
+                repeat_width: v(5),
+                repeat_height: v(6),
+                ..PatternDesc::new(v(1) as u32, v(2) as u32, v(3) as u32, v(4) as u32)
+            }),
             _ => {}
         }
     }
-    (lights, obstacles)
+    let mut patterns = PatternStore::new();
+    if !fences.is_empty() {
+        // `sheet 20 16` of the demo.
+        let sheet = Sheet {
+            width: 20,
+            height: 16,
+            pitch: 80,
+            format: SheetFormat::Rgba8,
+            pixels: &sheet,
+        };
+        let mut ids = Vec::new();
+        patterns.create(&sheet, &descs, &mut ids).unwrap();
+        for (id, k) in fences {
+            obstacles
+                .set_pattern(id, raw_id(ids[k]), &patterns)
+                .unwrap();
+        }
+    }
+    (lights, obstacles, patterns)
 }
 
 /// The demo's settings (`gpu_iso_night.rs`) without haze, at mask resolution `shadow`.
@@ -302,12 +347,19 @@ impl<'d> Truth<'d> {
             .upload_to_buffer(&self.lamps, (count * RowLamp::SIZE) as u32)?;
         let nearest = self.samplers.sampler(Filter::Nearest);
         let occlusion = renderer.plan().occlusion();
+        let patterns = renderer.plan().patterns().maps();
+        let scene = frame.scene;
         let textures = [
             frame.surface.unwrap(),
             occlusion.mask().unwrap(),
             occlusion.height().unwrap(),
+            patterns.map_or(scene, |p| p.ids),
+            patterns.map_or(scene, |p| p.atlas),
         ]
         .map(|t| SamplerBinding::new(t, nearest));
+        let lamps = self.lamps.buffer_ref().unwrap();
+        let records = patterns.map_or([lamps; 3], |p| [p.obstacles, p.records, p.data]);
+        let params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
         {
             let clear = Load::Clear(ambient_clear(light.ambient));
             let mut pass = cmd.render_pass(&[ColorTarget::new(self.light.texture_ref(), clear)])?;
@@ -315,13 +367,14 @@ impl<'d> Truth<'d> {
                 self.pipelines.pipeline(0, HALF).unwrap(),
                 &Bindings {
                     vertex: StageBindings {
-                        storage_buffers: &[self.lamps.buffer_ref().unwrap()],
+                        storage_buffers: &[lamps],
                         uniforms: &[&vertex],
                         ..Default::default()
                     },
                     fragment: StageBindings {
                         samplers: &textures,
-                        uniforms: &[&surface, &lookup],
+                        storage_buffers: &records,
+                        uniforms: &[&surface, &lookup, &params],
                         ..Default::default()
                     },
                 },
@@ -351,6 +404,17 @@ fn draw(
         .unwrap();
     cmd.submit_and_wait().unwrap();
     record
+}
+
+fn stores_of<'a>(
+    lights: &'a LightStore,
+    obstacles: &'a ObstacleStore,
+    patterns: Option<&'a PatternStore>,
+) -> SceneStores<'a> {
+    SceneStores {
+        patterns,
+        ..SceneStores::new(lights, obstacles)
+    }
 }
 
 /// Median and 95th percentile of `us`.
@@ -408,8 +472,9 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// 0.348 / 0.66, 0.640 / 1.60, 0.631 / 2.31, 0.869 / 3.03; today's light 0.921 / 1.74,
 /// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24; "hart halb", the fences as 50 % walls: 0.314 / 1.25,
 /// today 0.724 / 2.56; "flächen" 0.002 / 0.01, today 0.020 / 0.11 (bound rounded up: a tenth of
-/// so little is below what a driver may change).
-const BOUNDS: [(&str, f64, f64); 7] = [
+/// so little is below what a driver may change); "zaun", the fences with their patterns, hard
+/// 0.694 / 1.61, today 0.994 / 2.10, soft 1.477 / 5.70, today 2.269 / 8.49.
+const BOUNDS: [(&str, f64, f64); 9] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
     ("weich normal", 0.70, 2.55),
@@ -417,6 +482,8 @@ const BOUNDS: [(&str, f64, f64); 7] = [
     ("hart halb", 0.35, 1.38),
     ("flächen", 0.004, 0.02),
     ("linie pfosten", 0.014, 0.03),
+    ("zaun hart", 0.77, 1.78),
+    ("zaun weich", 1.63, 6.27),
 ];
 
 /// The post of "linie pfosten": a third along the shop sign's line light (at 31, 26.12, 2.4
@@ -489,21 +556,23 @@ fn light_rows_against_chiaro_and_the_reference() {
         let offsets = [(0.0, 0.0), (0.7, 0.3), (-0.5, 0.6), (0.4, -0.7)];
         let scenes = [false, true]
             .into_iter()
-            .flat_map(|soft| [(soft, 1, 1.0, "01"), (soft, 4, 1.0, "01")])
+            .flat_map(|soft| [(soft, 1, Some(1.0), "01"), (soft, 4, Some(1.0), "01")])
             .chain([
-                (false, 1, 0.5, "01"),
-                (false, 1, 1.0, "34"),
-                (false, 1, 1.0, "3"),
+                (false, 1, Some(0.5), "01"),
+                (false, 1, Some(1.0), "34"),
+                (false, 1, Some(1.0), "3"),
+                (false, 1, None, "01"),
+                (true, 1, None, "01"),
             ]);
         for ((soft, copies, fence, kinds), bound) in scenes.zip(BOUNDS) {
             let name = bound.0;
-            let (mut base, mut obstacles) = parse(&text, false, fence, kinds);
+            let (mut base, mut obstacles, patterns) = parse(&text, false, fence, kinds);
             if kinds == "3" {
                 obstacles.create_shape(&post()).unwrap();
             }
             if soft {
                 // The lamp sizes of the variant with soft shadows, on the same lamps.
-                let sized = parse(&plain, true, 1.0, kinds).0;
+                let sized = parse(&plain, true, Some(1.0), kinds).0;
                 assert_eq!(sized.len(), base.len());
                 for (d, s) in base.iter_mut().zip(&sized) {
                     assert_eq!(d.position, s.position);
@@ -540,6 +609,7 @@ fn light_rows_against_chiaro_and_the_reference() {
             let (lights, _) = store();
             let (mut moving, ids) = store();
             let none = LightStore::new();
+            let patterns = fence.is_none().then_some(&patterns);
             let new = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
             let mut renderers = [new(), new(), new(), new()];
             let all = descs.len() as u32;
@@ -554,7 +624,7 @@ fn light_rows_against_chiaro_and_the_reference() {
                     break;
                 }
                 let [r_today, r_rest, r_moved, r_none] = &mut renderers;
-                let stores = SceneStores::new(&lights, &obstacles);
+                let stores = stores_of(&lights, &obstacles, patterns);
                 let t = time(n, || {
                     draw(gpu, r_today, &frame(0), &stores, &today);
                 });
@@ -565,12 +635,12 @@ fn light_rows_against_chiaro_and_the_reference() {
                         let at = At::new(d.position.raw() + Vec2::new(x, 0.0));
                         moving.set_position(id, at, d.height).unwrap();
                     }
-                    let stores = SceneStores::new(&moving, &obstacles);
+                    let stores = stores_of(&moving, &obstacles, patterns);
                     let record = draw(gpu, r_moved, &frame(2), &stores, &rows);
                     assert_eq!(record.lighting.rows_built, rows_all);
                 });
                 let floor = time(n, || {
-                    let stores = SceneStores::new(&none, &obstacles);
+                    let stores = stores_of(&none, &obstacles, patterns);
                     draw(gpu, r_none, &frame(2), &stores, &rows);
                 });
                 // The first frame builds the rows, from then on the lamps rest.
