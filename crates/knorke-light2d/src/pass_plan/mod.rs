@@ -121,6 +121,8 @@ pub struct PassStats {
     pub mask_incremental: u64,
     /// Frames with shadows whose mask was rebuilt.
     pub mask_full: u64,
+    /// Light rows built (ADR 0019); stands still while lamps and obstacles rest.
+    pub rows_built: u64,
 }
 
 impl PassStats {
@@ -142,6 +144,7 @@ pub fn any_shadow_caster(list: &LightList) -> bool {
     !(list.shadowed.is_empty()
         && list.shadowed_area.is_empty()
         && list.masked_shadowed.is_empty()
+        && list.row_shadows == 0
         && list.directional_shadows == 0
         && list.caster_classes == 0)
 }
@@ -192,7 +195,8 @@ mod tests {
                 failed: 0,
                 mask_reused: 1,
                 mask_incremental: 0,
-                mask_full: 1
+                mask_full: 1,
+                rows_built: 0,
             }
         );
     }

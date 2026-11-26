@@ -7,7 +7,8 @@
 //! the obstacle raster collecting triangles, laying out the buffer and staging tile cells,
 //! the lights and suns of the medium stage, and the light pass splitting the list into its draws, writing the light and mask buffer
 //! bytes and its uniform blocks, filling the profile and mask atlas bytes, and culling the
-//! ambient zones, writing their records, vertex texels and uniform blocks (ADR 0006, ADR 0010).
+//! ambient zones, writing their records, vertex texels and uniform blocks, and the light rows
+//! picking their lights, assigning rows and writing their blocks (ADR 0006, ADR 0010, ADR 0019).
 //!
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
@@ -45,8 +46,12 @@ use knorke_light2d::occluder_raster::{
 };
 use knorke_light2d::profile::{ProfilePreset, ProfileShape, build_shape_profile};
 use knorke_light2d::profile_store::ProfileStore;
+use knorke_light2d::rows::{
+    MaskChange, RowBlockers, RowBuildParams, RowCache, RowEdgeParams, RowLamp, RowLookupParams,
+    RowMask, RowSpace,
+};
 use knorke_light2d::settings::LightSettings;
-use knorke_light2d::shadow::{MaskPlanInput, MaskUpdateLimits, MaskUpdatePlan};
+use knorke_light2d::shadow::{MaskPlanInput, MaskUpdateLimits, MaskUpdatePlan, OcclusionDomain};
 use knorke_light2d::zone_pass::{
     ZoneFragParams, ZonePassParams, fill_zone_vertices, write_zones, zone_vertex_bytes,
     zone_vertex_rows,
@@ -211,6 +216,16 @@ fn steady_state_light2d_paths_allocate_nothing() {
         height: 64,
     };
 
+    let mut row_list = LightList::default();
+    let mut row_cache = RowCache::default();
+    let row_domain = OcclusionDomain::new(128, 64, 1.0);
+    // A partly transparent fence keeps the lamps reaching it from the rows.
+    let mut fences = ObstacleStore::new();
+    let mut fence = ShapeDesc::rect(2.0, 1.0);
+    fence.common.opacity = 0.5;
+    let fence = fences.create_shape(&fence).unwrap();
+    let mut row_blockers = RowBlockers::default();
+
     let mut step = |i: u32| {
         // Shadow cache plan: move some dynamic obstacles, pan, decide and commit.
         for (k, &id) in shadow_movers.iter().enumerate().skip(i as usize % 2) {
@@ -283,6 +298,50 @@ fn steady_state_light2d_paths_allocate_nothing() {
             64,
             &modes,
             &mut list,
+        );
+        // The light rows: the lights that suit them, their rows (the mask changed in the
+        // plan's rectangles) and the blocks of the row programs.
+        fences
+            .set_transform(fence, At::new(Vec2::new(i as f32, 3.0)), 0.0)
+            .unwrap();
+        row_blockers.collect(true, &fences, &Projection::IDENTITY, &row_domain);
+        let row_modes = LightModes {
+            rows: true,
+            row_blockers: Some(&row_blockers),
+            ..modes
+        };
+        collect_lights(
+            &scene,
+            &LightSettings::default(),
+            &Projection::IDENTITY,
+            f64::from(i) / 60.0,
+            128,
+            64,
+            &row_modes,
+            &mut row_list,
+        );
+        assert!(!row_list.rows.is_empty());
+        let row_mask = RowMask {
+            size: [row_domain.width, row_domain.height],
+            snapped: [i as i32 / 8, 0],
+            change: MaskChange::Rects(plan.mask_rects()),
+        };
+        row_cache.begin();
+        for light in &row_list.rows {
+            if let Some((row, _)) = row_cache.assign(light, &row_mask) {
+                let lamp = RowLamp {
+                    light: light.light,
+                    row: [row as f32, light.size, 0.0, 0.0],
+                };
+                let _ = lamp.to_bytes();
+            }
+        }
+        row_cache.commit();
+        let space = RowSpace::new(&Projection::IDENTITY, &row_domain);
+        let _ = (
+            RowBuildParams::new(&space, row_mask.size).to_bytes(),
+            RowEdgeParams::new(&space, row_cache.rows()).to_bytes(),
+            RowLookupParams::new(&space, row_mask.size, row_cache.rows(), 0.05).to_bytes(),
         );
         // The lights and suns of the medium stage.
         collect_medium_lights(

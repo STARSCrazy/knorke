@@ -49,6 +49,7 @@ use crate::pattern_store::PatternStore;
 use crate::profile_store::ProfileStore;
 use crate::projection::Projection;
 use crate::ring_light::RingLight;
+use crate::rows::{MaskChange, RowBlockers, frame_suits};
 use crate::settings::LightSettings;
 use crate::shadow::{MaskAnchor, MaskPlanInput, MaskUpdate, OcclusionDomain};
 use crate::zone_pass::ZoneInput;
@@ -278,6 +279,7 @@ pub struct PassPlan<'d> {
     last_size: (u32, u32),
     last_shadow_scale: f32,
     thin_obstacles: u32,
+    row_blockers: RowBlockers,
     stats: PassStats,
 }
 
@@ -311,6 +313,12 @@ impl ShadowState {
             scene_max_top: self.scene_max_top,
             casters: [mask.caster_maps(0), mask.caster_maps(1)],
             patterns: patterns.maps(),
+            snapped: self.anchor.snapped,
+            change: match mask.last_update() {
+                MaskUpdate::Reused => MaskChange::None,
+                MaskUpdate::Incremental => MaskChange::Rects(mask.mask_rects()),
+                MaskUpdate::Full => MaskChange::All,
+            },
         })
     }
 }
@@ -446,6 +454,7 @@ impl<'d> PassPlan<'d> {
             last_size: (0, 0),
             last_shadow_scale: 1.0,
             thin_obstacles: 0,
+            row_blockers: RowBlockers::default(),
             stats: PassStats::default(),
         })
     }
@@ -466,6 +475,7 @@ impl<'d> PassPlan<'d> {
     /// after restoring the obstacle store from a snapshot into a running plan.
     pub fn invalidate(&mut self) {
         self.occlusion.invalidate();
+        self.lighting.invalidate();
     }
 
     /// Culls the lights and zones of the frame and prepares every stage: occlusion (only with a
@@ -502,14 +512,28 @@ impl<'d> PassPlan<'d> {
         let obstacles = stores.obstacles;
         let sprite = frame.occlusion.is_some();
         let normal_mode = frame.surface.is_some() || frame.material.is_some();
+        let max_top = obstacles.max_finite_top();
         let max_height = max_height(
             frame.surface.is_some(),
-            obstacles.max_finite_top(),
+            max_top,
             obstacles.any_infinite_enabled(),
             sprite,
             settings.surface_height_step,
         );
         let builds_medium = medium_map_builds(frame.medium.is_some(), stores.lights);
+        let rows = frame_suits(
+            settings,
+            frame.surface.is_some(),
+            builds_medium,
+            sprite,
+            max_top,
+        );
+        self.row_blockers.collect(
+            rows,
+            obstacles,
+            frame.projection,
+            &OcclusionDomain::new(w, h, settings.resolutions().shadow),
+        );
         let modes = LightModes {
             height_mode: obstacles.any_finite_height(),
             normal_mode,
@@ -518,6 +542,8 @@ impl<'d> PassPlan<'d> {
             profiles: stores.profiles.map(|p| p as _),
             animations: stores.animations,
             masks: stores.masks,
+            rows,
+            row_blockers: Some(&self.row_blockers),
         };
         collect_lights(
             stores.lights,
@@ -702,7 +728,7 @@ impl<'d> PassPlan<'d> {
         if lit.ambient_zones {
             prepared.stages.insert(PassStages::ZONES);
         }
-        if self.lighting.draws().light_pass() {
+        if self.lighting.light_pass() {
             prepared.stages.insert(PassStages::LIGHTS);
         }
         prepared.lighting = lit;
@@ -838,6 +864,7 @@ impl<'d> PassPlan<'d> {
         out.lighting =
             self.lighting
                 .record(cmd, &self.light_pipelines, &self.samplers, &light_frame)?;
+        self.lighting.commit();
         if self.medium.is_active() {
             let media = frame.media.unwrap_or(&self.default_media);
             let medium = medium_frame(
@@ -877,6 +904,7 @@ impl<'d> PassPlan<'d> {
             },
         });
         self.stats.count(prepared.mask_update);
+        self.stats.rows_built += u64::from(out.lighting.rows_built);
         self.last = Some(prepared);
         self.last_size = frame.size();
         self.last_shadow_scale = shadow_scale;
@@ -892,6 +920,11 @@ impl<'d> PassPlan<'d> {
     /// What the last recorded frame ran, `None` before the first one.
     pub fn last_frame(&self) -> Option<&PassPrepared> {
         self.last.as_ref()
+    }
+
+    /// The lights the last prepared frame culled and sorted.
+    pub fn lights(&self) -> &LightList {
+        &self.lights
     }
 
     /// Counters over the plan's lifetime.
@@ -1019,11 +1052,12 @@ impl Inspect for PassPlan<'_> {
         v.field("mask_reused", stats.mask_reused);
         v.field("mask_incremental", stats.mask_incremental);
         v.field("mask_full", stats.mask_full);
+        v.field("rows_built", stats.rows_built);
         v.field("pipelines", self.pipeline_count());
         v.field("shaders", self.shaders.created_count());
         v.field(
             "lights",
-            self.lights.ordered.len() + self.lights.directional.len(),
+            self.lights.ordered.len() + self.lights.rows.len() + self.lights.directional.len(),
         );
         v.field("zones", self.zones.zones.len());
         v.field("warnings_reported", self.warnings.reported().len());
