@@ -84,7 +84,7 @@ pub struct PipelineRef<'a> {
     raw: NonNull<SDL_GPUGraphicsPipeline>,
     device: NonNull<SDL_GPUDevice>,
     reflection: (Reflection, Reflection),
-    formats: [SDL_GPUTextureFormat; 2],
+    formats: [SDL_GPUTextureFormat; MAX_COLOR_TARGETS],
     targets: u8,
     _borrow: PhantomData<&'a SDL_GPUGraphicsPipeline>,
 }
@@ -94,7 +94,7 @@ impl PipelineRef<'_> {
         raw: NonNull<SDL_GPUGraphicsPipeline>,
         device: NonNull<SDL_GPUDevice>,
         reflection: (Reflection, Reflection),
-        formats: [SDL_GPUTextureFormat; 2],
+        formats: [SDL_GPUTextureFormat; MAX_COLOR_TARGETS],
         targets: u8,
     ) -> Self {
         Self {
