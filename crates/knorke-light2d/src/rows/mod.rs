@@ -33,7 +33,7 @@ use knorke_math::uniform_block;
 use knorke_math::{At, Vec2, Vec3, World2, det};
 
 use crate::area_light::rect_across;
-use crate::gpu_light::GpuLight;
+use crate::gpu_light::{GpuLight, GpuMask};
 use crate::light::{LightDesc, LightRef, LightType, ShadowFilter};
 use crate::obstacle::ObstacleStore;
 use crate::projection::Projection;
@@ -149,14 +149,13 @@ const SUPPORT_TS: [[[f32; 2]; 4]; 2] = [
 ];
 
 /// Whether a light can be a row light in a frame [`frame_suits`] accepts: a point, spot, line or
-/// rect light without mask; if it casts shadows also without a caster filter (E53: a row is
-/// built from the mask of all casters), not marked `inside_obstacle` (E147: the row skips only
-/// the obstacle a lamp's height lies in) and with a reach ([`RowLight::reach`]) of at most
-/// [`MAX_REACH`] mask texels.
-/// Animation, flicker, a turning cone and a profile change nothing a row holds.
+/// rect light (masks only point and spot lights have); if it casts shadows also without a caster
+/// filter (E53: a row is built from the mask of all casters), not marked `inside_obstacle`
+/// (E147: the row skips only the obstacle a lamp's height lies in) and with a reach
+/// ([`RowLight::reach`]) of at most [`MAX_REACH`] mask texels.
+/// Animation, flicker, a turning cone, a profile and a mask change nothing a row holds.
 pub fn light_suits(d: &LightDesc, reach: f32) -> bool {
     d.kind != LightType::Directional
-        && d.mask.is_none()
         && (!d.cast_shadows
             || (d.shadow_filter == ShadowFilter::All && !d.inside_obstacle && reach <= MAX_REACH))
 }
@@ -214,6 +213,14 @@ pub struct RowLight {
     pub reach: f32,
     /// Source radius in world units (0: hard shadows).
     pub size: f32,
+    /// A point or spot light's mask (E115): drawn by the `_mask` programs. A window mask's ray
+    /// ends at the window, so the obstacles nearer the lamp do not count.
+    pub mask: Option<GpuMask>,
+    /// A shadowed window mask's rectangle on the ground, in mask texels from the lamp's ground
+    /// point: `[0]` xy its middle, zw the half side U, `[1]` xy the half side V; all zero
+    /// without. The row is built from where a ray enters it on: what lies nearer never counts,
+    /// and an infinitely tall wall there must not end the march.
+    pub window: [[f32; 4]; 2],
 }
 
 /// The key of a light's row: its slot index in the light store, transient lights counted down
@@ -286,13 +293,19 @@ impl RowLight {
 uniform_block! {
     /// A lamp as the row programs read it; matches `struct RowLamp` in `lightrow.hlsli`.
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    pub struct RowLamp[144] {
+    pub struct RowLamp[224] {
         /// The light.
         pub light: GpuLight,
         /// x the lamp's row in the atlas, -1 without shadow; y source radius in world units.
         /// A line or rect light's `light.profile` holds its support points' rows instead
         /// (Chiaro's area light never reads a profile).
         pub row: [f32; 4],
+        /// Its mask (zero without); only the `_mask` programs read it.
+        pub mask: GpuMask,
+        /// [`RowLight::window`]; only the row build reads it.
+        pub window: [f32; 4],
+        /// See `window`.
+        pub window_v: [f32; 4],
     }
 }
 
@@ -406,6 +419,8 @@ struct RowSource {
     ground: [f32; 2],
     /// Lamp height, radius and source radius in world units.
     lamp: [f32; 3],
+    /// [`RowLight::window`]: the row begins there.
+    window: [[f32; 4]; 2],
     /// Reach in mask texels.
     reach: f32,
     /// The mask anchor then.
@@ -424,6 +439,7 @@ impl RowSource {
         Self {
             ground,
             lamp: [g.position_radius[2], g.position_radius[3], light.size],
+            window: light.window,
             reach: light.reach,
             snapped: mask.snapped,
             inside,
@@ -436,7 +452,10 @@ impl RowSource {
     fn holds(&self, now: &Self, change: MaskChange<'_>) -> bool {
         let shift = [0, 1].map(|i| i64::from(now.snapped[i]) - i64::from(self.snapped[i]));
         let panned = shift != [0, 0];
-        if self.lamp != now.lamp || (panned && !(self.inside && now.inside)) {
+        if self.lamp != now.lamp
+            || self.window != now.window
+            || (panned && !(self.inside && now.inside))
+        {
             return false;
         }
         if (0..2)
@@ -578,6 +597,8 @@ mod tests {
             shadowed: true,
             reach: 20.0,
             size: 0.0,
+            mask: None,
+            window: [[0.0; 4]; 2],
         }
     }
 
@@ -632,6 +653,11 @@ mod tests {
             profiled.profile.is_some() && light_suits(&profiled, 100.0),
             "profile"
         );
+        let masked = LightDesc {
+            mask: crate::light::MaskId::from_bits(1 << 32),
+            ..point.clone()
+        };
+        assert!(light_suits(&masked, 100.0), "mask");
         let kind = |kind| LightDesc {
             kind,
             ..point.clone()
@@ -753,19 +779,25 @@ mod tests {
             frame(&mut cache, &[moved, raised], &still),
             [(0, false), (1, true)]
         );
-        // Colour is not in the row.
+        // Colour is not in the row; a window it begins at is.
         let mut red = raised;
         red.light.color_falloff = [1.0, 0.0, 0.0, 1.0];
         assert_eq!(
             frame(&mut cache, &[moved, red], &still),
             [(0, false), (1, false)]
         );
+        let mut window = red;
+        window.window[0] = [0.0, 10.0, 4.0, 0.0];
+        assert_eq!(
+            frame(&mut cache, &[moved, window], &still),
+            [(0, false), (1, true)]
+        );
         // A redrawn rectangle within reach of one lamp.
         let mut rects = DirtyRectList::new();
         rects.add(DirtyRect::new(60, 40, 70, 50));
         let changed = mask([0, 0], MaskChange::Rects(&rects));
         assert_eq!(
-            frame(&mut cache, &[moved, raised], &changed),
+            frame(&mut cache, &[moved, window], &changed),
             [(0, true), (1, false)]
         );
         assert_eq!(

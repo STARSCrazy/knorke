@@ -49,43 +49,53 @@ const fn atlas_program(fragment: &'static str) -> ProgramDesc {
     }
 }
 
-const fn material_program(fragment: &'static str) -> ProgramDesc {
+const fn material_program(vertex: &'static str, fragment: &'static str) -> ProgramDesc {
     ProgramDesc {
         second: Some(SecondTarget {
             format: MATERIAL_TARGET_FORMAT,
             blend: Blend::Additive,
         }),
-        ..ProgramDesc::new("lightrow.vert", fragment, Blend::Additive)
+        ..ProgramDesc::new(vertex, fragment, Blend::Additive)
     }
 }
 
 /// The light is one shader in three versions because the light pass has three target layouts
 /// (Chiaro's `surface_light.hlsli`): the light buffer alone, with the specular buffer, with the
-/// direction buffer.
-const PROGRAMS: [ProgramDesc; 6] = [
+/// direction buffer; and each again for masked lamps.
+const PROGRAMS: [ProgramDesc; 9] = [
     atlas_program("lightrow_build.frag"),
     atlas_program("lightrow_edge.frag"),
     ProgramDesc::new("lightrow.vert", "lightrow_light.frag", Blend::Additive),
-    material_program("lightrow_light_exact.frag"),
-    material_program("lightrow_light_direction.frag"),
+    material_program("lightrow.vert", "lightrow_light_exact.frag"),
+    material_program("lightrow.vert", "lightrow_light_direction.frag"),
     ProgramDesc::new("lightrow.vert", "lightrow_pattern.frag", Blend::Opaque),
+    ProgramDesc::new(
+        "lightrow_mask.vert",
+        "lightrow_light_mask.frag",
+        Blend::Additive,
+    ),
+    material_program("lightrow_mask.vert", "lightrow_light_exact_mask.frag"),
+    material_program("lightrow_mask.vert", "lightrow_light_direction_mask.frag"),
 ];
 
-const fn light_program(detail: DetailMode) -> usize {
-    match detail {
-        DetailMode::None => 2,
-        DetailMode::Exact => 3,
-        DetailMode::Direction => 4,
+const fn light_program(detail: DetailMode, masked: bool) -> usize {
+    let base = if masked { 6 } else { 2 };
+    base + match detail {
+        DetailMode::None => 0,
+        DetailMode::Exact => 1,
+        DetailMode::Direction => 2,
     }
 }
 
-/// What the prepared frame draws. The lamp buffer holds the frame's row lights, then the lamps
-/// whose row is built (a line or rect light's support points), the ones with a source radius
-/// first (the edge pass draws only them).
+/// What the prepared frame draws. The lamp buffer holds the frame's row lights, the masked ones
+/// last (their own programs), then the lamps whose row is built (a line or rect light's support
+/// points), the ones with a source radius first (the edge pass draws only them).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RowsRecord {
     /// Row lights drawn.
     pub lights: u32,
+    /// Of them with a mask.
+    pub masked: u32,
     /// Rows built.
     pub built: u32,
     /// Of them with an edge row.
@@ -218,8 +228,13 @@ impl<'d> RowLights<'d> {
             .iter()
             .filter(|&&i| built(lights, i).size > 0.0)
             .count();
+        let masked = lights.iter().filter(|l| l.mask.is_some()).count() as u32;
+        if masked > 0 && frame.mask_atlas.is_none() {
+            return Err(missing("the mask atlas of masked row lights"));
+        }
         self.frame = RowsRecord {
             lights: lights.len() as u32,
+            masked,
             built: self.dirty.len() as u32,
             edges: edges as u32,
         };
@@ -228,7 +243,12 @@ impl<'d> RowLights<'d> {
             Some(p) => p,
             none => none.insert(PipelineCache::new(shaders, &PROGRAMS)?),
         };
-        pipelines.get(shaders, light_program(detail), LIGHT_FORMAT)?;
+        if masked < self.frame.lights {
+            pipelines.get(shaders, light_program(detail, false), LIGHT_FORMAT)?;
+        }
+        if masked > 0 {
+            pipelines.get(shaders, light_program(detail, true), LIGHT_FORMAT)?;
+        }
         if self.frame.built > 0 {
             pipelines.get(shaders, BUILD, ROW_FORMAT)?;
         }
@@ -246,6 +266,8 @@ impl<'d> RowLights<'d> {
         let mut at = 0;
         let order = lights
             .iter()
+            .filter(|l| l.mask.is_none())
+            .chain(lights.iter().filter(|l| l.mask.is_some()))
             .copied()
             .chain(self.dirty.iter().map(|&i| built(lights, i)));
         // Assigned above: asking again in the same frame returns the same row. Without the mask
@@ -265,6 +287,9 @@ impl<'d> RowLights<'d> {
             let mut lamp = RowLamp {
                 light: light.light,
                 row: [row, light.size, 0.0, 0.0],
+                mask: light.mask.unwrap_or_default(),
+                window: light.window[0],
+                window_v: light.window[1],
             };
             if n < lights.len() && light.is_area() && light.shadowed {
                 // Support point k's key is the light's plus k (`RowLight::support`).
@@ -475,8 +500,11 @@ impl<'d> RowLights<'d> {
             frame.profile_atlas.unwrap_or(stand_in),
             self.crossings.texture_ref().unwrap_or(stand_in),
             patterns.map_or(stand_in, |p| p.atlas),
+            frame.mask_atlas.unwrap_or(stand_in),
         ]
         .map(|t| SamplerBinding::new(t, nearest));
+        // Filtered as Chiaro's (`light_mask.hlsli`); only the `_mask` programs read it.
+        textures[11].sampler = samplers.sampler(Filter::Linear);
         // The rest follows the material buffer, which only the exact program reads.
         let exact = self.detail == DetailMode::Exact;
         if !exact {
@@ -494,26 +522,34 @@ impl<'d> RowLights<'d> {
             None => RowLookupParams::default(),
         }
         .to_bytes();
-        let vertex = Self::pass_params(frame, 0, 0);
-        let vertex_uniforms: [&[u8]; 1] = [&vertex];
         let fragment_uniforms: [&[u8]; 3] = [surface_params, &lookup, &pattern_params];
-        pass.bind_program(
-            self.pipeline(light_program(self.detail), LIGHT_FORMAT)?,
-            &Bindings {
-                vertex: StageBindings {
-                    storage_buffers: &[lamps],
-                    uniforms: &vertex_uniforms,
-                    ..Default::default()
+        let plain = self.frame.lights - self.frame.masked;
+        for (masked, first, count) in [(false, 0, plain), (true, plain, self.frame.masked)] {
+            if count == 0 {
+                continue;
+            }
+            let vertex = Self::pass_params(frame, first, 0);
+            let vertex_uniforms: [&[u8]; 1] = [&vertex];
+            let samplers = usize::from(exact) + usize::from(masked) + 10;
+            pass.bind_program(
+                self.pipeline(light_program(self.detail, masked), LIGHT_FORMAT)?,
+                &Bindings {
+                    vertex: StageBindings {
+                        storage_buffers: &[lamps],
+                        uniforms: &vertex_uniforms,
+                        ..Default::default()
+                    },
+                    fragment: StageBindings {
+                        samplers: &textures[..samplers],
+                        storage_buffers: &records,
+                        uniforms: &fragment_uniforms,
+                        ..Default::default()
+                    },
                 },
-                fragment: StageBindings {
-                    samplers: &textures[..if exact { 11 } else { 10 }],
-                    storage_buffers: &records,
-                    uniforms: &fragment_uniforms,
-                    ..Default::default()
-                },
-            },
-        )?;
-        pass.draw_instanced(6, self.frame.lights)
+            )?;
+            pass.draw_instanced(6, count)?;
+        }
+        Ok(())
     }
 
     fn atlas<'a>(

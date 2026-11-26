@@ -101,7 +101,7 @@ float March(float2 lamp, float zl, float2 start, float z)
     return inside ? seen * Crossing(lamp, dir, last, zl, z, r, o0) : seen;
 }
 
-float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
+float Sight(SurfaceLightVaryings l, float2 start, float z, float r, float from) // from: 0, the probe has no masks
 {
     int points = int(Domain.w);
     float sum = 0.0;

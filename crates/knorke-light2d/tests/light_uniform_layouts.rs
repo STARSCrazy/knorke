@@ -118,6 +118,9 @@ const DIRECTIONAL: Layout = &[
 const ROW_LAMP: Layout = &[
     ("light", offset_of!(RowLamp, light), size_of::<GpuLight>()),
     f!(RowLamp, "row", row, 4),
+    ("mask", offset_of!(RowLamp, mask), size_of::<GpuMask>()),
+    f!(RowLamp, "window", window, 4),
+    f!(RowLamp, "windowV", window_v, 4),
 ];
 /// The row vertex shader reads the surface pass block, `MaskBase` as its atlas height.
 const ROW_PASS: Layout = &[
@@ -170,13 +173,17 @@ const PATTERN_OBSTACLE: Layout = &[
     f!(GpuPatternObstacle, "table", table, 4),
 ];
 /// The row programs (`rows::gpu`), with the reference program of the tests.
-const ROW_SHADERS: [&str; 8] = [
+const ROW_SHADERS: [&str; 12] = [
     "lightrow.vert",
+    "lightrow_mask.vert",
     "lightrow_build.frag",
     "lightrow_edge.frag",
     "lightrow_light.frag",
     "lightrow_light_exact.frag",
     "lightrow_light_direction.frag",
+    "lightrow_light_mask.frag",
+    "lightrow_light_exact_mask.frag",
+    "lightrow_light_direction_mask.frag",
     "lightrow_pattern.frag",
     "lightrow_truth.frag",
 ];

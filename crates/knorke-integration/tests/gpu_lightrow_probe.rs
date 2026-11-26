@@ -300,6 +300,7 @@ impl<'d> Truth<'d> {
                     light: l.light,
                     // Any row: the reference marches instead of reading one.
                     row: [0.0, l.size, 0.0, 0.0],
+                    ..RowLamp::default()
                 };
                 *bytes = lamp.to_bytes();
             }

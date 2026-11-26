@@ -18,12 +18,12 @@ mod demo_scene;
 #[path = "common/iso_night.rs"]
 mod iso_night;
 
-use demo_scene::{Demo, DemoFrames, H, Scene, W};
+use demo_scene::{Demo, DemoFrames, H, OUT, Scene, W};
 use knorke_gpu::CommandBuffer;
 use knorke_gpu::test_support::with_chiaro_pack;
 use knorke_integration::layers::{Layer, LayerSet};
 use knorke_integration::light2d::Light2dSettings;
-use knorke_light2d::light::LightType;
+use knorke_light2d::light::{LightDesc, LightType, MaskMode, ShadowFilter};
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::settings::{Quality, Resolutions};
 use knorke_math::{At, Vec2};
@@ -168,9 +168,8 @@ fn row_lights_equal_chiaro_lights_without_obstacles() {
                     if alone {
                         // Idempotent: the second and third mode find them gone.
                         for &id in &f.scene.light_ids {
-                            let other = f.scene.lights.get(id).is_ok_and(|d| {
-                                d.kind == LightType::Directional || d.mask.is_some()
-                            });
+                            let other = (f.scene.lights.get(id))
+                                .is_ok_and(|d| d.kind == LightType::Directional);
                             if other {
                                 f.scene.lights.destroy(id).unwrap();
                             }
@@ -205,14 +204,26 @@ fn row_lights_equal_chiaro_lights_without_obstacles() {
     });
 }
 
-/// The whole demo with opaque obstacles: row lights and Chiaro's lights (profiles, masks, area
-/// lights, the sun, zones) in one frame and the same targets.
+/// The whole demo with opaque obstacles: row lights and Chiaro's lights (a lamp with a caster
+/// filter, the sun, zones) in one frame and the same targets.
 #[test]
 fn row_lights_and_chiaro_lights_share_a_frame() {
     with_chiaro_pack(|gpu, pack| {
         iso_night::with_demo("hard", 44, "", |demo| {
             demo.with_frames(gpu, pack, &with_rows, &mut |f| {
                 drop_patterns(&mut f.scene);
+                // Every lamp of the demo is a row light; a caster filter (E53) keeps one with
+                // Chiaro's programs.
+                f.frame();
+                let key = (f.renderer.plan().lights().rows.iter())
+                    .find(|l| l.shadowed)
+                    .map(|l| (l.key >> 2) as u32)
+                    .unwrap();
+                let id = *(f.scene.light_ids.iter())
+                    .find(|id| id.index() == key)
+                    .unwrap();
+                f.scene
+                    .change_light(id, |d| d.shadow_filter = ShadowFilter::StaticOnly);
                 f.settings.light.light_rows = false;
                 let (off, without) = f.frame();
                 f.settings.light.light_rows = true;
@@ -253,8 +264,8 @@ fn pattern_obstacles_are_runs_of_the_row() {
                     "iso_night_hard: {rows} of {drawn} lights are row lights; against rows off: \
                      largest difference {max}/255, mean {mean:.4}, {share:.2} % of the pixels"
                 );
-                // All but the sun, which is no row light.
-                assert_eq!(rows + 1, drawn);
+                // Every lamp, the masked hall window's too (the sun is no instanced light).
+                assert_eq!(rows, drawn);
                 assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
 
                 // Every shadowed lamp whose disc holds a corner of a fence triangle.
@@ -334,7 +345,7 @@ fn half_transparent_walls_are_runs_of_the_row() {
                      from opaque walls to none",
                     shadow.len()
                 );
-                assert_eq!(rows, 33, "the row lights with opaque fences");
+                assert_eq!(rows, 34, "the row lights with opaque fences");
                 assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
                 assert!(shadow.len() > 500, "{} pixels", shadow.len());
                 assert!(row > 0.2 && row < 0.8, "neither dark nor lit: {row}");
@@ -344,6 +355,71 @@ fn half_transparent_walls_are_runs_of_the_row() {
                 assert!((row - chiaro).abs() < 0.1, "rows {row}, Chiaro {chiaro}");
             });
         });
+    });
+}
+
+/// The masked hall window alone (a point light under the hall's ceiling behind a window mask):
+/// a row light with the mask's colour whose ray ends at the window, so the hall's own walls
+/// cast nothing; hard (`hard`) and soft with infinitely tall walls (`plain`), against Chiaro's.
+/// `KNORKE_ROWS_OUT=<dir>` writes both pictures.
+#[test]
+fn the_hall_window_is_a_row_light() {
+    with_chiaro_pack(|gpu, pack| {
+        for (variant, hud) in [("hard", 44), ("plain", 45)] {
+            iso_night::with_demo(variant, hud, "", |demo| {
+                demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                    for &id in &f.scene.light_ids {
+                        let window =
+                            |d: &LightDesc| d.mask.is_some() && d.mask_mode == MaskMode::Window;
+                        if f.scene.lights.get(id).is_ok_and(|d| !window(d)) {
+                            f.scene.lights.destroy(id).unwrap();
+                        }
+                    }
+                    let (on, off, _) = on_and_off(f);
+                    let masked = (f.renderer.plan().lights().rows.iter())
+                        .filter(|l| l.mask.is_some())
+                        .count();
+                    // The demo's car lights come and go with the frame: the window's own light
+                    // is the frame less the one without it, each way.
+                    let window = f.scene.light_ids[(f.scene.light_ids.iter())
+                        .position(|&id| f.scene.lights.get(id).is_ok())
+                        .unwrap()];
+                    f.scene.change_light(window, |d| d.enabled = false);
+                    let (dark_on, dark_off, _) = on_and_off(f);
+                    let own = |a: &[u8], b: &[u8]| -> Vec<u8> {
+                        a.iter().zip(b).map(|(x, y)| x.saturating_sub(*y)).collect()
+                    };
+                    let (on, off) = (own(&on, &dark_on), own(&off, &dark_off));
+                    let lit = 100.0
+                        * (off.as_chunks::<4>().0.iter())
+                            .filter(|p| p.iter().any(|&c| c > 0))
+                            .count() as f64
+                        / (off.len() / 4) as f64;
+                    let (max, mean, share) = diff(&on, &off);
+                    eprintln!(
+                        "iso_night_{variant}, the hall window's light: lighting {lit:.2} % of the \
+                         pixels; against rows off: largest difference {max}/255, mean \
+                         {mean:.4}, {share:.2} % of the pixels"
+                    );
+                    if let Some(dir) = std::env::var_os("KNORKE_ROWS_OUT") {
+                        let dir = std::path::PathBuf::from(dir);
+                        std::fs::create_dir_all(&dir).unwrap();
+                        for (name, px) in [("neu", &on), ("heute", &off)] {
+                            let opaque: Vec<u8> = (px.as_chunks::<4>().0.iter())
+                                .flat_map(|p| [p[0], p[1], p[2], 255])
+                                .collect();
+                            let file = dir.join(format!("fenster_{variant}_{name}.png"));
+                            knorke_contract_tests::parity::save_png_rgba8(
+                                &file, &opaque, OUT.0, OUT.1,
+                            );
+                        }
+                    }
+                    assert_eq!(masked, 1, "the hall window is a row light");
+                    assert!(lit > 1.0, "the window lights {lit} % of the pixels");
+                    assert!(mean < 0.5 && share < 5.0, "mean {mean}, {share} %");
+                });
+            });
+        }
     });
 }
 

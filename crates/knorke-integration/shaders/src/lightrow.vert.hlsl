@@ -1,6 +1,8 @@
 // Light rows (ADR 0019): one instance per lamp for every row program.
 //   AtlasRows > 0  row build and edge pass: the lamp's row of the atlas, scene.x the angle as a fraction of the turn
 //   AtlasRows = 0  light: the scene rectangle the lamp can reach, scene the scene pixel
+// CHI_LIGHT_MASK (lightrow_mask.vert, with CHI_POINT_LIGHTS as Chiaro's `_mask` programs): the mask instead of the
+// area light fields.
 // Origin of the light rectangle and of the varyings: chiaro @ 9bc5b9b, shaders/src/light_surface.vert.hlsl.
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any express or
 // implied warranty; the origin must not be misrepresented; altered source versions must be plainly marked as such
@@ -45,9 +47,21 @@ VSOutput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
     o.spotCos = float4(light.spotCos.xy, light.shadow.y, light.spotCos.w);
     o.shadow = float4(lamp.row.xy, light.shadow.zw);
     o.profile = light.profile;
+#ifdef CHI_LIGHT_MASK
+    o.maskN = lamp.mask.n;
+    o.maskU = lamp.mask.p;
+    o.maskV = lamp.mask.q;
+#else
     o.area = light.area;
     o.areaMask = light.areaMask;
+#endif
     if (AtlasRows > 0u) {
+#ifndef CHI_LIGHT_MASK
+        // The atlas programs read no area light fields (a line or rect light's rows are built from its support
+        // points): they carry the window the row begins at (lightrow_build.frag).
+        o.area = lamp.window;
+        o.areaMask = lamp.windowV;
+#endif
         o.scene = corner;
         o.position = float4(corner.x * 2.0 - 1.0, 1.0 - 2.0 * (lamp.row.x + corner.y) / float(AtlasRows), 0.0, 1.0);
         return o;
