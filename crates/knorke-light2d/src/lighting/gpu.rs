@@ -246,6 +246,14 @@ pub struct LightingRecord {
     pub row_lights: u32,
     /// Light rows built this frame; 0 while lamps and obstacles rest.
     pub rows_built: u32,
+    /// Directional lights drawn with a sun map (not in `lights_drawn`, as Chiaro's).
+    pub row_suns: u32,
+    /// Sun maps built whole this frame; 0 while suns and obstacles rest.
+    pub suns_built: u32,
+    /// Sun maps updated in part this frame (a pan, redrawn rectangles).
+    pub suns_updated: u32,
+    /// Sun map texels built or updated this frame.
+    pub sun_texels: u64,
 }
 
 /// Slot of each program of the frame.
@@ -521,7 +529,8 @@ impl<'d> LightingStage<'d> {
                 programs[slot(p)] = Some(program);
             }
         }
-        if draws.directional > 0 {
+        // The suns with a map have their own programs (`RowLights::record_sun`).
+        if draws.directional > self.rows.frame().suns {
             let program = program_for(LightPass::Directional, false, &modes);
             pipelines.prepare(shaders, program, LIGHT_FORMAT)?;
             programs[DIRECTIONAL] = Some(program);
@@ -675,6 +684,9 @@ impl<'d> LightingStage<'d> {
         }
         self.rows.record_builds(cmd, samplers, frame)?;
         record.rows_built = rows.built;
+        record.suns_built = rows.suns_built;
+        record.suns_updated = rows.suns_updated;
+        record.sun_texels = rows.sun_texels;
         let second = match self.detail {
             DetailMode::Exact => self.specular.texture_ref(),
             DetailMode::Direction => self.direction.texture_ref(),
@@ -701,7 +713,7 @@ impl<'d> LightingStage<'d> {
         let linear = samplers.sampler(Filter::Linear);
         let surface_texture = frame.surface.or(frame.material);
         // The flat row light reads the projection from it too (lightrow_surface.hlsli).
-        let surface_params = if normal_mode || self.rows.frame().lights > 0 {
+        let surface_params = if normal_mode || rows.lights + rows.suns > 0 {
             SurfaceParams::new(p, w, h, frame.settings, &domain, frame.surface.is_some())
         } else {
             SurfaceParams::default()
@@ -803,9 +815,7 @@ impl<'d> LightingStage<'d> {
             record.draws += 1;
         }
         if d.directional > 0 {
-            let program = self.programs[DIRECTIONAL]
-                .ok_or_else(|| input_missing("the directional program"))?;
-            let layout = light_layout_of(program);
+            let program = self.programs[DIRECTIONAL];
             // Without shadows the surface (or material) buffer stands in for mask, field and
             // heights, without one the scene; the shader does not read them then.
             let stand_in = if normal_mode {
@@ -822,6 +832,14 @@ impl<'d> LightingStage<'d> {
                 .take(d.directional as usize)
                 .enumerate()
             {
+                // In store order, so the additive sum is the same as with Chiaro's alone.
+                if (self.rows).record_sun(&mut pass, samplers, frame, &surface_params, i)? {
+                    record.draws += 1;
+                    record.row_suns += 1;
+                    continue;
+                }
+                let program = program.ok_or_else(|| input_missing("the directional program"))?;
+                let layout = light_layout_of(program);
                 match frame.shadows {
                     Some(s) => {
                         let casters = frame

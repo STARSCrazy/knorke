@@ -8,7 +8,8 @@
 //! the lights and suns of the medium stage, and the light pass splitting the list into its draws, writing the light and mask buffer
 //! bytes and its uniform blocks, filling the profile and mask atlas bytes, and culling the
 //! ambient zones, writing their records, vertex texels and uniform blocks, and the light rows
-//! picking their lights, assigning rows and writing their blocks (ADR 0006, ADR 0010, ADR 0019).
+//! picking their lights, assigning rows and sun maps and writing their blocks (ADR 0006,
+//! ADR 0010, ADR 0019).
 //!
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
@@ -47,8 +48,9 @@ use knorke_light2d::occluder_raster::{
 use knorke_light2d::profile::{ProfilePreset, ProfileShape, build_shape_profile};
 use knorke_light2d::profile_store::ProfileStore;
 use knorke_light2d::rows::{
-    MaskChange, RowBlockers, RowBuildParams, RowCache, RowEdgeParams, RowLamp, RowLookupParams,
-    RowMask, RowSpace,
+    MaskChange, Refresh, RowBlockers, RowBuildParams, RowCache, RowEdgeParams, RowLamp,
+    RowLookupParams, RowMask, RowSpace, SunBands, SunCache, SunParams, SunSource, sun_bands,
+    sun_suits,
 };
 use knorke_light2d::settings::LightSettings;
 use knorke_light2d::shadow::{MaskPlanInput, MaskUpdateLimits, MaskUpdatePlan, OcclusionDomain};
@@ -218,6 +220,8 @@ fn steady_state_light2d_paths_allocate_nothing() {
 
     let mut row_list = LightList::default();
     let mut row_cache = RowCache::default();
+    let mut sun_cache = SunCache::default();
+    let mut sun_bands_out = SunBands::default();
     let row_domain = OcclusionDomain::new(128, 64, 1.0);
     // A tile grid with a pattern keeps the lamps reaching it from the rows.
     let mut fences = ObstacleStore::new();
@@ -346,6 +350,31 @@ fn steady_state_light2d_paths_allocate_nothing() {
             }
         }
         row_cache.commit();
+        // The suns' maps: their blocks and their slots, built when the mask changed.
+        sun_cache.begin();
+        assert!(!row_list.directional.is_empty());
+        let directional = row_list
+            .directional
+            .iter()
+            .zip(&row_list.directional_casters);
+        for (k, (g, &casters)) in directional.enumerate() {
+            let _ = sun_suits(g, casters);
+            let params = SunParams::new(g, row_mask.size, row_mask.snapped, 0.05, 3.0);
+            let _ = params.to_bytes();
+            let source = SunSource::new(&params, &row_mask);
+            if let Some((_, Refresh::Update(before))) =
+                sun_cache.assign(k as u64, source, row_mask.change)
+            {
+                let _ = sun_bands(
+                    &params,
+                    &source,
+                    &before,
+                    row_mask.change,
+                    &mut sun_bands_out,
+                );
+            }
+        }
+        sun_cache.commit();
         let space = RowSpace::new(&Projection::IDENTITY, &row_domain);
         let _ = (
             RowBuildParams::new(&space, row_mask.size, true).to_bytes(),

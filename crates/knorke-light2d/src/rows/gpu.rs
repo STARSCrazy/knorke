@@ -1,6 +1,6 @@
 //! The row lights on the GPU: the row atlas (one row of [`ROW_ANGLES`] texels per lamp), the
 //! edge atlas of lamps with a source radius, the crossing atlas of frames with pattern obstacles,
-//! their programs and what a frame records. Part of
+//! the maps of the hard suns, their programs and what a frame records. Part of
 //! the light pass ([`LightingStage`](crate::lighting::LightingStage) owns and drives it); it
 //! records into the host's command buffer and never submits or reads back (ADR 0002).
 
@@ -13,11 +13,13 @@ use knorke_gpu::{
     ProgramDesc, RenderPass, RenderTarget, SamplerBinding, Samplers, SecondTarget, ShaderLibrary,
     StageBindings, UploadBuffer,
 };
+use knorke_math::bytemuck;
 use knorke_types::{Diagnostic, DiagnosticCode};
 
 use super::{
-    MAX_ROWS, ROW_ANGLES, RowBuildParams, RowCache, RowEdgeParams, RowLamp, RowLight,
-    RowLookupParams, RowMask, RowSpace, SUPPORTS,
+    MAX_ROWS, MAX_SUN_BANDS, MAX_SUN_MAP, MAX_SUNS, ROW_ANGLES, Refresh, RowBuildParams, RowCache,
+    RowEdgeParams, RowLamp, RowLight, RowLookupParams, RowMask, RowSpace, SUPPORTS, SunBands,
+    SunCache, SunGrid, SunParams, SunSource, frame_suits, sun_bands, sun_suits,
 };
 use crate::light_pipelines::MATERIAL_TARGET_FORMAT;
 use crate::lighting::{
@@ -30,7 +32,8 @@ use crate::pattern_occluders::PatternParams;
 pub const ROWS_INPUT_MISSING: DiagnosticCode =
     DiagnosticCode::new("knorke.light2d.rows.input_missing");
 
-/// Rows and edges: four floats of two 12-bit numbers each (`PackRun` in `lightrow.hlsli`).
+/// Rows and edges: four floats of two 12-bit numbers each (`PackRun` in `lightrow.hlsli`); a
+/// sun map: two intervals (lo, hi).
 const ROW_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R32G32B32A32_FLOAT;
 /// Fewest rows of the atlas; it doubles when more lamps need one.
 const MIN_ROWS: u32 = 16;
@@ -38,6 +41,10 @@ const MIN_ROWS: u32 = 16;
 const BUILD: usize = 0;
 const EDGE: usize = 1;
 const PATTERN: usize = 5;
+const SUN_BUILD: usize = 11;
+const SUN_BAND: usize = 16;
+/// Bytes of a band (`SunBand` of `lightrow_sun_band.vert`).
+const SUN_BAND_SIZE: usize = 32;
 
 const fn atlas_program(fragment: &'static str) -> ProgramDesc {
     ProgramDesc {
@@ -62,8 +69,10 @@ const fn material_program(vertex: &'static str, fragment: &'static str) -> Progr
 /// The light is one shader in three versions because the light pass has three target layouts
 /// (Chiaro's `surface_light.hlsli`): the light buffer alone, with the specular buffer, with the
 /// direction buffer; and each again for masked lamps. A frame without surface and material
-/// buffer has Chiaro's flat light (no Lambert term), with and without a mask.
-const PROGRAMS: [ProgramDesc; 11] = [
+/// buffer has Chiaro's flat light (no Lambert term), with and without a mask. A hard sun is a
+/// fullscreen draw (Chiaro's `fullscreen.vert`) in the same four layouts, its map build one too;
+/// an update of the map draws the build over its bands (`lightrow_sun_band.vert`).
+const PROGRAMS: [ProgramDesc; 17] = [
     atlas_program("lightrow_build.frag"),
     atlas_program("lightrow_edge.frag"),
     ProgramDesc::new("lightrow.vert", "lightrow_light.frag", Blend::Additive),
@@ -83,6 +92,24 @@ const PROGRAMS: [ProgramDesc; 11] = [
         "lightrow_light_flat_mask.frag",
         Blend::Additive,
     ),
+    ProgramDesc::new("fullscreen.vert", "lightrow_sun_build.frag", Blend::Opaque),
+    ProgramDesc::new(
+        "fullscreen.vert",
+        "lightrow_sun_light.frag",
+        Blend::Additive,
+    ),
+    material_program("fullscreen.vert", "lightrow_sun_light_exact.frag"),
+    material_program("fullscreen.vert", "lightrow_sun_light_direction.frag"),
+    ProgramDesc::new(
+        "fullscreen.vert",
+        "lightrow_sun_light_flat.frag",
+        Blend::Additive,
+    ),
+    ProgramDesc::new(
+        "lightrow_sun_band.vert",
+        "lightrow_sun_build.frag",
+        Blend::Opaque,
+    ),
 ];
 
 /// `flat`: no surface and no material buffer, so no detail targets either.
@@ -92,6 +119,18 @@ const fn light_program(detail: DetailMode, masked: bool, flat: bool) -> usize {
     }
     let base = if masked { 6 } else { 2 };
     base + match detail {
+        DetailMode::None => 0,
+        DetailMode::Exact => 1,
+        DetailMode::Direction => 2,
+    }
+}
+
+/// The sun program of `detail` (see [`light_program`]).
+const fn sun_program(detail: DetailMode, flat: bool) -> usize {
+    if flat {
+        return 15;
+    }
+    12 + match detail {
         DetailMode::None => 0,
         DetailMode::Exact => 1,
         DetailMode::Direction => 2,
@@ -111,6 +150,37 @@ pub struct RowsRecord {
     pub built: u32,
     /// Of them with an edge row.
     pub edges: u32,
+    /// Directional lights drawn with a sun map.
+    pub suns: u32,
+    /// Sun maps built whole.
+    pub suns_built: u32,
+    /// Sun maps updated in part (a pan, redrawn rectangles).
+    pub suns_updated: u32,
+    /// Sun map texels built or updated.
+    pub sun_texels: u64,
+}
+
+/// What a sun's map needs this frame.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum MapWork {
+    /// Nothing: it holds.
+    #[default]
+    Keep,
+    /// The texels of its bands.
+    Update,
+    /// All of it.
+    Build,
+}
+
+/// A sun of the prepared frame with a map.
+#[derive(Clone, Copy, Debug, Default)]
+struct FrameSun {
+    /// Index into `LightList::directional`.
+    light: u32,
+    /// Its map.
+    map: u32,
+    work: MapWork,
+    params: SunParams,
 }
 
 /// The row lights of the light pass (see the [module docs](super)).
@@ -132,6 +202,15 @@ pub struct RowLights<'d> {
     detail: DetailMode,
     /// The frame has neither surface nor material buffer.
     flat: bool,
+    /// The sun maps (`lightrow_sun_build.frag`).
+    maps: [RenderTarget<'d>; MAX_SUNS],
+    sun_cache: SunCache,
+    /// The frame's suns with a map, [`RowsRecord::suns`] of them.
+    suns: [FrameSun; MAX_SUNS],
+    /// The texels each of them updates ([`sun_bands`]).
+    bands: [SunBands; MAX_SUNS],
+    /// The bands of the frame's updates, [`MAX_SUN_BANDS`] per sun.
+    band_buffer: UploadBuffer<'d>,
 }
 
 impl<'d> RowLights<'d> {
@@ -154,17 +233,30 @@ impl<'d> RowLights<'d> {
             frame: RowsRecord::default(),
             detail: DetailMode::None,
             flat: false,
+            maps: core::array::from_fn(|_| RenderTarget::new(gpu)),
+            sun_cache: SunCache::default(),
+            suns: [FrameSun::default(); MAX_SUNS],
+            bands: [SunBands::default(); MAX_SUNS],
+            band_buffer: UploadBuffer::new(
+                gpu,
+                SDL_GPU_BUFFERUSAGE_GRAPHICS_STORAGE_READ,
+                (MAX_SUNS * MAX_SUN_BANDS * SUN_BAND_SIZE) as u32,
+                "sun band",
+            ),
         }
     }
 
-    /// Forgets every row: the next frame builds them all.
+    /// Forgets every row and sun map: the next frame builds them all.
     pub fn invalidate(&mut self) {
         self.cache.invalidate();
+        self.sun_cache.invalidate();
     }
 
-    /// The frame's builds were recorded; without this call the next frame builds every row.
+    /// The frame's builds were recorded; without this call the next frame builds every row and
+    /// sun map.
     pub fn commit(&mut self) {
         self.cache.commit();
+        self.sun_cache.commit();
     }
 
     /// What the prepared frame draws.
@@ -177,10 +269,11 @@ impl<'d> RowLights<'d> {
         [self.rows[0].texture_ref(), self.rows[1].texture_ref()]
     }
 
-    /// Decides the frame: which lamp has which row, which rows are built, the atlases, the
-    /// pipelines and the lamp buffer. Returns the targets it (re)allocated. Call it every frame,
-    /// also without row lights: a lamp keeps its row only from one frame to the next, because a
-    /// frame it sat out may have changed the mask.
+    /// Decides the frame: which lamp has which row, which sun has which map, which rows and maps
+    /// are built, the atlases, the pipelines and the lamp buffer. Returns the targets it
+    /// (re)allocated. Call it every frame, also without row lights: a lamp keeps its row (a sun
+    /// its map) only from one frame to the next, because a frame it sat out may have changed the
+    /// mask.
     ///
     /// # Errors
     /// An atlas, the buffer or a pipeline could not be created.
@@ -195,6 +288,130 @@ impl<'d> RowLights<'d> {
         self.flat = frame.surface.is_none() && frame.material.is_none();
         self.dirty.clear();
         self.cache.begin();
+        self.sun_cache.begin();
+        let allocations = self.prepare_suns(frame)? + self.prepare_rows(frame)?;
+
+        let f = self.frame;
+        if f.lights + f.suns == 0 {
+            return Ok(allocations);
+        }
+        let pipelines = match &mut self.pipelines {
+            Some(p) => p,
+            none => none.insert(PipelineCache::new(shaders, &PROGRAMS)?),
+        };
+        let flat = self.flat;
+        let patterns = frame.shadows.is_some_and(|s| s.patterns.is_some());
+        let programs = [
+            (
+                f.masked < f.lights,
+                light_program(detail, false, flat),
+                LIGHT_FORMAT,
+            ),
+            (
+                f.masked > 0,
+                light_program(detail, true, flat),
+                LIGHT_FORMAT,
+            ),
+            (f.built > 0, BUILD, ROW_FORMAT),
+            (f.edges > 0, EDGE, ROW_FORMAT),
+            (f.built > 0 && patterns, PATTERN, ROW_FORMAT),
+            (f.suns > 0, sun_program(detail, flat), LIGHT_FORMAT),
+            (f.suns_built > 0, SUN_BUILD, ROW_FORMAT),
+            (f.suns_updated > 0, SUN_BAND, ROW_FORMAT),
+        ];
+        for (needed, program, format) in programs {
+            if needed {
+                pipelines.get(shaders, program, format)?;
+            }
+        }
+        Ok(allocations)
+    }
+
+    /// The frame's suns with a map ([`sun_suits`], in a frame [`frame_suits`] accepts with
+    /// active shadows whose obstacles are all opaque without pattern; at most [`MAX_SUNS`]) and
+    /// their maps. A map no sun uses this frame is released: the cache builds it anew when a sun
+    /// takes it again. Returns the maps (re)allocated.
+    fn prepare_suns(&mut self, frame: &LightingFrame<'_>) -> Result<u32, Diagnostic> {
+        let list = frame.lights;
+        let mut n = 0;
+        if let Some(s) = frame.shadows.filter(|s| s.height_mode && !s.any_partial) {
+            let mask = row_mask(s);
+            let suits = SunGrid::size_of(mask.size)[1] <= MAX_SUN_MAP
+                && frame_suits(frame.settings, frame.medium_map.is_some(), s.scene_max_top);
+            let tolerance = height_tolerance(frame.settings);
+            let candidates = (list.directional.iter().zip(&list.directional_casters))
+                .enumerate()
+                .filter(|(_, (g, c))| suits && sun_suits(g, **c));
+            for (i, (g, _)) in candidates {
+                let params = SunParams::new(g, mask.size, mask.snapped, tolerance, s.scene_max_top);
+                let source = SunSource::new(&params, &mask);
+                let Some((map, refresh)) = self.sun_cache.assign(i as u64, source, mask.change)
+                else {
+                    break; // all maps taken
+                };
+                let work = match refresh {
+                    Refresh::Keep => MapWork::Keep,
+                    Refresh::Build => MapWork::Build,
+                    Refresh::Update(before) => {
+                        if sun_bands(&params, &source, &before, mask.change, &mut self.bands[n]) {
+                            MapWork::Update
+                        } else {
+                            MapWork::Build
+                        }
+                    }
+                };
+                self.suns[n] = FrameSun {
+                    light: i as u32,
+                    map,
+                    work,
+                    params,
+                };
+                n += 1;
+            }
+        }
+        let mut allocations = 0;
+        for (k, target) in self.maps.iter_mut().enumerate() {
+            match self.suns[..n].iter_mut().find(|f| f.map as usize == k) {
+                Some(f) => {
+                    let [w, h] = [f.params.origin[2], f.params.origin[3]].map(|v| v as u32);
+                    if target.ensure(w, h, ROW_FORMAT)? {
+                        allocations += 1;
+                        f.work = MapWork::Build;
+                    }
+                }
+                None => target.release(),
+            }
+        }
+        self.frame.suns = n as u32;
+        for (f, bands) in self.suns[..n].iter().zip(&self.bands) {
+            let texels = match f.work {
+                MapWork::Keep => 0,
+                MapWork::Update => bands.texels(),
+                MapWork::Build => (f.params.origin[2] * f.params.origin[3]) as u64,
+            };
+            self.frame.suns_built += u32::from(f.work == MapWork::Build);
+            self.frame.suns_updated += u32::from(f.work == MapWork::Update && texels > 0);
+            self.frame.sun_texels += texels;
+        }
+        if self.frame.suns_updated > 0 {
+            let bytes = MAX_SUNS * MAX_SUN_BANDS * SUN_BAND_SIZE;
+            self.band_buffer.reserve(bytes as u64)?;
+            let mut mapped = self.band_buffer.map()?;
+            let out = mapped.bytes();
+            for (k, bands) in self.bands[..n].iter().enumerate() {
+                let at = k * MAX_SUN_BANDS * SUN_BAND_SIZE;
+                for (i, q) in bands.quads().iter().enumerate() {
+                    let at = at + i * SUN_BAND_SIZE;
+                    out[at..at + SUN_BAND_SIZE].copy_from_slice(bytemuck::bytes_of(q));
+                }
+            }
+        }
+        Ok(allocations)
+    }
+
+    /// The frame's row lights: their rows, the atlases and the lamp buffer. Returns the targets
+    /// it (re)allocated.
+    fn prepare_rows(&mut self, frame: &LightingFrame<'_>) -> Result<u32, Diagnostic> {
         let lights: &[RowLight] = &frame.lights.rows;
         if lights.is_empty() {
             return Ok(0);
@@ -252,35 +469,8 @@ impl<'d> RowLights<'d> {
             masked,
             built: self.dirty.len() as u32,
             edges: edges as u32,
+            ..self.frame
         };
-
-        let pipelines = match &mut self.pipelines {
-            Some(p) => p,
-            none => none.insert(PipelineCache::new(shaders, &PROGRAMS)?),
-        };
-        if masked < self.frame.lights {
-            pipelines.get(
-                shaders,
-                light_program(detail, false, self.flat),
-                LIGHT_FORMAT,
-            )?;
-        }
-        if masked > 0 {
-            pipelines.get(
-                shaders,
-                light_program(detail, true, self.flat),
-                LIGHT_FORMAT,
-            )?;
-        }
-        if self.frame.built > 0 {
-            pipelines.get(shaders, BUILD, ROW_FORMAT)?;
-        }
-        if edges > 0 {
-            pipelines.get(shaders, EDGE, ROW_FORMAT)?;
-        }
-        if self.frame.built > 0 && patterns.is_some() {
-            pipelines.get(shaders, PATTERN, ROW_FORMAT)?;
-        }
 
         let count = lights.len() + self.dirty.len();
         self.lamps.reserve((count * RowLamp::SIZE) as u64)?;
@@ -363,6 +553,10 @@ impl<'d> RowLights<'d> {
         if lamps > 0 {
             copy.upload_to_buffer(&self.lamps, lamps * RowLamp::SIZE as u32)?;
         }
+        if self.frame.suns_updated > 0 {
+            let bytes = MAX_SUNS * MAX_SUN_BANDS * SUN_BAND_SIZE;
+            copy.upload_to_buffer(&self.band_buffer, bytes as u32)?;
+        }
         Ok(())
     }
 
@@ -375,8 +569,9 @@ impl<'d> RowLights<'d> {
         p.to_bytes()
     }
 
-    /// The row build and the edge pass of the rows this frame builds, each one pass into its
-    /// atlas that keeps the other rows. Before the light pass.
+    /// The sun maps this frame builds or updates, one pass each (an update draws the build over
+    /// its bands into the kept map); the row build and the edge pass of the rows this frame
+    /// builds, each one pass into its atlas that keeps the other rows. Before the light pass.
     ///
     /// # Errors
     /// Not prepared, or a pass or binding failed.
@@ -386,12 +581,77 @@ impl<'d> RowLights<'d> {
         samplers: &Samplers<'_>,
         frame: &LightingFrame<'_>,
     ) -> Result<(), Diagnostic> {
-        if self.frame.built == 0 {
+        let f = self.frame;
+        if f.built + f.suns_built + f.suns_updated == 0 {
             return Ok(());
         }
         let shadows = frame.shadows.ok_or_else(|| missing("the occlusion mask"))?;
         let heights = shadows.height.ok_or_else(|| missing("the height map"))?;
         let nearest = samplers.sampler(Filter::Nearest);
+        for (k, (sun, bands)) in self.suns[..f.suns as usize]
+            .iter()
+            .zip(&self.bands)
+            .enumerate()
+        {
+            let count = bands.quads().len() as u32;
+            let (load, program) = match sun.work {
+                MapWork::Update if count > 0 => (Load::Load, SUN_BAND),
+                MapWork::Build => (Load::DontCare, SUN_BUILD),
+                _ => continue,
+            };
+            let map = self.maps[sun.map as usize]
+                .texture_ref()
+                .ok_or_else(|| missing("a sun map"))?;
+            let params = sun.params.to_bytes();
+            // `SunBandPass` of lightrow_sun_band.vert: where the map's first lattice texel lies in
+            // the texture, the map's size and this sun's first band.
+            let mut pass_bytes = [0u8; 32];
+            let [x, y, w, h] = [
+                sun.params.lattice[0].to_bits() as i32,
+                sun.params.lattice[1].to_bits() as i32,
+                sun.params.origin[2] as i32,
+                sun.params.origin[3] as i32,
+            ];
+            let band = [
+                x.rem_euclid(w) as f32,
+                y.rem_euclid(h) as f32,
+                w as f32,
+                h as f32,
+            ];
+            pass_bytes[..16].copy_from_slice(bytemuck::bytes_of(&band));
+            pass_bytes[16..20].copy_from_slice(&((k * MAX_SUN_BANDS) as u32).to_le_bytes());
+            let buffer = self.band_buffer.buffer_ref();
+            let mut pass = cmd.render_pass(&[ColorTarget::new(map, load)])?;
+            let vertex = match (program, buffer) {
+                (SUN_BAND, Some(buffer)) => StageBindings {
+                    storage_buffers: &[buffer],
+                    uniforms: &[&pass_bytes],
+                    ..Default::default()
+                },
+                (SUN_BAND, None) => return Err(missing("the sun band buffer")),
+                _ => StageBindings::default(),
+            };
+            pass.bind_program(
+                self.pipeline(program, ROW_FORMAT)?,
+                &Bindings {
+                    vertex,
+                    fragment: StageBindings {
+                        samplers: &[SamplerBinding::new(heights, nearest)],
+                        uniforms: &[&params],
+                        ..Default::default()
+                    },
+                },
+            )?;
+            if program == SUN_BUILD {
+                pass.draw_fullscreen()?;
+            } else {
+                // Each band four times, moved by the map's size: it wraps around the texture.
+                pass.draw_instanced(6, 4 * count)?;
+            }
+        }
+        if self.frame.built == 0 {
+            return Ok(());
+        }
         let space = RowSpace::new(frame.projection, &shadows.domain);
         let mask = [shadows.domain.width, shadows.domain.height];
         let [first, second] = self.atlas(&self.rows)?;
@@ -575,6 +835,60 @@ impl<'d> RowLights<'d> {
             pass.draw_instanced(6, count)?;
         }
         Ok(())
+    }
+
+    /// The directional light `light` (index into `LightList::directional`) into the open light
+    /// pass if the prepared frame gave it a sun map, one fullscreen draw; `false` if not (it is
+    /// Chiaro's then). `surface_params` is the pass's `SurfaceParams` block.
+    ///
+    /// # Errors
+    /// Not prepared, or a binding failed.
+    pub fn record_sun(
+        &self,
+        pass: &mut RenderPass<'_>,
+        samplers: &Samplers<'_>,
+        frame: &LightingFrame<'_>,
+        surface_params: &[u8],
+        light: usize,
+    ) -> Result<bool, Diagnostic> {
+        let suns = &self.suns[..self.frame.suns as usize];
+        let Some(sun) = suns.iter().find(|s| s.light as usize == light) else {
+            return Ok(false);
+        };
+        let shadows = frame.shadows.ok_or_else(|| missing("the occlusion mask"))?;
+        let map = self.maps[sun.map as usize]
+            .texture_ref()
+            .ok_or_else(|| missing("a sun map"))?;
+        // Neither surface nor material buffer: the flat program does not read the first.
+        let stand_in = frame.scene;
+        let textures = [
+            frame.surface.or(frame.material).unwrap_or(stand_in),
+            shadows.mask,
+            shadows.height.ok_or_else(|| missing("the height map"))?,
+            map,
+            frame.material.unwrap_or(stand_in),
+        ]
+        .map(|t| SamplerBinding::new(t, samplers.sampler(Filter::Nearest)));
+        // Only the exact program reads the material buffer.
+        let count = if self.detail == DetailMode::Exact && !self.flat {
+            5
+        } else {
+            4
+        };
+        let params = sun.params.to_bytes();
+        pass.bind_program(
+            self.pipeline(sun_program(self.detail, self.flat), LIGHT_FORMAT)?,
+            &Bindings {
+                vertex: StageBindings::default(),
+                fragment: StageBindings {
+                    samplers: &textures[..count],
+                    uniforms: &[surface_params, &params],
+                    ..Default::default()
+                },
+            },
+        )?;
+        pass.draw_fullscreen()?;
+        Ok(true)
     }
 
     fn atlas<'a>(

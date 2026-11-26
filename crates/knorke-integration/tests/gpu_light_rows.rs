@@ -204,6 +204,89 @@ fn row_lights_equal_chiaro_lights_without_obstacles() {
     });
 }
 
+/// Without obstacles in the mask a hard sun with a map is Chiaro's sun: the same Lambert term,
+/// highlight, wet ground and direction sample into the same targets, in all three material modes
+/// and without surface and material buffer, to the bit. The demo's moon alone; one finite box far
+/// outside the picture keeps the frame's shadows (and so the moon's) on.
+#[test]
+fn a_hard_sun_equals_chiaros_sun_without_obstacles() {
+    with_chiaro_pack(|gpu, pack| {
+        iso_night::with_demo("hard", 44, "", |demo| {
+            let demo = Demo {
+                kinds: demo.kinds.with(Layer::Material),
+                ..demo
+            };
+            demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                let ids: Vec<_> = f.scene.obstacles.iter().map(|(id, _)| id).collect();
+                for id in ids {
+                    f.scene.obstacles.destroy(id).unwrap();
+                }
+                let mut far = ShapeDesc::rect(1.0, 1.0);
+                far.common.height = 2.0;
+                far.common.position = At::new(Vec2::new(-500.0, -500.0));
+                f.scene.obstacles.create_shape(&far).unwrap();
+                for &id in &f.scene.light_ids {
+                    let sun =
+                        (f.scene.lights.get(id)).is_ok_and(|d| d.kind == LightType::Directional);
+                    if !sun && f.scene.lights.get(id).is_ok() {
+                        f.scene.lights.destroy(id).unwrap();
+                    }
+                }
+                // The car lights would be row lights, drawn after the moon.
+                f.scene.lights.clear_frame_lights();
+                let material: Vec<u8> = (0..W * H)
+                    .flat_map(|i| {
+                        let (x, y) = (i % W, i / W);
+                        [
+                            98 + ((x * 7 + y * 3) % 61) as u8,
+                            98 + ((x * 5 + y * 11) % 61) as u8,
+                            ((x * 13 + y * 7) % 256) as u8,
+                            ((x + 3 * y) % 256) as u8,
+                        ]
+                    })
+                    .collect();
+                let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+                let fills = [(Layer::Material, &material[..])];
+                let uploads = scene_common::upload_layers(gpu, &mut cmd, f.layers, &fills);
+                cmd.submit_and_wait().unwrap();
+                drop(uploads);
+                f.settings.light.material.wetness = 0.6;
+                let modes = [
+                    ("exact", 1.0, LayerSet::NONE),
+                    ("direction", 0.5, LayerSet::NONE),
+                    ("none", 1.0, LayerSet::of(Layer::Material)),
+                    (
+                        "flat",
+                        1.0,
+                        LayerSet::of(Layer::Material).with(Layer::Surface),
+                    ),
+                ];
+                for (mode, light, skip) in modes {
+                    f.settings.light.quality.quality = Quality::Custom(Resolutions {
+                        light,
+                        shadow: 0.5,
+                        medium: 0.5,
+                    });
+                    f.skip = skip;
+                    f.settings.light.light_rows = false;
+                    let (off, without) = f.frame();
+                    f.settings.light.light_rows = true;
+                    let (on, with) = f.frame();
+                    let (max, mean, share) = diff(&on, &off);
+                    eprintln!(
+                        "the moon alone, material mode {mode}: {} sun maps; largest difference \
+                         {max}/255, mean {mean:.5}, {share:.3} % of the pixels",
+                        with.lighting.row_suns
+                    );
+                    assert_eq!(without.lighting.row_suns, 0, "{mode}: rows off");
+                    assert_eq!(with.lighting.row_suns, 1, "{mode}: the moon has a map");
+                    assert_eq!(max, 0, "{mode}");
+                }
+            });
+        });
+    });
+}
+
 /// The whole demo with opaque obstacles: row lights and Chiaro's lights (a lamp with a caster
 /// filter, the sun, zones) in one frame and the same targets.
 #[test]
@@ -505,29 +588,38 @@ fn a_sprite_mask_casts_row_shadows() {
     });
 }
 
-/// A row is built when its lamp or the mask in its reach changed, and not otherwise; whatever
-/// was kept, the picture is that of a plan that builds every row.
+/// A row is built when its lamp or the mask in its reach changed, and not otherwise; the moon's
+/// map whole when the moon turns, in part (the texels whose rays reach the change) when an
+/// obstacle moves or the camera pans by whole mask texels. Whatever was kept, the picture is
+/// that of a plan that builds every row and map.
 #[test]
 fn rows_are_built_only_when_lamp_or_mask_change() {
     with_chiaro_pack(|gpu, pack| {
         iso_night::with_demo("hard", 44, "", |demo| {
             demo.with_frames(gpu, pack, &with_rows, &mut |f| {
                 drop_patterns(&mut f.scene);
+                // Rows built, sun maps built whole, sun maps updated, sun map texels drawn.
                 let check = |f: &mut DemoFrames<'_, '_>, what: &str| {
                     let (pixels, record) = f.frame();
-                    let built = record.lighting.rows_built;
+                    let l = record.lighting;
+                    assert_eq!(l.row_suns, 1, "{what}: the moon has a map");
                     let (max, _, share) = diff(&pixels, &f.fresh_frame(pack));
                     eprintln!(
-                        "{what}: {built} rows built; against a new plan: largest difference \
-                         {max}/255, {share:.3} % of the pixels"
+                        "{what}: {} rows built, sun map {} whole / {} in part, {} texels; \
+                         against a new plan: largest difference {max}/255, {share:.3} % of the \
+                         pixels",
+                        l.rows_built, l.suns_built, l.suns_updated, l.sun_texels
                     );
-                    (built, max)
+                    assert_eq!(max, 0, "{what}");
+                    (l.rows_built, l.suns_built, l.suns_updated, l.sun_texels)
                 };
+                let rest = (0, 0, 0, 0);
 
-                let (all, max) = check(f, "first frame");
-                assert!(all > 1 && max == 0);
-                assert_eq!(check(f, "resting"), (0, 0));
-                assert_eq!(f.renderer.plan().stats().rows_built, u64::from(all));
+                let (all, suns, _, whole) = check(f, "first frame");
+                assert!(all > 1 && suns == 1 && whole > 0);
+                assert_eq!(check(f, "resting"), rest);
+                let stats = f.renderer.plan().stats();
+                assert_eq!((stats.rows_built, stats.suns_built), (u64::from(all), 1));
 
                 // One lamp, a third of a world unit.
                 let (id, at) = (f.scene.light_ids.iter())
@@ -540,11 +632,21 @@ fn rows_are_built_only_when_lamp_or_mask_change() {
                     .unwrap();
                 let moved = At::new(at.0.raw() + Vec2::new(0.3, 0.0));
                 f.scene.lights.set_position(id, moved, at.1).unwrap();
-                assert_eq!(check(f, "one lamp moved"), (1, 0));
-                assert_eq!(check(f, "resting"), (0, 0));
+                assert_eq!(check(f, "one lamp moved"), (1, 0, 0, 0));
+                assert_eq!(check(f, "resting"), rest);
+
+                // The moon turns a little: its map, no row.
+                let moon = *(f.scene.light_ids.iter())
+                    .find(|&&id| f.scene.lights.get(id).unwrap().kind == LightType::Directional)
+                    .unwrap();
+                f.scene.change_light(moon, |d| {
+                    d.direction = (d.direction + Vec3::new(0.02, 0.0, 0.0)).normalize_or_zero();
+                });
+                assert_eq!(check(f, "the moon turned"), (0, 1, 0, whole));
+                assert_eq!(check(f, "resting"), rest);
 
                 // One dynamic obstacle (a static one redraws the whole mask): the lamps that
-                // reach its old or new place.
+                // reach its old or new place, the map texels whose rays reach it.
                 let (id, pose) = (f.scene.obstacles.iter())
                     .filter(|(_, o)| o.common.dynamic)
                     .map(|(id, o)| (id, (o.common.position, o.common.rotation)))
@@ -552,21 +654,35 @@ fn rows_are_built_only_when_lamp_or_mask_change() {
                     .unwrap();
                 let moved = At::new(pose.0.raw() + Vec2::new(0.5, 0.0));
                 f.scene.obstacles.set_transform(id, moved, pose.1).unwrap();
-                let (built, max) = check(f, "one dynamic obstacle moved");
-                assert!(built >= 1 && built < all && max == 0, "{built} of {all}");
-                assert_eq!(check(f, "resting"), (0, 0));
+                let (built, full, part, texels) = check(f, "one dynamic obstacle moved");
+                assert!(built >= 1 && built < all, "{built} of {all}");
+                assert!(
+                    full == 0 && part == 1 && texels < whole / 4,
+                    "{texels} of {whole}"
+                );
+                assert_eq!(check(f, "resting"), rest);
 
                 // The camera, half a mask texel: the mask stays where it is in the world.
                 f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(1.0, 0.0));
-                assert_eq!(check(f, "camera moved half a mask texel"), (0, 0));
-                // Twelve whole texels: only lamps reaching over the mask's rim see new mask.
-                f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(23.0, 8.0));
-                let (built, max) = check(f, "camera moved 12 x 4 mask texels");
-                assert!(built < all && max == 0, "{built} of {all}");
-                assert_eq!(check(f, "resting"), (0, 0));
+                assert_eq!(check(f, "camera moved half a mask texel"), rest);
+                // One whole texel, then twelve by four: only lamps reaching over the mask's rim
+                // see new mask; the map rebuilds the texels whose rays reach its rim strips.
+                for (what, pan) in [
+                    ("camera moved 1 mask texel", Vec2::new(1.0, 0.0)),
+                    ("camera moved 12 x 4 mask texels", Vec2::new(23.0, 8.0)),
+                ] {
+                    f.projection.origin = At::new(f.projection.origin.raw() + pan);
+                    let (built, full, part, texels) = check(f, what);
+                    assert!(built < all, "{built} of {all}");
+                    assert!(
+                        full == 0 && part == 1 && texels < whole / 2,
+                        "{texels} of {whole}"
+                    );
+                    assert_eq!(check(f, "resting"), rest);
+                }
 
                 f.renderer.plan_mut().invalidate();
-                assert_eq!(check(f, "invalidated"), (all, 0));
+                assert_eq!(check(f, "invalidated"), (all, 1, 0, whole));
             });
         });
     });

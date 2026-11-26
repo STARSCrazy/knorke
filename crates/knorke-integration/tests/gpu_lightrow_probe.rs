@@ -21,6 +21,9 @@
 //! end, so the GPU stays busy), `KNORKE_PROBE_RUNS` runs per case (default
 //! 5), the cases in turn: today, rows with resting lamps, rows with every lamp moved every frame
 //! (all rows built), and a frame without lights (what no light stage can save).
+//!
+//! [`sun_map_against_chiaro_and_the_reference`] does the same for the moon of the demo with its
+//! shadow from a sun map (plan 17.13, L3).
 #![cfg(feature = "gpu")]
 
 #[path = "common/gpu.rs"]
@@ -53,7 +56,7 @@ use knorke_light2d::pass_plan::{PassRecord, SceneStores, max_height};
 use knorke_light2d::pattern_occluders::PatternParams;
 use knorke_light2d::pattern_store::{PatternDesc, PatternStore, Sheet, SheetFormat, raw_id};
 use knorke_light2d::projection::Projection;
-use knorke_light2d::rows::{RowLamp, RowLookupParams, RowSpace, SUPPORTS};
+use knorke_light2d::rows::{RowLamp, RowLookupParams, RowSpace, SUPPORTS, SunParams};
 use knorke_light2d::settings::{GlowColor, LightSettings, Quality, QualitySettings, Resolutions};
 use knorke_light2d::shadow::{MaskAnchor, OcclusionDomain};
 use knorke_light2d::{LightStore, NoResources, ObstacleStore};
@@ -83,7 +86,7 @@ fn num(s: &str) -> f32 {
 }
 
 /// The scene text cut down to what the probe compares: the enabled lights of the types in
-/// `kinds` (Chiaro's numbers: 0 point, 1 spot, 3 line, 4 rect) that cast shadows (every extra
+/// `kinds` (Chiaro's numbers: 0 point, 1 spot, 2 directional, 3 line, 4 rect) that cast shadows (every extra
 /// switched off) and the enabled obstacles, the two pattern fences with opacity `fence` and
 /// without their patterns, or with them (`None`).
 fn parse(
@@ -102,16 +105,20 @@ fn parse(
                 let kind = match f[1] {
                     "0" => LightType::Point,
                     "1" => LightType::Spot,
+                    "2" => LightType::Directional,
                     "3" => LightType::Line,
                     _ => LightType::Rect,
                 };
-                // CHI_LIGHT_NO_SHADOWS, _DISABLED; CHI_HEIGHT_AUTO is -1 (the moon's).
-                if !kinds.contains(f[1]) || f[2].parse::<u32>().unwrap() & 3 != 0 || v(5) < 0.0 {
+                // CHI_LIGHT_NO_SHADOWS, _DISABLED; CHI_HEIGHT_AUTO is -1 (the moon's, the only light
+                // without a height that is kept).
+                let auto = v(5) < 0.0;
+                let skip = auto && kind != LightType::Directional;
+                if !kinds.contains(f[1]) || f[2].parse::<u32>().unwrap() & 3 != 0 || skip {
                     continue;
                 }
                 let mut d = LightDesc::new(kind);
                 d.position = At::new(Vec2::new(v(3), v(4)));
-                d.height = Height::At(v(5));
+                d.height = if auto { Height::Auto } else { Height::At(v(5)) };
                 d.color = Vec3::new(v(6), v(7), v(8));
                 d.intensity = v(9);
                 d.specular = 0.0;
@@ -223,14 +230,19 @@ fn settings(shadow: f32) -> Light2dSettings {
     s
 }
 
-const TRUTH: [ProgramDesc; 1] = [ProgramDesc::new(
-    "lightrow.vert",
-    "lightrow_truth.frag",
-    Blend::Additive,
-)];
+/// The reference's programs: the lamps' and the hard sun's.
+const TRUTH: [ProgramDesc; 2] = [
+    ProgramDesc::new("lightrow.vert", "lightrow_truth.frag", Blend::Additive),
+    ProgramDesc::new(
+        "fullscreen.vert",
+        "lightrow_sun_truth.frag",
+        Blend::Additive,
+    ),
+];
 
-/// The reference picture: the row lights of a frame lit by `lightrow_truth.frag`, then the
-/// composite stage and the post pass as the renderer runs them.
+/// The reference picture: the row lights of a frame lit by `lightrow_truth.frag` (or a hard sun
+/// by `lightrow_sun_truth.frag`), then the composite stage and the post pass as the renderer runs
+/// them.
 struct Truth<'d> {
     shaders: ShaderLibrary<'d>,
     pipelines: PipelineCache<'d>,
@@ -245,7 +257,9 @@ impl<'d> Truth<'d> {
     fn new(gpu: Gpu<'d>, pack: &[u8]) -> Result<Self, Diagnostic> {
         let mut shaders = ShaderLibrary::new(gpu, pack.to_vec())?;
         let mut pipelines = PipelineCache::new(&shaders, &TRUTH)?;
-        pipelines.get(&mut shaders, 0, HALF)?;
+        for program in 0..TRUTH.len() {
+            pipelines.get(&mut shaders, program, HALF)?;
+        }
         let target = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
         Ok(Self {
             composite: CompositeStage::new(gpu, &shaders)?,
@@ -317,57 +331,27 @@ impl<'d> Truth<'d> {
         lookup.domain[3] = env("KNORKE_PROBE_POINTS", 8.0);
         let lookup = lookup.to_bytes();
         let vertex = LightSurfacePassParams::new(p, W, H, top, 0).to_bytes();
-
-        let composite = CompositeFrame {
-            scene: frame.scene,
-            glow: frame.glow,
-            material: None,
-            surface: frame.surface,
-            light: CompositeLight {
-                ambient: light.ambient,
-                light_buffer: Some(self.light.texture_ref()),
-                use_specular: false,
-                specular: None,
-                direction: None,
-                pure_ambient: None,
-            },
-            medium: None,
-            projection: p,
-            settings: light,
-            input_space: settings.input_space(),
-        };
-        self.composite.prepare(&mut self.shaders, &composite)?;
-        let post = PostFrame {
-            hdr: self.composite.hdr_buffer().unwrap(),
-            overlay: None,
-            target: frame.target,
-            shockwaves: None,
-        };
-        let prepared = self.post.prepare(&post, &settings.post)?;
-
-        let mut cmd = CommandBuffer::acquire(gpu.device())?;
-        cmd.copy_pass()?
-            .upload_to_buffer(&self.lamps, (count * RowLamp::SIZE) as u32)?;
-        let nearest = self.samplers.sampler(Filter::Nearest);
-        let occlusion = renderer.plan().occlusion();
-        let patterns = renderer.plan().patterns().maps();
-        let scene = frame.scene;
-        let textures = [
-            frame.surface.unwrap(),
-            occlusion.mask().unwrap(),
-            occlusion.height().unwrap(),
-            patterns.map_or(scene, |p| p.ids),
-            patterns.map_or(scene, |p| p.atlas),
-        ]
-        .map(|t| SamplerBinding::new(t, nearest));
-        let lamps = self.lamps.buffer_ref().unwrap();
-        let records = patterns.map_or([lamps; 3], |p| [p.obstacles, p.records, p.data]);
-        let params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
-        {
-            let clear = Load::Clear(ambient_clear(light.ambient));
-            let mut pass = cmd.render_pass(&[ColorTarget::new(self.light.texture_ref(), clear)])?;
+        self.finish(gpu, frame, settings, |cmd, t, clear| {
+            cmd.copy_pass()?
+                .upload_to_buffer(&t.lamps, (count * RowLamp::SIZE) as u32)?;
+            let nearest = t.samplers.sampler(Filter::Nearest);
+            let occlusion = renderer.plan().occlusion();
+            let patterns = renderer.plan().patterns().maps();
+            let scene = frame.scene;
+            let textures = [
+                frame.surface.unwrap(),
+                occlusion.mask().unwrap(),
+                occlusion.height().unwrap(),
+                patterns.map_or(scene, |p| p.ids),
+                patterns.map_or(scene, |p| p.atlas),
+            ]
+            .map(|t| SamplerBinding::new(t, nearest));
+            let lamps = t.lamps.buffer_ref().unwrap();
+            let records = patterns.map_or([lamps; 3], |p| [p.obstacles, p.records, p.data]);
+            let params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
+            let mut pass = cmd.render_pass(&[ColorTarget::new(t.light.texture_ref(), clear)])?;
             pass.bind_program(
-                self.pipelines.pipeline(0, HALF).unwrap(),
+                t.pipelines.pipeline(0, HALF).unwrap(),
                 &Bindings {
                     vertex: StageBindings {
                         storage_buffers: &[lamps],
@@ -382,8 +366,88 @@ impl<'d> Truth<'d> {
                     },
                 },
             )?;
-            pass.draw_instanced(6, count as u32)?;
-        }
+            pass.draw_instanced(6, count as u32)
+        })
+    }
+
+    /// Draws `frame` with the hard sun `sun` alone into its target. `renderer` has drawn the
+    /// same frame: its occlusion mask and heights are read.
+    fn sun(
+        &mut self,
+        gpu: Gpu<'_>,
+        frame: &Light2dFrame<'_>,
+        sun: &SunParams,
+        settings: &Light2dSettings,
+        renderer: &Light2dRenderer<'_>,
+    ) -> Result<(), Diagnostic> {
+        let light = &settings.light;
+        let domain = OcclusionDomain::new(W, H, light.resolutions().shadow);
+        let anchor = MaskAnchor::compute(frame.projection, &domain);
+        let shadow = ShadowDomain::new(&domain, anchor.remainder);
+        let surface = SurfaceParams::new(frame.projection, W, H, light, &shadow, true).to_bytes();
+        let params = sun.to_bytes();
+        self.finish(gpu, frame, settings, |cmd, t, clear| {
+            let occlusion = renderer.plan().occlusion();
+            let textures = [
+                frame.surface.unwrap(),
+                occlusion.mask().unwrap(),
+                occlusion.height().unwrap(),
+            ]
+            .map(|tex| SamplerBinding::new(tex, t.samplers.sampler(Filter::Nearest)));
+            let mut pass = cmd.render_pass(&[ColorTarget::new(t.light.texture_ref(), clear)])?;
+            pass.bind_program(
+                t.pipelines.pipeline(1, HALF).unwrap(),
+                &Bindings {
+                    vertex: StageBindings::default(),
+                    fragment: StageBindings {
+                        samplers: &textures,
+                        uniforms: &[&surface, &params],
+                        ..Default::default()
+                    },
+                },
+            )?;
+            pass.draw_fullscreen()
+        })
+    }
+
+    /// `draw` records the light into `self.light` (to be cleared with the load it is given, the
+    /// ambient light); then the composite stage and the post pass draw `frame` with it.
+    fn finish(
+        &mut self,
+        gpu: Gpu<'_>,
+        frame: &Light2dFrame<'_>,
+        settings: &Light2dSettings,
+        draw: impl FnOnce(&mut CommandBuffer<'_>, &Self, Load) -> Result<(), Diagnostic>,
+    ) -> Result<(), Diagnostic> {
+        let light = &settings.light;
+        let composite = CompositeFrame {
+            scene: frame.scene,
+            glow: frame.glow,
+            material: None,
+            surface: frame.surface,
+            light: CompositeLight {
+                ambient: light.ambient,
+                light_buffer: Some(self.light.texture_ref()),
+                use_specular: false,
+                specular: None,
+                direction: None,
+                pure_ambient: None,
+            },
+            medium: None,
+            projection: frame.projection,
+            settings: light,
+            input_space: settings.input_space(),
+        };
+        self.composite.prepare(&mut self.shaders, &composite)?;
+        let post = PostFrame {
+            hdr: self.composite.hdr_buffer().unwrap(),
+            overlay: None,
+            target: frame.target,
+            shockwaves: None,
+        };
+        let prepared = self.post.prepare(&post, &settings.post)?;
+        let mut cmd = CommandBuffer::acquire(gpu.device())?;
+        draw(&mut cmd, self, Load::Clear(ambient_clear(light.ambient)))?;
         self.composite
             .record(&mut cmd, &self.samplers, &composite)?;
         self.post
@@ -552,6 +616,40 @@ fn post() -> ShapeDesc<'static> {
     }
 }
 
+/// The demo's scene, glow and surface layers, uploaded.
+fn demo_layers(gpu: Gpu<'_>) -> Layers<'_> {
+    let kinds = LayerSet::of(Layer::Surface).with(Layer::Glow);
+    let mut layers = Layers::new(gpu, W, H, kinds).unwrap();
+    let fixture = |name: &str| scene_common::fixture("iso_night", name, (W, H));
+    let (color, glow, surface) = (fixture("scene"), fixture("glow"), fixture("surface"));
+    let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+    drop(layers.clear_pass(&mut cmd, LayerSet::ALL).unwrap());
+    let uploads = scene_common::upload_layers(
+        gpu,
+        &mut cmd,
+        &mut layers,
+        &[
+            (Layer::Scene, &color),
+            (Layer::Glow, &glow),
+            (Layer::Surface, &surface),
+        ],
+    );
+    cmd.submit_and_wait().unwrap();
+    drop(uploads);
+    layers
+}
+
+/// An output picture's target.
+fn target(gpu: Gpu<'_>) -> Texture<'_> {
+    texture(
+        gpu,
+        OUT,
+        SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+        SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+        None,
+    )
+}
+
 #[test]
 fn light_rows_against_chiaro_and_the_reference() {
     let out: Option<PathBuf> = std::env::var("KNORKE_PROBE_OUT").ok().map(PathBuf::from);
@@ -567,34 +665,8 @@ fn light_rows_against_chiaro_and_the_reference() {
         let mut report = format!("{frames} frames per run\n");
         let mut full = String::new();
 
-        let kinds = LayerSet::of(Layer::Surface).with(Layer::Glow);
-        let mut layers = Layers::new(gpu, W, H, kinds).unwrap();
-        let fixture = |name: &str| scene_common::fixture("iso_night", name, (W, H));
-        let (color, glow, surface) = (fixture("scene"), fixture("glow"), fixture("surface"));
-        let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
-        drop(layers.clear_pass(&mut cmd, LayerSet::ALL).unwrap());
-        let uploads = scene_common::upload_layers(
-            gpu,
-            &mut cmd,
-            &mut layers,
-            &[
-                (Layer::Scene, &color),
-                (Layer::Glow, &glow),
-                (Layer::Surface, &surface),
-            ],
-        );
-        cmd.submit_and_wait().unwrap();
-        drop(uploads);
-        let target = || {
-            texture(
-                gpu,
-                OUT,
-                SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-                SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-                None,
-            )
-        };
-        let targets = [target(), target(), target()];
+        let layers = demo_layers(gpu);
+        let targets = [target(gpu), target(gpu), target(gpu)];
         let frame = |i: usize| layers.frame(targets[i].texture_ref(), &projection, LayerSet::NONE);
         let mut truth = Truth::new(gpu, pack).unwrap();
 
@@ -765,6 +837,192 @@ fn light_rows_against_chiaro_and_the_reference() {
         }
         if let Some(dir) = &out {
             std::fs::write(dir.join("messung.txt"), &full).unwrap();
+        }
+    });
+}
+
+/// The cameras of the sun case and the most the sun map may differ from the reference there
+/// (mean of 255, percent of the pixels over 8): what was measured plus a tenth. Camera B is
+/// moved by a fraction of a pixel, so the mask lies differently under the pixels. Measured on
+/// 2026-11-26 (Vulkan, RX 6700 XT), the map's lattice fixed in the world: A map 0.0413 / 0.176
+/// (today 0.0763 / 0.321), B map 0.0284 / 0.120 (today 0.0638 / 0.291). Timed on A (240 frames,
+/// 5 runs, release): today 180 us, map kept 100 us, map built every frame 1077 us; scrolling one
+/// mask texel a frame today 238 us, map 162 us (+x) and 166 us (-x).
+const SUN_CAMERAS: [(&str, [f32; 2], f64, f64); 2] = [
+    ("A", [18.0, 14.0], 0.046, 0.194),
+    ("B", [18.037, 14.021], 0.032, 0.132),
+];
+
+/// Radians the moon of the timed case "maps rebuilt" turns to and fro between frames.
+const TURN: f32 = 0.002;
+
+/// The moon of `iso_night_hard` alone (the demo's only directional light, a hard one), the
+/// fences as opaque walls: its shadow from the sun map (`light_rows` on) against today's light
+/// (Chiaro's march per pixel through the distance field) and against an exact march per pixel
+/// (`lightrow_sun_truth.frag`), on both [`SUN_CAMERAS`]. The map must be closer to the reference
+/// than today's light. `KNORKE_PROBE_OUT` writes `sonne_<camera>_{heute,neu,wahr}.png`, the
+/// differences times 8 and `sonne.txt`; with `KNORKE_PROBE_FRAMES` camera A times today, the
+/// rows with the map kept and with the map built every frame (the moon turning), and today and
+/// the map with the camera scrolling one mask texel a frame (the map updated in bands).
+#[test]
+fn sun_map_against_chiaro_and_the_reference() {
+    let out: Option<PathBuf> = std::env::var("KNORKE_PROBE_OUT").ok().map(PathBuf::from);
+    let frames: usize = env("KNORKE_PROBE_FRAMES", 0);
+    let runs: usize = env("KNORKE_PROBE_RUNS", 5);
+    with_chiaro_pack(|gpu, pack| {
+        let text = String::from_utf8(golden_bytes("iso_night", "hard.txt")).unwrap();
+        let today = settings(0.5);
+        let mut rows = today;
+        rows.light.light_rows = true;
+        let layers = demo_layers(gpu);
+        let targets = [target(gpu), target(gpu), target(gpu)];
+        let (moons, obstacles, _) = parse(&text, false, Some(1.0), "2");
+        assert_eq!(moons.len(), 1, "the scene's moon");
+        let moon = &moons[0];
+        assert_eq!(moon.source_radius, 0.0, "a hard moon");
+        let mut lights = LightStore::new();
+        lights.create(moon, &NoResources).unwrap();
+        let domain = OcclusionDomain::new(W, H, today.light.resolutions().shadow);
+        let mut truth = Truth::new(gpu, pack).unwrap();
+        let (mut report, mut results) = (String::new(), Vec::new());
+        for (camera, [x, y], mean_bound, over_bound) in SUN_CAMERAS {
+            let projection = Projection::iso(At::new(Vec2::new(x, y)), 10.0, 1.0, W, H);
+            let frame =
+                |i: usize| layers.frame(targets[i].texture_ref(), &projection, LayerSet::NONE);
+            let new = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
+            let (mut r_today, mut r_rows) = (new(), new());
+            let stores = stores_of(&lights, &obstacles, None);
+            let old = draw(gpu, &mut r_today, &frame(0), &stores, &today, true).lighting;
+            let now = draw(gpu, &mut r_rows, &frame(1), &stores, &rows, true).lighting;
+            assert_eq!(old.row_suns, 0, "today: Chiaro's moon");
+            assert_eq!((now.row_suns, now.suns_built), (1, 1), "the moon has a map");
+            let sun = r_rows.plan().lights().directional[0];
+            let params = SunParams::new(
+                &sun,
+                [domain.width, domain.height],
+                MaskAnchor::compute(&projection, &domain).snapped,
+                height_tolerance(&rows.light),
+                obstacles.max_finite_top(),
+            );
+            truth.sun(gpu, &frame(2), &params, &rows, &r_rows).unwrap();
+            let pictures: Vec<(&str, Vec<u8>)> = ["heute", "neu", "wahr"]
+                .into_iter()
+                .zip(targets.iter().map(|t| read_texture(gpu, t.texture_ref())))
+                .collect();
+            let mut numbers = Vec::new();
+            for (i, j) in [(0, 2), (1, 2), (0, 1)] {
+                let ((first, a), (second, b)) = (&pictures[i], &pictures[j]);
+                let (mean, over, diff) = compare(a, b);
+                let _ = writeln!(
+                    report,
+                    "sonne {camera} {first} against {second}: mean absolute difference {mean:.4} of 255, {over:.3} % of the pixels differ by more than 8"
+                );
+                numbers.push((mean, over));
+                if let Some(dir) = &out {
+                    std::fs::create_dir_all(dir).unwrap();
+                    let file = dir.join(format!("sonne_{camera}_diff_{first}_{second}_x8.png"));
+                    save_png_rgba8(&file, &diff, OUT.0, OUT.1);
+                }
+            }
+            if let Some(dir) = &out {
+                for (name, px) in &pictures {
+                    let file = dir.join(format!("sonne_{camera}_{name}.png"));
+                    save_png_rgba8(&file, px, OUT.0, OUT.1);
+                }
+            }
+
+            if frames > 0 && camera == "A" {
+                let mut moving = LightStore::new();
+                let turning = moving.create(moon, &NoResources).unwrap();
+                let mut step = 0u32;
+                let mut timed: [Vec<(f64, f64)>; 6] = Default::default();
+                // The camera scrolling along x by one mask texel a frame, `sign` the way.
+                let texel = 1.0 / domain.texels_per_scene[0];
+                let scrolled = |k: usize, sign: f32| {
+                    let mut p = projection;
+                    p.origin = At::new(Vec2::new(x + sign * k as f32 * texel, y));
+                    p
+                };
+                for _ in 0..runs {
+                    let t = time(frames, |wait| {
+                        draw(gpu, &mut r_today, &frame(0), &stores, &today, wait);
+                    });
+                    let rest = time(frames, |wait| {
+                        let r = draw(gpu, &mut r_rows, &frame(1), &stores, &rows, wait);
+                        assert_eq!((r.lighting.row_suns, r.lighting.suns_built), (1, 0));
+                    });
+                    let built = time(frames, |wait| {
+                        step += 1;
+                        let a = if step.is_multiple_of(2) { 0.0 } else { TURN };
+                        let (s, c) = (knorke_math::det::sin(a), knorke_math::det::cos(a));
+                        let d = moon.direction;
+                        let desc = LightDesc {
+                            direction: Vec3::new(c * d.x - s * d.y, s * d.x + c * d.y, d.z),
+                            ..moon.clone()
+                        };
+                        moving.update(turning, &desc, &NoResources).unwrap();
+                        let stores = stores_of(&moving, &obstacles, None);
+                        let r = draw(gpu, &mut r_rows, &frame(1), &stores, &rows, wait);
+                        assert_eq!((r.lighting.row_suns, r.lighting.suns_built), (1, 1));
+                    });
+                    if !step.is_multiple_of(2) {
+                        // Back to the resting moon, untimed.
+                        draw(gpu, &mut r_rows, &frame(1), &stores, &rows, true);
+                    }
+                    let mut k = 0;
+                    let today_scrolling = time(frames, |wait| {
+                        k += 1;
+                        let p = scrolled(k, 1.0);
+                        let f = layers.frame(targets[0].texture_ref(), &p, LayerSet::NONE);
+                        draw(gpu, &mut r_today, &f, &stores, &today, wait);
+                    });
+                    draw(gpu, &mut r_today, &frame(0), &stores, &today, true);
+                    let mut scroll = |sign: f32| {
+                        let mut k = 0;
+                        let timed = time(frames, |wait| {
+                            k += 1;
+                            let p = scrolled(k, sign);
+                            let f = layers.frame(targets[1].texture_ref(), &p, LayerSet::NONE);
+                            let r = draw(gpu, &mut r_rows, &f, &stores, &rows, wait).lighting;
+                            assert_eq!((r.row_suns, r.suns_built, r.suns_updated), (1, 0, 1));
+                        });
+                        // Back, untimed (a jump that far builds the map whole).
+                        draw(gpu, &mut r_rows, &frame(1), &stores, &rows, true);
+                        timed
+                    };
+                    let (ahead, back) = (scroll(1.0), scroll(-1.0));
+                    let all = [t, rest, built, today_scrolling, ahead, back];
+                    for (list, value) in timed.iter_mut().zip(all) {
+                        list.push(value);
+                    }
+                }
+                let cases = [
+                    "today",
+                    "map kept",
+                    "map built every frame",
+                    "today scrolling",
+                    "map scrolling +x",
+                    "map scrolling -x",
+                ];
+                for (case, list) in cases.into_iter().zip(&timed) {
+                    let _ = writeln!(report, "{}", summary("sonne", case, list));
+                }
+            }
+            results.push((camera, numbers[0], numbers[1], (mean_bound, over_bound)));
+        }
+        eprint!("{report}");
+        if let Some(dir) = &out {
+            std::fs::write(dir.join("sonne.txt"), &report).unwrap();
+        }
+        for (camera, old, new, bound) in results {
+            assert!(
+                new.0 < old.0 && new.1 < old.1,
+                "camera {camera}: the sun map {new:?} is not closer to the reference than today's light {old:?}"
+            );
+            assert!(
+                new.0 <= bound.0 && new.1 <= bound.1,
+                "camera {camera}: the sun map against the reference {new:?}, bound {bound:?}"
+            );
         }
     });
 }
