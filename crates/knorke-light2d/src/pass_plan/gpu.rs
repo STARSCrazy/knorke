@@ -902,6 +902,7 @@ impl<'d> PassPlan<'d> {
         });
         self.stats.count(prepared.mask_update);
         self.stats.rows_built += u64::from(out.lighting.rows_built);
+        self.stats.suns_built += u64::from(out.lighting.suns_built);
         self.last = Some(prepared);
         self.last_size = frame.size();
         self.last_shadow_scale = shadow_scale;
@@ -1055,6 +1056,7 @@ impl Inspect for PassPlan<'_> {
         v.field("mask_incremental", stats.mask_incremental);
         v.field("mask_full", stats.mask_full);
         v.field("rows_built", stats.rows_built);
+        v.field("suns_built", stats.suns_built);
         v.field("pipelines", self.pipeline_count());
         v.field("shaders", self.shaders.created_count());
         v.field(

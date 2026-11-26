@@ -123,6 +123,8 @@ pub struct PassStats {
     pub mask_full: u64,
     /// Light rows built (ADR 0019); stands still while lamps and obstacles rest.
     pub rows_built: u64,
+    /// Sun maps built (plan 17.13, L3); stands still while suns and obstacles rest.
+    pub suns_built: u64,
 }
 
 impl PassStats {
@@ -197,6 +199,7 @@ mod tests {
                 mask_incremental: 0,
                 mask_full: 1,
                 rows_built: 0,
+                suns_built: 0,
             }
         );
     }
