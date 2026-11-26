@@ -8,6 +8,13 @@
 //! the offset across the light (at most an eighth of a texel) is an error. Measured against an
 //! exact march: about half of the error of Chiaro's march (plan 17.13, L3).
 //!
+//! Partly transparent obstacles (E25) and pattern obstacles are runs of their own, two per texel
+//! in two more targets: a run of texels with the same interval lets through 1 - o of its first
+//! texel (o the mask's opacity), once per crossing as Chiaro's trace; on a pattern obstacle the
+//! light reads its pattern where the ray enters, at the receiver's ray height there, as the
+//! rows do (`lightrow_pattern.hlsli`). A third run joins the second (their intervals hulled,
+//! their mean passes multiplied).
+//!
 //! A soft sun (a source radius) keeps how far along the ray each interval's ends lie in a second
 //! target; its pixel blends the four nearest texels and widens the ends to ramps as high as the
 //! sun's disc spreads the rays' rise there (`LightList::directional_rise`). The rays' spread
@@ -43,8 +50,8 @@ pub const MAX_SUN_MAP: u32 = 8192;
 const SUN_RECEIVER_GAP: f32 = 1.0;
 
 /// Whether a directional light of [`LightList::directional`](crate::light_culling::LightList)
-/// can take its shadow from a map, in a frame [`super::frame_suits`] accepts whose obstacles are
-/// all opaque without pattern: it casts shadows from every caster (E53), does not stand overhead
+/// can take its shadow from a map, in a frame [`super::frame_suits`] accepts without a tile grid
+/// with a pattern in the mask: it casts shadows from every caster (E53), does not stand overhead
 /// and does not shine from below the horizon. All others stay with Chiaro's programs.
 pub fn sun_suits(g: &GpuDirectional, casters: Casters) -> bool {
     let [x, y, slope, _] = g.dir_slope;
@@ -129,7 +136,7 @@ fn dot64(p: [f64; 2], q: [f64; 2]) -> f64 {
 uniform_block! {
     /// `SunParams` of `lightrow_sun.hlsli`: the sun's map build and its light.
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    pub struct SunParams[144] {
+    pub struct SunParams[160] {
         /// The light as Chiaro's directional programs get it.
         pub light: GpuDirectional,
         /// xy mask size in texels, z tolerance below a top, w highest finite top.
@@ -146,6 +153,9 @@ uniform_block! {
         pub build: [f32; 4],
         /// The bits of `i32`s: xy [`SunGrid::corner`], zw [`SunGrid::offset`].
         pub lattice: [f32; 4],
+        /// x 1: the map keeps partly transparent runs (the build reads the mask's opacity), y 1:
+        /// the build reads the pattern ids too ([`SunParams::with_partial`]).
+        pub partial: [f32; 4],
     }
 }
 
@@ -181,7 +191,25 @@ impl SunParams {
                 det::max(slope - rise, 0.5 * slope),
             ],
             lattice: [g.corner[0], g.corner[1], g.offset[0], g.offset[1]].map(bits),
+            partial: [0.0; 4],
         }
+    }
+
+    /// The block for a mask with partly transparent obstacles (`partial`) and pattern obstacles
+    /// (`patterns`, only with `partial`).
+    pub fn with_partial(mut self, partial: bool, patterns: bool) -> Self {
+        self.partial = [
+            f32::from(u8::from(partial)),
+            f32::from(u8::from(partial && patterns)),
+            0.0,
+            0.0,
+        ];
+        self
+    }
+
+    /// The map keeps partly transparent runs: its build draws two more targets.
+    pub fn partial(&self) -> bool {
+        self.partial[0] > 0.0
     }
 
     /// Mask texels a ray from a map texel walks at most toward the sun: until it rises above the
@@ -203,6 +231,10 @@ pub struct SunSource {
     snapped: [i32; 2],
     /// Tolerance below a top, highest finite top.
     heights: [f32; 2],
+    /// [`SunParams::partial`]: the map has its targets for partly transparent runs. (Whether
+    /// the build reads pattern ids may change while the map holds: a texel that named an
+    /// obstacle now gone was rebuilt with the mask change that took it out.)
+    partial: f32,
 }
 
 impl SunSource {
@@ -214,15 +246,18 @@ impl SunSource {
             size: mask.size,
             snapped: mask.snapped,
             heights: [params.domain[2], params.domain[3]],
+            partial: params.partial[0],
         }
     }
 }
 
 impl Source for SunSource {
-    /// A turned sun, a resized mask, other heights, a mask redrawn everywhere or too many
-    /// redrawn rectangles build the map anew; a pan or redrawn rectangles update it.
+    /// A turned sun, a resized mask, other heights, partial runs kept or not, a mask redrawn
+    /// everywhere or too many redrawn rectangles build the map anew; a pan or redrawn rectangles
+    /// update it.
     fn refresh(&self, now: &Self, change: MaskChange<'_>) -> Refresh<Self> {
-        if self.aim != now.aim || self.size != now.size || self.heights != now.heights {
+        let same = self.aim == now.aim && self.size == now.size && self.heights == now.heights;
+        if !same || self.partial != now.partial {
             return Refresh::Build;
         }
         match change {
