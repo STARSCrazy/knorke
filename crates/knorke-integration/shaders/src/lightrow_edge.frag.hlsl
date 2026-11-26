@@ -1,4 +1,4 @@
-// Light row probe (ADR 0019, throwaway): the pass after the row build, for lamps with a size. Per angle it walks
+// Light rows (ADR 0019): the pass after the row build, for lamps with a size. Per angle it walks
 // the neighbouring angles of the row (RowSize.z to each side, two texels each) and writes
 //   first.x, first.y  for the four runs how many angles to the left and to the right hold the same obstacle
 //                     (6 bits each: L0, R0, L1, R1 and L2, R2, L3, R3); kEdgeFar means "farther than walked"
@@ -30,21 +30,21 @@ struct EdgeOutput
     float4 second : SV_Target1;
 };
 
-EdgeOutput main(LightRowVaryings i)
+EdgeOutput main(SurfaceLightVaryings i)
 {
-    float a = floor(i.coord.x * RowSize.x);
+    float a = floor(i.scene.x * RowSize.x);
     float4 own[kRuns];
-    Runs(a, i.mask.z, own);
+    Runs(a, ROW_SLOT(i), own);
     EdgeOutput o;
     o.first = float4(0.0, 0.0, 0.0, 0.0);
     o.second = o.first;
-    if (i.mask.w <= 0.0) {
+    if (ROW_SIZE(i) <= 0.0) {
         return o; // a lamp without a size never reads this
     }
     // A lamp point at the lamp's rim sees past an outline d texels away size / d off the middle ray: no penumbra
     // reaches farther across. A run is followed that far; a run this angle does not hold is looked for as far as
     // one Near.y texels away would matter.
-    float reach = i.mask.w / Near.x;
+    float reach = ROW_SIZE(i) / Near.x;
     int width = int(min(RowSize.z, ceil(reach / Near.y)));
     float same[2][kRuns];
     float where = 0.0;
@@ -64,7 +64,7 @@ EdgeOutput main(LightRowVaryings i)
         away[side] = 0.0;
         [loop] for (int j = 1; j <= width; ++j) {
             float4 other[kRuns];
-            Runs(a + (side == 0 ? -float(j) : float(j)), i.mask.z, other);
+            Runs(a + (side == 0 ? -float(j) : float(j)), ROW_SLOT(i), other);
             bool taken[kRuns] = { false, false, false, false };
             bool following = false;
             for (int k = 0; k < kRuns; ++k) {

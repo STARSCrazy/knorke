@@ -26,6 +26,7 @@
 //! | [`composite`] | composite pass: programs, binding layouts, uniform block; `CompositeStage` with `gpu` | P27 |
 //! | [`pass_plan`] | the fixed stage order of a frame; `PassPlan` with `gpu` | P31 |
 //! | [`ring_light`] | ring light of shockwaves: input and uniform blocks; `RingLightPass` with `gpu` | P21 |
+//! | [`rows`] | light rows (ADR 0019): which lights take their shadow from a row per lamp, row cache; `RowLights` with `gpu` | – |
 //! | [`surface_geometry`] | surface helpers (box, wall, floor, quad as triangles) and surface sprite encoding | P35 |
 //!
 //! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
@@ -89,6 +90,7 @@ pub mod profile_store;
 pub mod projection;
 pub mod resources;
 pub mod ring_light;
+pub mod rows;
 pub mod settings;
 pub mod shadow;
 pub mod surface_geometry;

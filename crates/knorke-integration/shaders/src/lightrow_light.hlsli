@@ -1,171 +1,174 @@
-// Light row probe (ADR 0019, throwaway): lights one lamp's rectangle, additive into the light buffer.
-// Falloff, cone and Lambert as Chiaro computes them; the including program brings the shadow as `Sight`.
-//
-// Origin of the surface decoding, the ray start, the falloff, the cone and the Lambert term: chiaro @ 9bc5b9b,
-// shaders/src/normal_codec.hlsli (DecodeNormal), surface.hlsli (DecodeSurface, SurfaceAt, GroundMask,
-// NormalStepInMask, SurfaceRayStart, SurfaceLambert, CHI_SURFACE_PARAMS), light_common.hlsli (PointReach,
-// ReceiverInObstacle), shadow_trace.hlsli (ReceiverOnObstacle) and surface_light.hlsli (the body's order).
-// Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any express or
-// implied warranty; the origin must not be misrepresented; altered source versions must be plainly marked as such
-// (this file is altered: one lamp kind, no profile, mask, material or area lights) and this notice may not be
-// removed or altered from any source distribution. Full text: LICENSE-CHIARO-ZLIB.txt.
-#ifndef KNORKE_LIGHTROW_LIGHT_HLSLI
-#define KNORKE_LIGHTROW_LIGHT_HLSLI
+// Light rows (ADR 0019): the light with the shadow looked up in the lamp's row. Two texels per angle hold the four
+// runs (rn, rf, base, top); a run blocks if the heights the ray passes over its piece before the receiver meet its
+// interval (ADR 0019, "Die Lichtzeile"). As in Chiaro's trace the last texel before the receiver does not count.
+// A lamp with a size reads two more texels, written by lightrow_edge.frag, and is soft along and across the ray.
+// lightrow_light.frag, lightrow_light_exact.frag and lightrow_light_direction.frag are this file for the three
+// target layouts of the light pass (surface_light.hlsli).
+#include "lightrow_surface.hlsli"
 
-#include "lightrow.hlsli"
+Texture2D<float4> RowFirst : register(t3, space2);
+Texture2D<float4> RowSecond : register(t4, space2);
+SamplerState RowFirstSampler : register(s3, space2);  // nearest
+SamplerState RowSecondSampler : register(s4, space2); // nearest
+Texture2D<float4> EdgeFirst : register(t5, space2);   // lightrow_edge.frag; read for lamps with a size only
+Texture2D<float4> EdgeSecond : register(t6, space2);
+SamplerState EdgeFirstSampler : register(s5, space2);  // nearest
+SamplerState EdgeSecondSampler : register(s6, space2); // nearest
 
-Texture2D<float4> SurfaceTex : register(t0, space2);
-Texture2D<float4> Mask : register(t1, space2);
-Texture2D<float4> Heights : register(t2, space2); // RGBA16F (-base, top); free texels hold -65504
-SamplerState SurfaceSampler : register(s0, space2); // nearest
-SamplerState MaskSampler : register(s1, space2);    // nearest
-SamplerState HeightSampler : register(s2, space2);  // nearest
+#include "lightrow_runs.hlsli"
 
-// `SurfaceParams` of knorke-light2d (CHI_SURFACE_PARAMS).
-cbuffer SurfaceParams : register(b0, space3)
+// slope: the ray's height at distance q from the lamp is zl - slope * q.
+bool Blocks(float4 run, float zl, float slope, float r)
 {
-    float4 InvAxes;       // ground = (dot(InvAxes.xy, v), dot(InvAxes.zw, v)), v = scene - origin - z * z_axis
-    float4 OriginZAxis;   // xy projection origin, zw z_axis (scene pixels per unit of height)
-    float4 SceneStep;     // xy scene size in pixels, z surface height step, w 1 = surface buffer present
-    float4 MaskMap;       // xy mask texels per scene pixel, z mask margin in scene pixels
-    float4 MaskRemainder; // xy mask anchor remainder
-    float4 XYAxes;        // xy x_axis, zw y_axis (scene pixels per world unit)
-    float4 ViewDir;
-    float4 ScreenRight;
-    float4 ZAxisSpec;
-    float4 Wet;
-};
-
-cbuffer LookupParams : register(b1, space3)
-{
-    float4 RowSize; // x angles, y lamps (rows of the row atlas), z texels before the receiver that do not count
-                    // (Chiaro: 1), w tolerance below a top (Chiaro's heightParams.y)
-    float4 Domain;  // xy mask size in texels, z 1 = blend the two neighbouring angles, w the reference's lamp
-                    // points per axis
-    float4 WorldFromMask; // world = (dot(xy, m), dot(zw, m)) for a vector m in mask texels
-    float4 Soft;          // x angles the edge pass walked to each side
-};
-
-static const float kMinObstacleOpacity = 0.5 / 255.0;
-
-float3 DecodeNormal(float2 xy01)
-{
-    float2 bytes = round(saturate(xy01) * 255.0);
-    float2 q = clamp((bytes - 128.0) / 127.0, -1.0, 1.0);
-    float2 p = float2(q.x + q.y, q.x - q.y) * 0.5;
-    return normalize(float3(p.x, p.y, 1.0 - abs(p.x) - abs(p.y)));
+    if (run.y <= 0.0 || run.x >= r - RowSize.z) {
+        return false; // empty slot, or the run begins behind the place
+    }
+    float a = zl - slope * run.x;
+    float b = zl - slope * min(run.y, r - RowSize.z);
+    return max(a, b) >= run.z && min(a, b) < run.w - RowSize.w;
 }
 
-struct Surface
+// The lamp heights from which a run hides the place (r, z), as (from, to); empty if from >= to. The ray from height
+// c' reaches height c at distance q if c' = (c - z q / r) / (1 - q / r); over the run's piece that is a stretch
+// of heights between the values at its two ends. With the lamp's own height this is `Blocks`.
+float2 Hidden(float4 run, float z, float r)
 {
-    float z;      // height in world units
-    float3 n;     // unit normal in world space
-    bool present; // the pixel has an entry
-};
+    if (run.y <= 0.0 || run.x >= r - RowSize.z) {
+        return float2(1e30, 1e30);
+    }
+    float2 q = float2(run.x, min(run.y, r - RowSize.z)) / r;
+    float2 from = (run.z - z * q) / (1.0 - q);
+    float2 to = (run.w - RowSize.w - z * q) / (1.0 - q);
+    return float2(min(from.x, from.y), max(to.x, to.y));
+}
 
-// The surface of the scene pixel under `scene` and its world position.
-Surface SurfaceAt(float2 scene, out float3 world)
+static const float kFar = 1e30;
+
+// The part of the lamp a run hides from the place (r, z), as (across from, across to, share of the heights): the
+// lamp is a square, across the ray in mask texels within +-wide, upright within zl +- size. `angles` are the
+// angles from the place's ray to the obstacle's outline on either side, `along` where on the run (0 near end, 1 far
+// end) each outline stands; a lamp point x texels across sees the place past an outline at distance d
+// x (1 - d / r) / d off that ray.
+float3 Part(float4 run, float2 angles, float2 along, float zl, float size, float wide, float z, float r)
 {
-    Surface s;
-    s.z = 0.0;
-    s.n = float3(0.0, 0.0, 1.0);
-    s.present = false;
-    if (SceneStep.w != 0.0) {
-        int2 texel = clamp(int2(floor(scene)), int2(0, 0), int2(SceneStep.xy) - 1);
-        float4 c = SurfaceTex.SampleLevel(SurfaceSampler, (float2(texel) + 0.5) / SceneStep.xy, 0.0);
-        uint4 b = uint4(round(saturate(c) * 255.0));
-        if (b.a >= 128u) {
-            s.present = true;
-            s.z = float(b.r) * SceneStep.z;
-            s.n = DecodeNormal(c.gb);
+    float2 h = Hidden(run, z, r);
+    float share = (min(h.y, zl + size) - max(h.x, zl - size)) / (2.0 * size);
+    if (share <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    float2 d = max(lerp(run.x, min(run.y, r - RowSize.z), along), 0.25);
+    return float3(clamp(angles * d * r / (r - d), -wide, wide), share);
+}
+
+// The hidden area of one half of the lamp, as a length across times a share of the heights. The row's runs hide
+// from the middle out to reach[k] with share[k]; the neighbouring angles' run hides from `begin` out to `wide` with
+// `other`. Where several hide, the largest share counts: obstacles standing on the ground hide the lamp from below
+// upward, so the shares lie in one another (not so for floating ones, which is accepted).
+float Half(float reach[kRuns], float share[kRuns], float begin, float other, float wide)
+{
+    for (int p = 0; p < kRuns - 1; ++p) {
+        for (int q = 0; q < kRuns - 1 - p; ++q) {
+            if (reach[q + 1] > reach[q]) { // farthest first
+                float t = reach[q];
+                reach[q] = reach[q + 1];
+                reach[q + 1] = t;
+                t = share[q];
+                share[q] = share[q + 1];
+                share[q + 1] = t;
+            }
         }
     }
-    float2 v = scene - OriginZAxis.xy - s.z * OriginZAxis.zw;
-    world = float3(dot(InvAxes.xy, v), dot(InvAxes.zw, v), s.z);
-    return s;
-}
-
-// Where the pixel is looked up (SurfaceRayStart): its ground point in mask texels; a pixel with an entry one texel
-// plus the rounding slack out along the horizontal part of its normal and half a height step up along the vertical
-// part, so facades and roofs do not shadow themselves.
-void LookupPoint(float2 scene, Surface s, out float2 start, out float zStart)
-{
-    start = (scene - s.z * OriginZAxis.zw + MaskMap.z) * MaskMap.xy - MaskRemainder.xy;
-    zStart = s.z;
-    if (s.present) {
-        float slack = 0.5 * SceneStep.z * length(OriginZAxis.zw * MaskMap.xy);
-        float2 m = (s.n.x * XYAxes.xy + s.n.y * XYAxes.zw) * MaskMap.xy;
-        float l = length(m);
-        start += (l > 1e-6 ? m / l : float2(0.0, 0.0)) * (1.0 + slack);
-        zStart += 0.5 * SceneStep.z * s.n.z;
+    float area = 0.0;
+    float outer = wide;
+    float most = 0.0;
+    for (int k = 0; k <= kRuns; ++k) {
+        float inner = k < kRuns ? reach[k] : 0.0;
+        float beyond = max(0.0, outer - max(inner, begin)); // the piece of [inner, outer] the other run hides too
+        area += beyond * max(most, other) + (outer - inner - beyond) * most;
+        most = k < kRuns ? max(most, share[k]) : most;
+        outer = inner;
     }
+    return area;
 }
 
-// Falloff times cone at `world`, and the unit vector toward the lamp (PointReach).
-float Reach(float3 world, LightRowVaryings l, out float3 toLight)
+// The lit part of a lamp with a size: one minus the part of its square the runs hide together. The row's four runs
+// reach as far across as the edge pass counted; the nearest run of the angles to the left and to the right that
+// this angle does not hold begins where it was found.
+float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, float r)
 {
-    float3 toPixel = world - l.positionRadius.xyz;
-    float d = length(toPixel);
-    float x = d / l.positionRadius.w;
-    float window = saturate(1.0 - x * x);
-    float att = window > 0.0 ? pow(window, l.colorFalloff.w) : 0.0;
-    float spot = 1.0;
-    float c = d > 1e-6 ? dot(toPixel / d, l.directionType.xyz) : 1.0;
-    if (l.directionType.w > 0.5) {
-        float range = l.cone.x - l.cone.y;
-        if (range > 1e-6) {
-            spot = smoothstep(l.cone.y, l.cone.x, c);
-        } else {
-            spot = c >= l.cone.x ? 1.0 : 0.0;
+    float zl = ROW_HEIGHT(l);
+    float size = ROW_SIZE(l);
+    float2 across = float2(-toPlace.y, toPlace.x) / r;
+    float wide = size / length(float2(dot(WorldFromMask.xy, across), dot(WorldFromMask.zw, across)));
+    float a = floor(turn);
+    float f = turn - a;
+    float4 runs[kRuns];
+    Runs(a, ROW_SLOT(l), runs);
+    float2 uv = float2((a + 0.5) / RowSize.x, (ROW_SLOT(l) + 0.5) / RowSize.y);
+    float4 first = EdgeFirst.SampleLevel(EdgeFirstSampler, uv, 0.0);
+    float angle = kTwoPi / RowSize.x;
+    float left[kRuns];
+    float right[kRuns];
+    float share[kRuns];
+    float where = first.w;
+    bool some = false;
+    for (int k = 0; k < kRuns; ++k) {
+        float both = k < 2 ? first.x : first.y;
+        both = (k & 1) != 0 ? floor(both / 4096.0) : both;
+        float2 same = float2(fmod(both, 64.0), fmod(floor(both / 64.0), 64.0)); // to the left, to the right
+        float2 along = float2(fmod(where, 8.0), fmod(floor(where / 8.0), 8.0)) / 7.0;
+        where = floor(where / 64.0);
+        float2 angles = float2(same.x >= kEdgeFar ? -kFar : -(same.x + f) * angle,
+                               same.y >= kEdgeFar ? kFar : (same.y + 1.0 - f) * angle);
+        float3 part = Part(runs[k], angles, along, zl, size, wide, z, r);
+        if (part.z >= 0.9999 && part.x <= -wide && part.y >= wide) {
+            return 0.0; // most shadowed places: one run hides all of the lamp
+        }
+        left[k] = -part.x;
+        right[k] = part.y;
+        share[k] = part.z;
+        some = some || part.z > 0.0;
+    }
+    float2 begin = float2(wide, wide); // of the neighbouring angles' runs, on the left and on the right half
+    float2 other = float2(0.0, 0.0);
+    if (first.z > 0.0) { // most angles have no such run: the second texel is read for the others only
+        float4 second = EdgeSecond.SampleLevel(EdgeSecondSampler, uv, 0.0);
+        float2 away = float2(fmod(first.z, 64.0), floor(first.z / 64.0));
+        float2 middle = float2(0.5, 0.5);
+        if (away.x > 0.0) {
+            float2 angles = float2(-kFar, (1.0 - away.x - f) * angle);
+            float3 part = Part(UnpackRun(second.xy), angles, middle, zl, size, wide, z, r);
+            begin.x = -part.y;
+            other.x = part.z;
+        }
+        if (away.y > 0.0) {
+            float2 angles = float2((away.y - f) * angle, kFar);
+            float3 part = Part(UnpackRun(second.zw), angles, middle, zl, size, wide, z, r);
+            begin.y = part.x;
+            other.y = part.z;
         }
     }
-    toLight = d > 1e-6 ? -toPixel / d : float3(0.0, 0.0, 0.0);
-    return att * spot;
+    if (!some && all(other <= 0.0)) {
+        return 1.0; // most lit places: nothing hides any of it
+    }
+    float area = Half(left, share, begin.x, other.x, wide) + Half(right, share, begin.y, other.y, wide);
+    return 1.0 - area / (2.0 * wide);
 }
 
-// Receiver rule (ReceiverOnObstacle): a ground pixel on an obstacle texel that stands on the ground is lit as if
-// nothing occluded it.
-bool OnObstacle(float2 p)
+float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
 {
-    int2 texel = int2(floor(p));
-    if (any(texel < 0) || any(texel >= int2(Domain.xy))) {
-        return false;
+    float2 d = start - ROW_GROUND(l);
+    float turn = frac(atan2(d.y, d.x) / kTwoPi) * RowSize.x; // texel a holds the ray at a + 0.5
+    if (ROW_SIZE(l) > 0.0) {
+        return SoftSight(l, d, turn, z, r);
     }
-    float2 uv = (float2(texel) + 0.5) / Domain.xy;
-    if (Mask.SampleLevel(MaskSampler, uv, 0.0).r < kMinObstacleOpacity) {
-        return false;
+    float zl = ROW_HEIGHT(l);
+    float slope = (zl - z) / r;
+    float4 runs[kRuns];
+    Runs(floor(turn), ROW_SLOT(l), runs);
+    bool blocked = false;
+    for (int k = 0; k < kRuns; ++k) {
+        blocked = blocked || Blocks(runs[k], zl, slope, r);
     }
-    return 0.0 >= -Heights.SampleLevel(HeightSampler, uv, 0.0).r;
+    return blocked ? 0.0 : 1.0;
 }
-
-// 0 if an obstacle stands between the lamp and the place `start` (mask texels) at height z, r > 0 texels from the
-// lamp's ground point; else 1.
-float Sight(LightRowVaryings l, float2 start, float z, float r);
-
-float Visibility(LightRowVaryings l, Surface s, float2 scene)
-{
-    float2 start;
-    float z;
-    LookupPoint(scene, s, start, z);
-    if (!s.present && OnObstacle(start)) {
-        return 1.0;
-    }
-    float r = length(start - l.mask.xy);
-    return r < 1e-3 ? 1.0 : Sight(l, start, z, r);
-}
-
-float4 main(LightRowVaryings i) : SV_Target0
-{
-    float3 world;
-    Surface s = SurfaceAt(i.coord, world);
-    float3 toLight;
-    float reach = Reach(world, i, toLight);
-    float lambert = any(toLight != 0.0) ? max(0.0, dot(s.n, toLight)) : 1.0;
-    float3 light = i.colorFalloff.rgb * (reach * lambert);
-    if (all(light <= 0.0)) {
-        return float4(0.0, 0.0, 0.0, 0.0);
-    }
-    return float4(light * Visibility(i, s, i.coord), 0.0);
-}
-
-#endif

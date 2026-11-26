@@ -1,9 +1,9 @@
-// Light row probe (ADR 0019, throwaway): builds one lamp's row, one texel per angle.
+// Light rows (ADR 0019): builds one lamp's row, one texel per angle.
 // Marches once outward from the lamp's ground point over the height texture of the occlusion mask, to the lamp's
 // radius. Consecutive texels with the same height interval are one run (rn, rf, base, top). A run is dropped if a
 // nearer run standing on the ground already blocks every slope it would block; of more than four the last slot
 // takes the hull of the rest, which can only hide too much. The run the lamp stands in is skipped.
-// The rules are those of the CPU count of step -1 (runs_along, prune, truncate). An edge lies where the ray enters
+// An edge lies where the ray enters
 // the texel of the first sample with another interval, not on the sample.
 #include "lightrow.hlsli"
 
@@ -71,12 +71,12 @@ bool Keep(inout float4 runs[kRuns], inout int count, float4 run, float zl)
     return !(run.z <= 0.0 && run.w >= kInfiniteTop);
 }
 
-RowOutput main(LightRowVaryings i)
+RowOutput main(SurfaceLightVaryings i)
 {
-    float angle = i.coord.x * kTwoPi; // texel a at (a + 0.5) / angles
+    float angle = i.scene.x * kTwoPi; // texel a at (a + 0.5) / angles
     float2 dir = float2(cos(angle), sin(angle));
-    float2 lamp = i.mask.xy;
-    float zl = i.positionRadius.z;
+    float2 lamp = ROW_GROUND(i);
+    float zl = ROW_HEIGHT(i);
     float stepLength = Domain.z;
     float2 w = float2(dot(WorldFromMask.xy, dir), dot(WorldFromMask.zw, dir));
     int steps = min(int(i.positionRadius.w / length(w) / stepLength), kMaxSteps);

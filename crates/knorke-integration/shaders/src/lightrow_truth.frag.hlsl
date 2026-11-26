@@ -1,11 +1,11 @@
-// Light row probe (ADR 0019, throwaway): the reference picture. The same light, the shadow from an exact march per
+// Light rows (ADR 0019): the reference picture, a test tool only. The same light, the shadow from an exact march per
 // pixel over the height texture, from the lamp to one texel before the receiver in quarter texels, as many steps as
 // the way needs, no distance field. A sample blocks if the ray's height there lies in the texel's interval, with
 // Chiaro's tolerance below a top (shadow_trace.hlsli, WithinInterval). A lamp whose height lies in the interval of
 // its own texel does not count that obstacle while the ray stays in it, as the row build does.
 // A lamp with a source radius R is Domain.w x Domain.w points: across the ray in the ground plane and upright,
 // each within +-R; the result is the mean of their marches.
-#include "lightrow_light.hlsli"
+#include "lightrow_surface.hlsli"
 
 static const float kStep = 0.25;
 
@@ -47,13 +47,13 @@ float March(float2 lamp, float zl, float2 start, float z)
     return 1.0;
 }
 
-float Sight(LightRowVaryings l, float2 start, float z, float r)
+float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
 {
-    float size = l.mask.w;
+    float size = ROW_SIZE(l);
     if (size <= 0.0) {
-        return March(l.mask.xy, l.positionRadius.z, start, z);
+        return March(ROW_GROUND(l), ROW_HEIGHT(l), start, z);
     }
-    float2 dir = (start - l.mask.xy) / r;
+    float2 dir = (start - ROW_GROUND(l)) / r;
     float2 across = float2(-dir.y, dir.x);
     // `size` world units across the ray, in mask texels.
     float texels = size / length(float2(dot(WorldFromMask.xy, across), dot(WorldFromMask.zw, across)));
@@ -62,7 +62,7 @@ float Sight(LightRowVaryings l, float2 start, float z, float r)
     [loop] for (int i = 0; i < points; ++i) {
         [loop] for (int j = 0; j < points; ++j) {
             float2 at = (float2(i, j) + 0.5) / float(points) * 2.0 - 1.0;
-            sum += March(l.mask.xy + across * (at.x * texels), l.positionRadius.z + at.y * size, start, z);
+            sum += March(ROW_GROUND(l) + across * (at.x * texels), ROW_HEIGHT(l) + at.y * size, start, z);
         }
     }
     return sum / float(points * points);

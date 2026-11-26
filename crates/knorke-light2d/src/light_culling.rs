@@ -37,6 +37,7 @@ use crate::light_math::{
 };
 use crate::mask::mask_atlas_blocks;
 use crate::mask_store::MaskStore;
+use crate::rows::{MAX_ROWS, RowLight, RowSpace, light_suits};
 use crate::settings::LightSettings;
 pub use crate::shadow::{MaskAnchor, OcclusionDomain};
 use crate::{LightStore, Projection};
@@ -74,6 +75,8 @@ pub struct LightModes<'a> {
     pub animations: Option<&'a AnimationStore>,
     /// Resolves a light's mask to atlas blocks; `None`: masked lights are dropped.
     pub masks: Option<&'a MaskStore>,
+    /// The frame draws suitable lights with light rows ([`crate::rows::frame_suits`]).
+    pub rows: bool,
 }
 
 impl core::fmt::Debug for LightModes<'_> {
@@ -86,6 +89,7 @@ impl core::fmt::Debug for LightModes<'_> {
             .field("profiles", &self.profiles.is_some())
             .field("animations", &self.animations.is_some())
             .field("masks", &self.masks.is_some())
+            .field("rows", &self.rows)
             .finish()
     }
 }
@@ -187,6 +191,11 @@ pub struct LightList {
     pub masked_shadowed: MaskedLights,
     /// ... and shadowed with a caster filter, `[Static, Dynamic]`.
     pub masked_filtered: [MaskedLights; 2],
+    /// Row lights (ADR 0019, [`crate::rows::light_suits`]) in store order, drawn by the row programs;
+    /// in none of the lists above.
+    pub rows: Vec<RowLight>,
+    /// Entries of `rows` that cast shadows.
+    pub row_shadows: u32,
     /// Visible masked lights (`masked_ordered.len()`).
     pub masked_lights: u32,
     /// `mask_atlas_blocks` of the mask store when the list was made (the `GpuMask` atlas v).
@@ -231,6 +240,8 @@ impl LightList {
         for m in &mut self.masked_filtered {
             m.clear();
         }
+        self.rows.clear();
+        self.row_shadows = 0;
         self.masked_lights = 0;
         self.caster_classes = 0;
         self.profiled_lights = 0;
@@ -484,6 +495,7 @@ pub fn collect_lights(
         + det::hypot(projection.y_axis.x, projection.y_axis.y))
         * 0.5;
     let [tx, ty] = domain.texels_per_scene;
+    let row_space = RowSpace::new(projection, &domain);
 
     for (light_ref, original) in lights.iter() {
         let d = &original.desc;
@@ -675,6 +687,21 @@ pub fn collect_lights(
                 let [ux, uy] = to_mask(stored.axis.x, stored.axis.y);
                 let [vx, vy] = to_mask(across.x, across.y);
                 g.area_mask = [ux, uy, vx, vy];
+            }
+        }
+        if modes.rows {
+            let reach = row_space.reach(d.radius);
+            // Beyond the atlas's rows a shadowed light stays with Chiaro's programs.
+            if light_suits(d, reach) && !(d.cast_shadows && out.row_shadows >= MAX_ROWS) {
+                out.row_shadows += u32::from(d.cast_shadows);
+                out.rows.push(RowLight {
+                    light: g,
+                    key: LightRef::seed_index(light_ref),
+                    shadowed: d.cast_shadows,
+                    reach,
+                    size: d.source_radius,
+                });
+                continue;
             }
         }
         let casters = if d.cast_shadows {

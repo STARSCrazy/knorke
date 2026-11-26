@@ -1,35 +1,31 @@
-// Light row probe (ADR 0019, throwaway): what the passes share.
+// Light rows (ADR 0019): what the row programs share. A lamp's row holds, per angle around its ground point, the
+// obstacles a ray meets on its way out; the light looks its shadow up there instead of marching per pixel.
 // Everything runs in occlusion mask texels (the ground plane); heights are world units.
+// The constants here are those of `knorke_light2d::rows` (ROW_ANGLES, MARCH_STEP, MAX_REACH, EDGE_*).
 #ifndef KNORKE_LIGHTROW_HLSLI
 #define KNORKE_LIGHTROW_HLSLI
 
-// One lamp; `struct Lamp` of gpu_lightrow_probe.rs. A point light is a spot with a full cone.
-struct Lamp
+#define CHI_POINT_LIGHTS // point and spot lights only: no area varyings
+#include "light_common.hlsli"
+#include "surface.hlsli"
+
+// `RowLamp` of knorke-light2d: Chiaro's light record and where its row lies.
+struct RowLamp
 {
-    float4 positionRadius; // xyz world position, w radius
-    float4 colorFalloff;   // rgb colour * intensity, a falloff exponent
-    float4 directionType;  // xyz unit direction, w 1 = the cone applies
-    float4 cone;           // x cos(inner), y cos(outer), z ground radius, w reach in mask texels
-    float4 mask;           // xy ground point in mask texels, z the lamp's row in the row atlas, w source radius (world)
+    GpuLight light;
+    float4 row; // x the lamp's row in the row atlas, -1 = casts no shadow; y source radius in world units
 };
 
-// The lamp of an instance, passed on unchanged by lightrow.vert.
-#define LIGHTROW_VARYINGS                              \
-    float2 coord : TEXCOORD0;                          \
-    nointerpolation float4 positionRadius : TEXCOORD1; \
-    nointerpolation float4 colorFalloff : TEXCOORD2;   \
-    nointerpolation float4 directionType : TEXCOORD3;  \
-    nointerpolation float4 cone : TEXCOORD4;           \
-    nointerpolation float4 mask : TEXCOORD5;
-
-struct LightRowVaryings
-{
-    LIGHTROW_VARYINGS
-};
+// Every row program takes Chiaro's surface light varyings (lightrow.vert). The row programs have no profiles, so
+// `profile` carries RowLamp.row instead.
+#define ROW_SLOT(i) i.profile.x
+#define ROW_SIZE(i) i.profile.y
+#define ROW_GROUND(i) i.shadow.zw // the lamp's ground point in mask texels
+#define ROW_HEIGHT(i) i.shadow.y  // the lamp's height
 
 static const float kTwoPi = 6.28318530718;
-static const int kRuns = 4;            // K: runs kept per angle
-static const float kEdgeFar = 63.0;     // lightrow_edge.frag: the outline lies farther than the pass walked
+static const int kRuns = 4;                // runs kept per angle
+static const float kEdgeFar = 63.0;        // lightrow_edge.frag: the outline lies farther than the pass walked
 static const float kInfiniteTop = 60000.0; // tops from here on are infinitely tall (the mask writes 65504)
 
 // A row texel holds two runs as four floats, each two 12-bit numbers (exact in a 32-bit float): distances in quarter

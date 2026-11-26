@@ -1,5 +1,6 @@
-//! The uniform blocks and storage records of the light pass (P25) against the compiled shaders:
-//! for every shader of the 92 light programs in the SPIR-V pack, the member offsets the
+//! The uniform blocks and storage records of the light pass (P25) and of the light rows (ADR
+//! 0019) against the compiled shaders: for every shader of the 92 light programs and of the row
+//! programs in the SPIR-V pack, the member offsets the
 //! compiler gave each `cbuffer` and `StructuredBuffer` element (`OpMemberDecorate Offset`)
 //! must equal the offsets of the Rust structs, member by member. A slot or field written at the
 //! wrong place gives silent image errors; this catches it without a GPU.
@@ -18,6 +19,7 @@ use knorke_light2d::light_program::LIGHT_PROGRAMS;
 use knorke_light2d::lighting::{
     DirectionalParams, LightPassParams, LightSurfacePassParams, SurfaceParams, SurfaceShadowParams,
 };
+use knorke_light2d::rows::{RowBuildParams, RowEdgeParams, RowLamp, RowLookupParams};
 
 /// `(HLSL member, Rust offset, Rust size)`; members named `Pad` are padding.
 type Layout = &'static [(&'static str, usize, usize)];
@@ -112,8 +114,67 @@ const DIRECTIONAL: Layout = &[
     f!(DirectionalParams, "HeightParams", height_params, 4),
 ];
 
+const ROW_LAMP: Layout = &[
+    ("light", offset_of!(RowLamp, light), size_of::<GpuLight>()),
+    f!(RowLamp, "row", row, 4),
+];
+/// The row vertex shader reads the surface pass block, `MaskBase` as its atlas height.
+const ROW_PASS: Layout = &[
+    f!(LightSurfacePassParams, "OriginXAxis", origin_x_axis, 4),
+    f!(
+        LightSurfacePassParams,
+        "YAxisSceneSize",
+        y_axis_scene_size,
+        4
+    ),
+    f!(
+        LightSurfacePassParams,
+        "ZAxisMaxHeight",
+        z_axis_max_height,
+        4
+    ),
+    f!(LightSurfacePassParams, "InstanceOffset", instance_offset, 1),
+    f!(LightSurfacePassParams, "AtlasRows", mask_base, 1),
+];
+const ROW_BUILD: Layout = &[
+    f!(RowBuildParams, "WorldFromMask", world_from_mask, 4),
+    f!(RowBuildParams, "Domain", domain, 4),
+];
+const ROW_EDGE: Layout = &[
+    f!(RowEdgeParams, "RowSize", row_size, 4),
+    f!(RowEdgeParams, "Near", near, 4),
+];
+const ROW_LOOKUP: Layout = &[
+    f!(RowLookupParams, "RowSize", row_size, 4),
+    f!(RowLookupParams, "Domain", domain, 4),
+    f!(RowLookupParams, "WorldFromMask", world_from_mask, 4),
+];
+/// The row programs (`rows::gpu`), with the reference program of the tests.
+const ROW_SHADERS: [&str; 7] = [
+    "lightrow.vert",
+    "lightrow_build.frag",
+    "lightrow_edge.frag",
+    "lightrow_light.frag",
+    "lightrow_light_exact.frag",
+    "lightrow_light_direction.frag",
+    "lightrow_truth.frag",
+];
+
 /// SPIR-V struct name, Rust layout, Rust size in bytes.
-const STRUCTS: [(&str, Layout, usize); 7] = [
+const STRUCTS: [(&str, Layout, usize); 12] = [
+    ("RowLamp", ROW_LAMP, size_of::<RowLamp>()),
+    (
+        "type.LightRowPass",
+        ROW_PASS,
+        size_of::<LightSurfacePassParams>(),
+    ),
+    ("type.RowParams", ROW_BUILD, size_of::<RowBuildParams>()),
+    ("type.EdgeParams", ROW_EDGE, size_of::<RowEdgeParams>()),
+    (
+        "type.LookupParams",
+        ROW_LOOKUP,
+        size_of::<RowLookupParams>(),
+    ),
     ("GpuLight", GPU_LIGHT, size_of::<GpuLight>()),
     ("GpuMask", GPU_MASK, size_of::<GpuMask>()),
     (
@@ -146,6 +207,7 @@ fn rust_layouts_match_every_light_shader() {
     let mut shaders: Vec<&str> = LIGHT_PROGRAMS
         .iter()
         .flat_map(|p| [p.vertex, p.fragment])
+        .chain(ROW_SHADERS)
         .collect();
     shaders.sort_unstable();
     shaders.dedup();

@@ -1,4 +1,4 @@
-// Light row probe (ADR 0019, throwaway): reading a lamp's row. The including program declares RowFirst, RowSecond
+// Light rows (ADR 0019): reading a lamp's row. The including program declares RowFirst, RowSecond
 // with their samplers and RowSize (x angles, y lamps) before.
 #ifndef KNORKE_LIGHTROW_RUNS_HLSLI
 #define KNORKE_LIGHTROW_RUNS_HLSLI

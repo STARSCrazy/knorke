@@ -54,6 +54,7 @@ use crate::medium_map::MediumMapView;
 use crate::pattern_occluders::PatternMaps;
 use crate::projection::Projection;
 use crate::ring_light::{RingLight, RingLightPass};
+use crate::rows::{MaskChange, RowLights};
 use crate::settings::LightSettings;
 use crate::shadow::OcclusionDomain;
 use crate::zone_pass::{AmbientZonePass, ZoneInput};
@@ -114,6 +115,10 @@ pub struct ShadowMaps<'a> {
     pub casters: [Option<CasterMaps<'a>>; 2],
     /// Pattern obstacles in the domain (P28); `Some` makes the shadow programs read them.
     pub patterns: Option<PatternMaps<'a>>,
+    /// Mask anchor of the frame in whole texels (`MaskAnchor::snapped`), for the row lights.
+    pub snapped: [i32; 2],
+    /// What the occlusion stage changed in the mask this frame, for the row lights.
+    pub change: MaskChange<'a>,
 }
 
 impl ShadowMaps<'_> {
@@ -235,8 +240,12 @@ pub struct LightingRecord {
     pub rings_drawn: u32,
     /// Of them shadowed.
     pub shadow_lights: u32,
-    /// Draw calls, the zone and ring passes' included.
+    /// Draw calls, the zone and ring passes' included (not the row builds).
     pub draws: u32,
+    /// Of `lights_drawn` the row lights (ADR 0019).
+    pub row_lights: u32,
+    /// Light rows built this frame; 0 while lamps and obstacles rest.
+    pub rows_built: u32,
 }
 
 /// Slot of each program of the frame.
@@ -294,6 +303,7 @@ pub struct LightingStage<'d> {
     masks: UploadBuffer<'d>,
     zones: AmbientZonePass<'d>,
     rings: RingLightPass<'d>,
+    rows: RowLights<'d>,
     draws: LightDraws,
     programs: [Option<LightProgram>; PROGRAMS],
     detail: DetailMode,
@@ -323,6 +333,7 @@ impl<'d> LightingStage<'d> {
             ),
             zones: AmbientZonePass::new(gpu),
             rings: RingLightPass::default(),
+            rows: RowLights::new(gpu),
             draws: LightDraws::default(),
             programs: [None; PROGRAMS],
             detail: DetailMode::None,
@@ -376,7 +387,12 @@ impl<'d> LightingStage<'d> {
         let shadows = frame.shadows;
         let per_pixel = shadows.is_some() || normal_mode || frame.medium_map.is_some();
         let draws = LightDraws::new(list, shadows.is_some(), per_pixel);
-        let light_pass = draws.light_pass();
+        let light_pass = draws.light_pass() || !list.rows.is_empty();
+        let (w, h) = frame.scene_size();
+        let scale = frame.settings.resolutions().light;
+        let detail = detail_mode_for(frame.material.is_some(), w, h, scale);
+        // Every frame, also without row lights (see `RowLights::prepare`).
+        result.allocations += self.rows.prepare(shaders, frame, detail)?;
         let zones = zones.filter(ZoneInput::is_active);
         if zones.is_none() {
             // Nothing drawn: the zone buffers, the vertex texture and the pure ambient target
@@ -396,8 +412,6 @@ impl<'d> LightingStage<'d> {
             self.prepared = true;
             return Ok(result);
         }
-        let (w, h) = frame.scene_size();
-        let scale = frame.settings.resolutions().light;
         if self.light.ensure(
             scaled_buffer_size(w, scale),
             scaled_buffer_size(h, scale),
@@ -472,7 +486,6 @@ impl<'d> LightingStage<'d> {
                 }
             }
         }
-        let detail = detail_mode_for(frame.material.is_some(), w, h, scale);
         let exact = detail == DetailMode::Exact;
         let direction = detail == DetailMode::Direction;
         if exact || direction {
@@ -568,6 +581,27 @@ impl<'d> LightingStage<'d> {
         &self.draws
     }
 
+    /// The row lights (ADR 0019).
+    pub fn rows(&self) -> &RowLights<'d> {
+        &self.rows
+    }
+
+    /// Forgets the light rows: the next frame builds them all.
+    pub fn invalidate(&mut self) {
+        self.rows.invalidate();
+    }
+
+    /// The prepared frame was recorded: its light rows are built. Without this call every
+    /// frame builds all rows.
+    pub fn commit(&mut self) {
+        self.rows.commit();
+    }
+
+    /// Whether the prepared frame has a light pass: Chiaro's draws or row lights.
+    pub fn light_pass(&self) -> bool {
+        self.draws.light_pass() || self.rows.frame().lights > 0
+    }
+
     /// The program the prepared frame uses for `p`, if it draws any.
     pub fn program(&self, p: DrawProgram) -> Option<LightProgram> {
         self.programs[slot(p)]
@@ -600,13 +634,16 @@ impl<'d> LightingStage<'d> {
         let d = &self.draws;
         let zones = self.zones.is_active();
         let rings = self.rings.is_active();
-        if !d.light_pass() && !zones && !rings {
+        let light_pass = self.light_pass();
+        if !light_pass && !zones && !rings {
             return Ok(LightingRecord::default());
         }
         let count = d.count();
         let masked = d.masked();
-        if count > 0 || zones {
+        let rows = self.rows.frame();
+        if count > 0 || zones || rows.lights > 0 {
             let mut copy = cmd.copy_pass()?;
+            self.rows.record_uploads(&mut copy)?;
             if count > 0 {
                 copy.upload_to_buffer(&self.lights, count * GpuLight::SIZE as u32)?;
                 if masked > 0 {
@@ -629,10 +666,12 @@ impl<'d> LightingStage<'d> {
             record.zones_drawn = self.zones.zone_count();
             record.draws += 1;
         }
-        if !d.light_pass() {
+        if !light_pass {
             self.record_rings(cmd, samplers, frame, light, zones, &mut record)?;
             return Ok(record);
         }
+        self.rows.record_builds(cmd, samplers, frame)?;
+        record.rows_built = rows.built;
         let second = match self.detail {
             DetailMode::Exact => self.specular.texture_ref(),
             DetailMode::Direction => self.direction.texture_ref(),
@@ -824,10 +863,16 @@ impl<'d> LightingStage<'d> {
                 record.draws += 1;
             }
         }
+        if rows.lights > 0 {
+            self.rows
+                .record_lights(&mut pass, samplers, frame, &surface_params)?;
+            record.draws += 1;
+            record.row_lights = rows.lights;
+        }
         drop(pass);
         // Ring lights on top of the lights.
         self.record_rings(cmd, samplers, frame, light, true, &mut record)?;
-        record.lights_drawn = count;
+        record.lights_drawn = count + rows.lights;
         record.shadow_lights = d.shadow_lights();
         Ok(record)
     }

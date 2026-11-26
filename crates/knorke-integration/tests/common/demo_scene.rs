@@ -39,7 +39,7 @@ use knorke_gpu::sys::gpu::{
 use knorke_gpu::test_support::{
     golden_bytes, read_texture, sampled_rgba8, texture, with_chiaro_pack,
 };
-use knorke_gpu::{CommandBuffer, Gpu, Samplers, ShaderLibrary, Texture};
+use knorke_gpu::{CommandBuffer, Gpu, Samplers, ShaderLibrary, Texture, TextureRef};
 use knorke_integration::layers::{Layer, LayerSet, Layers};
 use knorke_integration::light2d::{Light2dRenderer, Light2dSettings, post_projection};
 use knorke_integration::medium::{MediumBatch, MediumItem};
@@ -48,11 +48,11 @@ use knorke_integration::surface::SurfaceBatch;
 use knorke_light2d::ambient_zone::{AmbientZoneParams, ZoneShape, make_stored_zone};
 use knorke_light2d::ambient_zone_store::AmbientZoneStore;
 use knorke_light2d::animation::AnimationType;
-use knorke_light2d::light::{Height, LightDesc, LightType, MaskMode};
+use knorke_light2d::light::{Height, LightDesc, LightId, LightType, MaskMode};
 use knorke_light2d::mask::{MaskPreset, MaskShape};
 use knorke_light2d::medium_draw::MediumDraw;
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
-use knorke_light2d::pass_plan::SceneStores;
+use knorke_light2d::pass_plan::{PassRecord, SceneStores};
 use knorke_light2d::pattern_store::{PatternDesc, Sheet, SheetFormat, raw_id};
 use knorke_light2d::profile::{ProfileShape, build_shape_profile};
 use knorke_light2d::profile_store::ProfileStore;
@@ -64,7 +64,8 @@ use knorke_light2d::{
 };
 use knorke_math::{At, LinearRgba, Vec2, Vec3};
 use knorke_post::shockwave::{
-    Shockwave, ShockwaveFrame, ShockwaveList, collect_shockwaves, make_explosion_shockwave,
+    Projection as PostProjection, Shockwave, ShockwaveFrame, ShockwaveList, collect_shockwaves,
+    make_explosion_shockwave,
 };
 
 use crate::scene_common;
@@ -108,9 +109,11 @@ pub(crate) struct Scene {
     profiles: ProfileStore,
     animations: AnimationStore,
     masks: MaskStore,
-    patterns: PatternStore,
-    lights: LightStore,
-    obstacles: ObstacleStore,
+    pub(crate) patterns: PatternStore,
+    pub(crate) lights: LightStore,
+    /// The lights in the order of the text.
+    pub(crate) light_ids: Vec<LightId>,
+    pub(crate) obstacles: ObstacleStore,
     zones: AmbientZoneStore,
     /// The surface pass: the helper geometry in call order.
     surface: SurfaceGeometry,
@@ -137,6 +140,7 @@ impl Scene {
             masks: MaskStore::new(),
             patterns: PatternStore::new(),
             lights: LightStore::new(),
+            light_ids: Vec::new(),
             obstacles: ObstacleStore::new(),
             zones: AmbientZoneStore::new(),
             surface: SurfaceGeometry::new(),
@@ -221,7 +225,7 @@ impl Scene {
                         if d.animation.is_some() {
                             animated.push((s.lights.len(), d.clone()));
                         }
-                        s.lights.create(&d, &res).unwrap();
+                        s.light_ids.push(s.lights.create(&d, &res).unwrap());
                     }
                 }
                 "sample" => samples.push(f),
@@ -539,7 +543,15 @@ impl Demo<'_> {
         (n > 0).then(|| format!("{layer:?} layer vs {name}: {n} differing bytes, max {max}"))
     }
 
-    fn render(&self, gpu: Gpu<'_>, pack: &[u8], settings: &dyn Fn(&Scene) -> Light2dSettings) {
+    /// Builds the scene, fills its layers and hands `body` what renders frames of it. Returns
+    /// how the helper-drawn layers differ from Chiaro's.
+    pub(crate) fn with_frames(
+        &self,
+        gpu: Gpu<'_>,
+        pack: &[u8],
+        settings: &dyn Fn(&Scene) -> Light2dSettings,
+        body: &mut dyn FnMut(&mut DemoFrames<'_, '_>),
+    ) -> Vec<String> {
         let text = golden_bytes(self.dir, &format!("{}.txt", self.variant));
         let text = String::from_utf8(text).expect("the scene text is UTF-8");
         let projection = &self.projection;
@@ -639,21 +651,26 @@ impl Demo<'_> {
         let mut waves = ShockwaveFrame::default();
         collect_shockwaves(&list, &post, W, H, &mut waves);
         renderer.note_layers(&mut layers);
-        let mut frame = layers.frame(target.texture_ref(), projection, LayerSet::NONE);
-        frame.overlay = overlay.as_ref().map(Texture::texture_ref);
-        frame.time = self.time;
-        frame.shockwaves = (!scene.waves.is_empty()).then_some((&post, &waves));
-        let prepared = renderer
-            .prepare(&frame, &scene.stores(), &settings)
-            .unwrap();
-        let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
-        renderer
-            .record(&mut cmd, &frame, &settings, prepared)
-            .unwrap();
-        cmd.submit_and_wait().unwrap();
-        let pixels = read_texture(gpu, target.texture_ref());
+        body(&mut DemoFrames {
+            gpu,
+            layers: &mut layers,
+            target: target.texture_ref(),
+            overlay: overlay.as_ref().map(Texture::texture_ref),
+            shockwaves: (!scene.waves.is_empty()).then_some((&post, &waves)),
+            time: self.time,
+            scene,
+            projection: *projection,
+            settings,
+            renderer,
+            skip: LayerSet::NONE,
+        });
         drop(renderer_medium);
+        parity.into_iter().flatten().collect()
+    }
 
+    fn render(&self, gpu: Gpu<'_>, pack: &[u8], settings: &dyn Fn(&Scene) -> Light2dSettings) {
+        let mut pixels = Vec::new();
+        let parity = self.with_frames(gpu, pack, settings, &mut |f| pixels = f.frame().0);
         let golden = scene_common::fixture(".", self.golden, OUT);
         let strict = compare_rgba8(
             &pixels,
@@ -668,7 +685,6 @@ impl Demo<'_> {
         if let Some(dir) = scene_common::scene_out() {
             scene_common::save_with_diff(&dir, self.golden, &pixels, &golden, OUT);
         }
-        let parity: Vec<_> = parity.into_iter().flatten().collect();
         assert!(
             parity.is_empty(),
             "helper-drawn layers differ from Chiaro's: {parity:?}"
@@ -680,5 +696,52 @@ impl Demo<'_> {
         // STRICT lets every pixel be off by 2; these scenes are bit-identical, and a slightly
         // wrong haze or a missing dither moves a third of the pixels by 1 and stays within it.
         assert_eq!(strict.max_diff, 0, "not bit-identical: {strict:?}");
+    }
+}
+
+/// A demo's scene with its filled layers and a renderer: renders frames of it, between which a
+/// test changes the stores, the camera or the settings.
+pub(crate) struct DemoFrames<'a, 'd> {
+    pub(crate) gpu: Gpu<'d>,
+    pub(crate) layers: &'a mut Layers<'d>,
+    target: TextureRef<'a>,
+    overlay: Option<TextureRef<'a>>,
+    shockwaves: Option<(&'a PostProjection, &'a ShockwaveFrame)>,
+    time: f64,
+    pub(crate) scene: Scene,
+    /// The camera of the light; the layers stay drawn for the demo's.
+    pub(crate) projection: Projection,
+    pub(crate) settings: Light2dSettings,
+    pub(crate) renderer: Light2dRenderer<'d>,
+    /// Layers the frames leave out.
+    pub(crate) skip: LayerSet,
+}
+
+impl DemoFrames<'_, '_> {
+    /// Prepares, records and submits one frame; the target's pixels and what was recorded.
+    pub(crate) fn frame(&mut self) -> (Vec<u8>, PassRecord) {
+        let mut frame = (self.layers).frame(self.target, &self.projection, self.skip);
+        frame.overlay = self.overlay;
+        frame.time = self.time;
+        frame.shockwaves = self.shockwaves;
+        let prepared = (self.renderer)
+            .prepare(&frame, &self.scene.stores(), &self.settings)
+            .unwrap();
+        let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
+        let record = (self.renderer)
+            .record(&mut cmd, &frame, &self.settings, prepared)
+            .unwrap();
+        cmd.submit_and_wait().unwrap();
+        (read_texture(self.gpu, self.target), record)
+    }
+
+    /// The picture a new renderer (shader pack `pack`) gives for the same frame: nothing kept
+    /// from earlier frames.
+    pub(crate) fn fresh_frame(&mut self, pack: &[u8]) -> Vec<u8> {
+        let new = Light2dRenderer::new(self.gpu, pack.to_vec()).unwrap();
+        let kept = std::mem::replace(&mut self.renderer, new);
+        let (pixels, _) = self.frame();
+        self.renderer = kept;
+        pixels
     }
 }
