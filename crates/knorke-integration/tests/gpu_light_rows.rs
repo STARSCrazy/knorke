@@ -20,7 +20,7 @@ mod iso_night;
 
 use demo_scene::{Demo, DemoFrames, H, OUT, Scene, W};
 use knorke_gpu::CommandBuffer;
-use knorke_gpu::test_support::with_chiaro_pack;
+use knorke_gpu::test_support::{sampled_rgba8, with_chiaro_pack};
 use knorke_integration::layers::{Layer, LayerSet};
 use knorke_integration::light2d::Light2dSettings;
 use knorke_light2d::light::{LightDesc, LightType, MaskMode, ShadowFilter};
@@ -445,6 +445,41 @@ fn the_hall_window_is_a_row_light() {
                 });
             });
         }
+    });
+}
+
+/// The application's sprite mask (E21) casts row shadows: its heights are in the height texture
+/// the rows are built from. Squares of sprite all over the demo. Chiaro's light differs a lot
+/// here, and it is the one further off: with the same squares in `gpu_lightrow_probe`
+/// (2026-11-26, Vulkan, RX 6700 XT) the rows were 0.386 / 0.74 % from the reference ("hart
+/// normal"), today's light 0.932 / 1.77 %. The bound only catches a broken row light.
+#[test]
+fn a_sprite_mask_casts_row_shadows() {
+    with_chiaro_pack(|gpu, pack| {
+        iso_night::with_demo("hard", 44, "", |demo| {
+            demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                let (plain, _) = f.frame();
+                let sprite: Vec<u8> = (0..W * H)
+                    .flat_map(|i| {
+                        let (x, y) = (i % W, i / W);
+                        let solid = x % 80 >= 34 && x % 80 < 46 && y % 60 >= 24 && y % 60 < 36;
+                        [0, 0, 0, if solid { 255 } else { 0 }]
+                    })
+                    .collect();
+                f.occlusion = Some(sampled_rgba8(f.gpu, W, H, &sprite));
+                let (on, off, rows) = on_and_off(f);
+                let (max, mean, share) = diff(&on, &off);
+                let (cast, _, _) = diff(&on, &plain);
+                eprintln!(
+                    "iso_night_hard with a sprite mask: {rows} row lights; against rows off: \
+                     largest difference {max}/255, mean {mean:.4}, {share:.2} % of the pixels; \
+                     the sprites change up to {cast}/255"
+                );
+                assert!(rows > 0, "row lights with a sprite mask");
+                assert!(cast > 64, "the sprites cast shadows");
+                assert!(mean < 1.0 && share < 12.0, "mean {mean}, {share} %");
+            });
+        });
     });
 }
 

@@ -671,6 +671,7 @@ impl Demo<'_> {
             settings,
             renderer,
             skip: LayerSet::NONE,
+            occlusion: None,
         });
         drop(renderer_medium);
         parity.into_iter().flatten().collect()
@@ -723,6 +724,8 @@ pub(crate) struct DemoFrames<'a, 'd> {
     pub(crate) renderer: Light2dRenderer<'d>,
     /// Layers the frames leave out.
     pub(crate) skip: LayerSet,
+    /// The application's sprite mask of the frames (scene size), if any.
+    pub(crate) occlusion: Option<Texture<'d>>,
 }
 
 impl DemoFrames<'_, '_> {
@@ -732,6 +735,7 @@ impl DemoFrames<'_, '_> {
         frame.overlay = self.overlay;
         frame.time = self.time;
         frame.shockwaves = self.shockwaves;
+        frame.occlusion = self.occlusion.as_ref().map(Texture::texture_ref);
         let prepared = (self.renderer)
             .prepare(&frame, &self.scene.stores(), &self.settings)
             .unwrap();

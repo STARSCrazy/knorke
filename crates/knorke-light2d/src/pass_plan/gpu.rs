@@ -521,13 +521,7 @@ impl<'d> PassPlan<'d> {
             settings.surface_height_step,
         );
         let builds_medium = medium_map_builds(frame.medium.is_some(), stores.lights);
-        let rows = frame_suits(
-            settings,
-            frame.surface.is_some(),
-            builds_medium,
-            sprite,
-            max_top,
-        );
+        let rows = frame_suits(settings, frame.surface.is_some(), builds_medium, max_top);
         self.row_blockers.collect(
             rows,
             obstacles,
