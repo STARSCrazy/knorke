@@ -49,8 +49,8 @@ fn with_rows(scene: &Scene) -> Light2dSettings {
     s
 }
 
-/// Makes the demo's two pattern obstacles opaque: with a pattern obstacle no light of a frame
-/// is a row light.
+/// Makes the demo's two pattern obstacles opaque: they keep the lamps reaching them from the
+/// rows.
 fn drop_patterns(scene: &mut Scene) {
     let ids: Vec<_> = (scene.obstacles.iter())
         .filter(|(_, o)| o.patterns.refs > 0)
@@ -72,24 +72,25 @@ fn on_and_off(f: &mut DemoFrames<'_, '_>) -> (Vec<u8>, Vec<u8>, u32) {
     (on, off, record.lighting.row_lights)
 }
 
-/// A frame the rows cannot draw stays as it is: `plain` has no surface buffer, `hard` has
-/// pattern obstacles.
+/// `plain` (infinitely tall obstacles, soft shadows, a cleared surface layer): the lamps away
+/// from the fences are row lights, and the picture differs along the shadow edges only.
 #[test]
-fn frames_the_rows_cannot_draw_stay_bit_identical() {
+fn the_plain_variant_draws_row_lights() {
     with_chiaro_pack(|gpu, pack| {
-        for (variant, hud) in [("plain", 45), ("hard", 44)] {
-            iso_night::with_demo(variant, hud, "", |demo| {
-                demo.with_frames(gpu, pack, &with_rows, &mut |f| {
-                    let (on, off, rows) = on_and_off(f);
-                    eprintln!("iso_night_{variant}: {rows} row lights");
-                    assert_eq!(rows, 0);
-                    assert!(
-                        on == off,
-                        "{variant}: light_rows changed an unsuitable frame"
-                    );
-                });
+        iso_night::with_demo("plain", 45, "", |demo| {
+            demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                let (_, off, _) = on_and_off(f);
+                let (on, record) = f.frame();
+                let (rows, drawn) = (record.lighting.row_lights, record.lighting.lights_drawn);
+                let (max, mean, share) = diff(&on, &off);
+                eprintln!(
+                    "iso_night_plain: {rows} of {drawn} lights are row lights; against rows off: \
+                     largest difference {max}/255, mean {mean:.4}, {share:.2} % of the pixels"
+                );
+                assert!(rows > 0);
+                assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
             });
-        }
+        });
     });
 }
 
@@ -204,6 +205,57 @@ fn row_lights_and_chiaro_lights_share_a_frame() {
                 assert!(l.rows_built > 0 && l.rows_built <= l.row_lights);
                 // Hard shadows of two methods: they differ along the shadow edges only.
                 assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
+            });
+        });
+    });
+}
+
+/// The demo as it is: its two pattern fences keep the lamps that reach them with Chiaro's
+/// programs, every other suitable lamp is a row light.
+#[test]
+fn pattern_obstacles_keep_only_the_lamps_reaching_them() {
+    with_chiaro_pack(|gpu, pack| {
+        iso_night::with_demo("hard", 44, "", |demo| {
+            demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                f.settings.light.light_rows = false;
+                let (off, without) = f.frame();
+                f.settings.light.light_rows = true;
+                let (on, with) = f.frame();
+                let (max, mean, share) = diff(&on, &off);
+                let (rows, drawn) = (with.lighting.row_lights, with.lighting.lights_drawn);
+                assert_eq!(drawn, without.lighting.lights_drawn);
+                eprintln!(
+                    "iso_night_hard: {rows} of {drawn} lights are row lights; against rows off: \
+                     largest difference {max}/255, mean {mean:.4}, {share:.2} % of the pixels"
+                );
+                assert!(rows > 0 && rows < drawn);
+                assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
+
+                // Every shadowed lamp whose disc holds a corner of a fence triangle.
+                let mut corners = Vec::new();
+                for (id, o) in f.scene.obstacles.iter() {
+                    if o.patterns.refs > 0 {
+                        f.scene.obstacles.append_world_triangles(id, &mut corners);
+                    }
+                }
+                let near: Vec<u32> = (f.scene.light_ids.iter())
+                    .filter(|&&id| {
+                        let d = f.scene.lights.get(id).unwrap();
+                        d.cast_shadows
+                            && corners
+                                .iter()
+                                .any(|c| (c.raw() - d.position.raw()).length() < d.radius)
+                    })
+                    .map(|id| id.index())
+                    .collect();
+                assert!(!near.is_empty(), "a lamp lights a fence");
+                let row_keys: Vec<u32> = (f.renderer.plan().lights().rows.iter())
+                    .map(|l| l.key)
+                    .collect();
+                assert!(
+                    near.iter().all(|k| !row_keys.contains(k)),
+                    "lamps at the fences {near:?}, row lights {row_keys:?}"
+                );
             });
         });
     });

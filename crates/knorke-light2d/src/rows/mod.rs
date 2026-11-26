@@ -28,11 +28,14 @@ pub use gpu::{ROWS_INPUT_MISSING, RowLights, RowsRecord};
 
 use knorke_math::uniform_block;
 
+use knorke_math::{At, Vec2, World2};
+
 use crate::gpu_light::GpuLight;
-use crate::light::{LightDesc, LightType, ShadowFilter};
+use crate::light::{LightDesc, LightRef, LightType, ShadowFilter};
+use crate::obstacle::ObstacleStore;
 use crate::projection::Projection;
 use crate::settings::LightSettings;
-use crate::shadow::{DirtyRectList, OcclusionDomain};
+use crate::shadow::{DirtyRectList, MaskAnchor, OcclusionDomain, obstacle_grid_rect};
 
 /// Angles of a row (texel `a` holds the ray at `a + 0.5`).
 pub const ROW_ANGLES: u32 = 1024;
@@ -61,17 +64,74 @@ pub const GROUND_TOLERANCE: f32 = 1e-3;
 /// Whether a frame can draw row lights at all. It cannot
 /// - without a surface buffer (the row light is a surface light),
 /// - with a medium world map (the row programs have no `*_medium` variant),
-/// - with `other_occluders`: a partly transparent or pattern obstacle (a row knows opaque runs
-///   only) or a sprite occlusion mask (not examined with rows yet),
+/// - with a sprite occlusion mask (not examined with rows yet),
 /// - with a finite obstacle top (`max_top`, the highest) of [`MAX_TOP`] or more.
+///
+/// Partly transparent and pattern obstacles exclude only the lamps that reach them
+/// ([`RowBlockers`]).
 pub fn frame_suits(
     settings: &LightSettings,
     surface: bool,
     medium_map: bool,
-    other_occluders: bool,
+    sprite: bool,
     max_top: f32,
 ) -> bool {
-    settings.light_rows && surface && !medium_map && !other_occluders && max_top < MAX_TOP
+    settings.light_rows && surface && !medium_map && !sprite && max_top < MAX_TOP
+}
+
+/// Mask rectangles of the active partly transparent and pattern obstacles: a row knows opaque
+/// runs only, so a shadow-casting lamp whose reach meets one stays with Chiaro's programs. One
+/// that meets none is exact as a row light: its row describes the mask within its reach only,
+/// and an obstacle beyond can shadow nothing it lights.
+///
+/// A lamp switching between the two ways sits the other's frames out, so its row is rebuilt
+/// when it comes back ([`RowCache::assign`]).
+#[derive(Clone, Debug, Default)]
+pub struct RowBlockers {
+    /// In mask texels of the frame; overflowed: every lamp counts as reaching one.
+    rects: DirtyRectList,
+    /// World points of [`obstacle_grid_rect`], kept so steady frames do not allocate.
+    scratch: Vec<At<World2, Vec2>>,
+}
+
+impl RowBlockers {
+    /// Collects the frame's blockers (none if the frame draws no row lights).
+    pub fn collect(
+        &mut self,
+        rows: bool,
+        obstacles: &ObstacleStore,
+        p: &Projection,
+        domain: &OcclusionDomain,
+    ) {
+        self.rects.clear();
+        if !rows || !(obstacles.any_partial() || obstacles.any_pattern()) {
+            return;
+        }
+        let [sx, sy] = MaskAnchor::compute(p, domain).snapped;
+        for (id, s) in obstacles.iter() {
+            if s.is_active() && s.is_partial() {
+                let r = obstacle_grid_rect(obstacles, id, p, domain, &mut self.scratch);
+                self.rects.add(r.offset(sx, sy));
+            }
+        }
+    }
+
+    /// A lamp with this ground point and reach (`RowLight::reach`) can meet a blocker.
+    pub fn meet(&self, ground: [f32; 2], reach: f32) -> bool {
+        touches(&self.rects, ground, reach)
+    }
+}
+
+/// The square of `reach` around `ground` (mask texels) overlaps a rectangle of `list`, or the
+/// list overflowed.
+fn touches(list: &DirtyRectList, ground: [f32; 2], reach: f32) -> bool {
+    let lo = [0, 1].map(|i| (ground[i] - reach).floor() as i32);
+    let hi = [0, 1].map(|i| (ground[i] + reach).ceil() as i32);
+    list.overflowed()
+        || list
+            .rects()
+            .iter()
+            .any(|r| r.x0 < hi[0] && r.x1 > lo[0] && r.y0 < hi[1] && r.y1 > lo[1])
 }
 
 /// Whether a light can be a row light in a frame [`frame_suits`] accepts: a point or spot light
@@ -132,7 +192,7 @@ impl RowSpace {
 pub struct RowLight {
     /// The light as Chiaro's programs get it.
     pub light: GpuLight,
-    /// The light's slot index in the light store: what its row is remembered under.
+    /// What its row is remembered under ([`row_key`]).
     pub key: u32,
     /// It casts shadows this frame, so it needs a row.
     pub shadowed: bool,
@@ -140,6 +200,15 @@ pub struct RowLight {
     pub reach: f32,
     /// Source radius in world units (0: hard shadows).
     pub size: f32,
+}
+
+/// The key of a light's row: its slot index in the light store, transient lights counted down
+/// from below [`RowCache`]'s free mark so they never share a persistent lamp's row.
+pub fn row_key(light: LightRef) -> u32 {
+    match light {
+        LightRef::Persistent(id) => id.index(),
+        LightRef::Transient(i) => FREE - 1 - i,
+    }
 }
 
 uniform_block! {
@@ -298,15 +367,7 @@ impl RowSource {
         match change {
             MaskChange::All => false,
             MaskChange::None => true,
-            MaskChange::Rects(list) => {
-                let lo = [0, 1].map(|i| (now.ground[i] - now.reach).floor() as i32);
-                let hi = [0, 1].map(|i| (now.ground[i] + now.reach).ceil() as i32);
-                !list.overflowed()
-                    && !list
-                        .rects()
-                        .iter()
-                        .any(|r| r.x0 < hi[0] && r.x1 > lo[0] && r.y0 < hi[1] && r.y1 > lo[1])
-            }
+            MaskChange::Rects(list) => !touches(list, now.ground, now.reach),
         }
     }
 }
@@ -466,10 +527,7 @@ mod tests {
             "no surface buffer"
         );
         assert!(!frame_suits(&on, true, true, false, 3.0), "medium map");
-        assert!(
-            !frame_suits(&on, true, false, true, 3.0),
-            "partial obstacles"
-        );
+        assert!(!frame_suits(&on, true, false, true, 3.0), "sprite mask");
         assert!(
             !frame_suits(&on, true, false, false, MAX_TOP),
             "tall obstacle"
@@ -512,6 +570,52 @@ mod tests {
             ..point
         };
         assert!(light_suits(&unshadowed, MAX_REACH + 1.0));
+    }
+
+    #[test]
+    fn partial_obstacles_block_only_the_lamps_reaching_them() {
+        use crate::obstacle::ShapeDesc;
+        const SQUARE: [knorke_math::Vec2; 4] = [
+            knorke_math::Vec2::new(0.0, 0.0),
+            knorke_math::Vec2::new(1.0, 0.0),
+            knorke_math::Vec2::new(1.0, 1.0),
+            knorke_math::Vec2::new(0.0, 1.0),
+        ];
+        let at = |x, y| At::new(Vec2::new(x, y));
+        let mut store = ObstacleStore::new();
+        let opaque = store.create_shape(&ShapeDesc::polygon(&SQUARE)).unwrap();
+        store.set_transform(opaque, at(-10.0, 0.0), 0.0).unwrap();
+        let mut fence = ShapeDesc::polygon(&SQUARE);
+        fence.common.opacity = 0.5;
+        let fence = store.create_shape(&fence).unwrap();
+        store.set_transform(fence, at(10.0, 0.0), 0.0).unwrap();
+
+        let p = Projection::iso(at(3.0, 4.0), 48.0, 0.5, 1280, 720);
+        let domain = OcclusionDomain::new(1280, 720, 0.5);
+        let space = RowSpace::new(&p, &domain);
+        let anchor = MaskAnchor::compute(&p, &domain);
+        // As `collect_lights` places a lamp's ground point.
+        let lamp = |x, radius| {
+            let m = domain.scene_to_domain(p.project(at(x, 0.5), 0.0).raw());
+            let ground = [m.x - anchor.remainder[0], m.y - anchor.remainder[1]];
+            (ground, space.reach(radius))
+        };
+        let mut blockers = RowBlockers::default();
+        blockers.collect(true, &store, &p, &domain);
+        let meets = |b: &RowBlockers, x, r| {
+            let (g, reach) = lamp(x, r);
+            b.meet(g, reach)
+        };
+        assert!(meets(&blockers, 12.0, 2.0), "beside the fence");
+        assert!(meets(&blockers, 0.0, 10.0), "reaching it from afar");
+        // The test is conservative: a square of the reach in the mask.
+        assert!(!meets(&blockers, 0.0, 3.0), "short of it");
+        assert!(!meets(&blockers, -10.0, 2.0), "at the opaque obstacle");
+        store.set_transform(fence, at(30.0, 0.0), 0.0).unwrap();
+        blockers.collect(true, &store, &p, &domain);
+        assert!(!meets(&blockers, 12.0, 2.0), "the fence moved away");
+        blockers.collect(false, &store, &p, &domain);
+        assert!(!meets(&blockers, 30.0, 2.0), "a frame without rows");
     }
 
     #[test]

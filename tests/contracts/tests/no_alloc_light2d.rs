@@ -47,8 +47,8 @@ use knorke_light2d::occluder_raster::{
 use knorke_light2d::profile::{ProfilePreset, ProfileShape, build_shape_profile};
 use knorke_light2d::profile_store::ProfileStore;
 use knorke_light2d::rows::{
-    MaskChange, RowBuildParams, RowCache, RowEdgeParams, RowLamp, RowLookupParams, RowMask,
-    RowSpace,
+    MaskChange, RowBlockers, RowBuildParams, RowCache, RowEdgeParams, RowLamp, RowLookupParams,
+    RowMask, RowSpace,
 };
 use knorke_light2d::settings::LightSettings;
 use knorke_light2d::shadow::{MaskPlanInput, MaskUpdateLimits, MaskUpdatePlan, OcclusionDomain};
@@ -219,6 +219,12 @@ fn steady_state_light2d_paths_allocate_nothing() {
     let mut row_list = LightList::default();
     let mut row_cache = RowCache::default();
     let row_domain = OcclusionDomain::new(128, 64, 1.0);
+    // A partly transparent fence keeps the lamps reaching it from the rows.
+    let mut fences = ObstacleStore::new();
+    let mut fence = ShapeDesc::rect(2.0, 1.0);
+    fence.common.opacity = 0.5;
+    let fence = fences.create_shape(&fence).unwrap();
+    let mut row_blockers = RowBlockers::default();
 
     let mut step = |i: u32| {
         // Shadow cache plan: move some dynamic obstacles, pan, decide and commit.
@@ -295,8 +301,13 @@ fn steady_state_light2d_paths_allocate_nothing() {
         );
         // The light rows: the lights that suit them, their rows (the mask changed in the
         // plan's rectangles) and the blocks of the row programs.
+        fences
+            .set_transform(fence, At::new(Vec2::new(i as f32, 3.0)), 0.0)
+            .unwrap();
+        row_blockers.collect(true, &fences, &Projection::IDENTITY, &row_domain);
         let row_modes = LightModes {
             rows: true,
+            row_blockers: Some(&row_blockers),
             ..modes
         };
         collect_lights(

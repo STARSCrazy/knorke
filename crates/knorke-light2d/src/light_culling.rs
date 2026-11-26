@@ -37,7 +37,7 @@ use crate::light_math::{
 };
 use crate::mask::mask_atlas_blocks;
 use crate::mask_store::MaskStore;
-use crate::rows::{MAX_ROWS, RowLight, RowSpace, light_suits};
+use crate::rows::{MAX_ROWS, RowBlockers, RowLight, RowSpace, light_suits, row_key};
 use crate::settings::LightSettings;
 pub use crate::shadow::{MaskAnchor, OcclusionDomain};
 use crate::{LightStore, Projection};
@@ -77,6 +77,8 @@ pub struct LightModes<'a> {
     pub masks: Option<&'a MaskStore>,
     /// The frame draws suitable lights with light rows ([`crate::rows::frame_suits`]).
     pub rows: bool,
+    /// With `rows`: the obstacles that keep a shadow-casting lamp reaching them from the rows.
+    pub row_blockers: Option<&'a RowBlockers>,
 }
 
 impl core::fmt::Debug for LightModes<'_> {
@@ -90,6 +92,7 @@ impl core::fmt::Debug for LightModes<'_> {
             .field("animations", &self.animations.is_some())
             .field("masks", &self.masks.is_some())
             .field("rows", &self.rows)
+            .field("row_blockers", &self.row_blockers)
             .finish()
     }
 }
@@ -691,12 +694,19 @@ pub fn collect_lights(
         }
         if modes.rows {
             let reach = row_space.reach(d.radius);
-            // Beyond the atlas's rows a shadowed light stays with Chiaro's programs.
-            if light_suits(d, reach) && !(d.cast_shadows && out.row_shadows >= MAX_ROWS) {
+            // Beyond the atlas's rows, or reaching a blocker, a shadowed light stays with Chiaro's
+            // programs.
+            let blocked = || {
+                out.row_shadows >= MAX_ROWS
+                    || modes
+                        .row_blockers
+                        .is_some_and(|b| b.meet([g.shadow[2], g.shadow[3]], reach))
+            };
+            if light_suits(d, reach) && !(d.cast_shadows && blocked()) {
                 out.row_shadows += u32::from(d.cast_shadows);
                 out.rows.push(RowLight {
                     light: g,
-                    key: LightRef::seed_index(light_ref),
+                    key: row_key(light_ref),
                     shadowed: d.cast_shadows,
                     reach,
                     size: d.source_radius,

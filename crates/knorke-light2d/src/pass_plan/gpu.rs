@@ -49,7 +49,7 @@ use crate::pattern_store::PatternStore;
 use crate::profile_store::ProfileStore;
 use crate::projection::Projection;
 use crate::ring_light::RingLight;
-use crate::rows::{MaskChange, frame_suits};
+use crate::rows::{MaskChange, RowBlockers, frame_suits};
 use crate::settings::LightSettings;
 use crate::shadow::{MaskAnchor, MaskPlanInput, MaskUpdate, OcclusionDomain};
 use crate::zone_pass::ZoneInput;
@@ -279,6 +279,7 @@ pub struct PassPlan<'d> {
     last_size: (u32, u32),
     last_shadow_scale: f32,
     thin_obstacles: u32,
+    row_blockers: RowBlockers,
     stats: PassStats,
 }
 
@@ -453,6 +454,7 @@ impl<'d> PassPlan<'d> {
             last_size: (0, 0),
             last_shadow_scale: 1.0,
             thin_obstacles: 0,
+            row_blockers: RowBlockers::default(),
             stats: PassStats::default(),
         })
     }
@@ -519,6 +521,19 @@ impl<'d> PassPlan<'d> {
             settings.surface_height_step,
         );
         let builds_medium = medium_map_builds(frame.medium.is_some(), stores.lights);
+        let rows = frame_suits(
+            settings,
+            frame.surface.is_some(),
+            builds_medium,
+            sprite,
+            max_top,
+        );
+        self.row_blockers.collect(
+            rows,
+            obstacles,
+            frame.projection,
+            &OcclusionDomain::new(w, h, settings.resolutions().shadow),
+        );
         let modes = LightModes {
             height_mode: obstacles.any_finite_height(),
             normal_mode,
@@ -527,13 +542,8 @@ impl<'d> PassPlan<'d> {
             profiles: stores.profiles.map(|p| p as _),
             animations: stores.animations,
             masks: stores.masks,
-            rows: frame_suits(
-                settings,
-                frame.surface.is_some(),
-                builds_medium,
-                obstacles.any_partial() || obstacles.any_pattern() || sprite,
-                max_top,
-            ),
+            rows,
+            row_blockers: Some(&self.row_blockers),
         };
         collect_lights(
             stores.lights,
@@ -910,6 +920,11 @@ impl<'d> PassPlan<'d> {
     /// What the last recorded frame ran, `None` before the first one.
     pub fn last_frame(&self) -> Option<&PassPrepared> {
         self.last.as_ref()
+    }
+
+    /// The lights the last prepared frame culled and sorted.
+    pub fn lights(&self) -> &LightList {
+        &self.lights
     }
 
     /// Counters over the plan's lifetime.
