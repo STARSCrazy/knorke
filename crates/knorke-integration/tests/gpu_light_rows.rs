@@ -24,6 +24,7 @@ use knorke_gpu::test_support::with_chiaro_pack;
 use knorke_integration::layers::{Layer, LayerSet};
 use knorke_integration::light2d::Light2dSettings;
 use knorke_light2d::light::LightType;
+use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::settings::{Quality, Resolutions};
 use knorke_math::{At, Vec2};
 
@@ -50,15 +51,34 @@ fn with_rows(scene: &Scene) -> Light2dSettings {
 }
 
 /// Makes the demo's two pattern obstacles opaque: they keep the lamps reaching them from the
-/// rows.
-fn drop_patterns(scene: &mut Scene) {
+/// rows. Returns them.
+fn drop_patterns(scene: &mut Scene) -> Vec<knorke_light2d::ObstacleId> {
     let ids: Vec<_> = (scene.obstacles.iter())
         .filter(|(_, o)| o.patterns.refs > 0)
         .map(|(id, _)| id)
         .collect();
     assert_eq!(ids.len(), 2, "the demo's pattern obstacles");
-    for id in ids {
+    for &id in &ids {
         scene.obstacles.set_pattern(id, 0, &scene.patterns).unwrap();
+    }
+    ids
+}
+
+/// The obstacles `ids` with this opacity, or switched off.
+fn set_walls(scene: &mut Scene, ids: &[knorke_light2d::ObstacleId], opacity: f32, enabled: bool) {
+    for &id in ids {
+        let (_, o) = scene.obstacles.iter().find(|(i, _)| *i == id).unwrap();
+        let common = ObstacleCommon {
+            opacity,
+            enabled,
+            ..o.common
+        };
+        let outline = scene.obstacles.outline(id).to_vec();
+        let shape = Shape::Polygon(&outline);
+        scene
+            .obstacles
+            .set_shape(id, &ShapeDesc { common, shape })
+            .unwrap();
     }
 }
 
@@ -259,6 +279,64 @@ fn pattern_obstacles_keep_only_the_lamps_reaching_them() {
                     near.iter().all(|k| !row_keys.contains(k)),
                     "lamps at the fences {near:?}, row lights {row_keys:?}"
                 );
+            });
+        });
+    });
+}
+
+/// The demo's fences as walls of 50 % opacity without pattern: a partly transparent run of the
+/// row, so every lamp that is a row light with opaque fences is one now. Behind the walls the
+/// picture lies between the frames with opaque walls and without them, near Chiaro's.
+#[test]
+fn half_transparent_walls_are_runs_of_the_row() {
+    with_chiaro_pack(|gpu, pack| {
+        iso_night::with_demo("hard", 44, "", |demo| {
+            demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                let walls = drop_patterns(&mut f.scene);
+                // Each way against itself with opaque walls and without: the two ways' hard
+                // edges differ in their own right (`row_lights_and_chiaro_lights_share_a_frame`).
+                let mut ends = Vec::new();
+                for (opacity, enabled) in [(1.0, false), (1.0, true)] {
+                    set_walls(&mut f.scene, &walls, opacity, enabled);
+                    ends.push(on_and_off(f));
+                }
+                set_walls(&mut f.scene, &walls, 0.5, true);
+                let (on, off, rows) = on_and_off(f);
+                let (max, mean, share) = diff(&on, &off);
+
+                // The walls' shadow: pixels the opaque walls darken by 48 or more (channel sum)
+                // with Chiaro's light.
+                let sum = |p: &[u8], i: usize| -> u32 {
+                    p[4 * i..4 * i + 3].iter().map(|&c| u32::from(c)).sum()
+                };
+                let (lit, dark) = (&ends[0].1, &ends[1].1);
+                let shadow: Vec<usize> = (0..lit.len() / 4)
+                    .filter(|&i| sum(lit, i) >= sum(dark, i) + 48)
+                    .collect();
+                let at = |p: &[u8]| {
+                    let total: f64 = shadow.iter().map(|&i| f64::from(sum(p, i))).sum();
+                    total / shadow.len() as f64
+                };
+                // How far the picture lies from opaque walls (0) to none (1).
+                let way =
+                    |p: &[u8], lit: &[u8], dark: &[u8]| (at(p) - at(dark)) / (at(lit) - at(dark));
+                let chiaro = way(&off, lit, dark);
+                let row = way(&on, &ends[0].0, &ends[1].0);
+                eprintln!(
+                    "iso_night_hard, 50 % walls: {rows} row lights; against rows off: largest \
+                     difference {max}/255, mean {mean:.4}, {share:.2} % of the pixels; in the \
+                     walls' shadow ({} pixels) rows off {chiaro:.4}, rows on {row:.4} of the way \
+                     from opaque walls to none",
+                    shadow.len()
+                );
+                assert_eq!(rows, 25, "the row lights with opaque fences");
+                assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
+                assert!(shadow.len() > 500, "{} pixels", shadow.len());
+                assert!(row > 0.2 && row < 0.8, "neither dark nor lit: {row}");
+                // Measured 0.546 against Chiaro's 0.619: Chiaro lets more through, and the probe
+                // (`gpu_lightrow_probe.rs`, "hart halb") finds the rows closer to the exact march
+                // there than Chiaro's light, so the bound holds that gap with some room only.
+                assert!((row - chiaro).abs() < 0.1, "rows {row}, Chiaro {chiaro}");
             });
         });
     });

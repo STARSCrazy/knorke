@@ -310,8 +310,11 @@ impl<'d> RowLights<'d> {
                 BUILD,
                 self.frame.built,
                 [first, second],
-                &[SamplerBinding::new(heights, nearest)],
-                RowBuildParams::new(&space, mask).to_bytes(),
+                &[
+                    SamplerBinding::new(heights, nearest),
+                    SamplerBinding::new(shadows.mask, nearest),
+                ],
+                RowBuildParams::new(&space, mask, shadows.any_partial).to_bytes(),
             ),
             (
                 EDGE,

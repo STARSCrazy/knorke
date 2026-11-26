@@ -77,8 +77,9 @@ fn num(s: &str) -> f32 {
 }
 
 /// The scene text cut down to what the probe compares: the enabled point and spot lights that
-/// cast shadows (every extra switched off) and the enabled obstacles without their patterns.
-fn parse(text: &str, soft: bool) -> (Vec<LightDesc>, ObstacleStore) {
+/// cast shadows (every extra switched off) and the enabled obstacles without their patterns,
+/// the two pattern fences with opacity `fence`.
+fn parse(text: &str, soft: bool, fence: f32) -> (Vec<LightDesc>, ObstacleStore) {
     let (mut lights, mut obstacles) = (Vec::new(), ObstacleStore::new());
     for line in text.lines() {
         let f: Vec<&str> = line.split(' ').collect();
@@ -118,7 +119,7 @@ fn parse(text: &str, soft: bool) -> (Vec<LightDesc>, ObstacleStore) {
                     rotation: v(5),
                     height: v(6),
                     base_height: v(7),
-                    opacity: 1.0,
+                    opacity: if f[12] == "0" { 1.0 } else { fence },
                     dynamic: flags & 1 != 0,
                     enabled: flags & 2 == 0,
                     shadow_footprint: false,
@@ -398,12 +399,14 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// Most the rows may differ from the reference per scene (mean of 255, percent of the pixels
 /// over 8): what was measured on 2026-11-26 (Vulkan, RX 6700 XT) plus a tenth. Measured:
 /// 0.348 / 0.66, 0.640 / 1.60, 0.631 / 2.31, 0.869 / 3.03; today's light 0.921 / 1.74,
-/// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24.
-const BOUNDS: [(&str, f64, f64); 4] = [
+/// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24; "hart halb", the fences as 50 % walls: 0.314 / 1.25,
+/// today 0.724 / 2.56.
+const BOUNDS: [(&str, f64, f64); 5] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
     ("weich normal", 0.70, 2.55),
     ("weich last", 0.96, 3.34),
+    ("hart halb", 0.35, 1.38),
 ];
 
 #[test]
@@ -456,13 +459,14 @@ fn light_rows_against_chiaro_and_the_reference() {
         let offsets = [(0.0, 0.0), (0.7, 0.3), (-0.5, 0.6), (0.4, -0.7)];
         let scenes = [false, true]
             .into_iter()
-            .flat_map(|soft| [(soft, 1), (soft, 4)]);
-        for ((soft, copies), bound) in scenes.zip(BOUNDS) {
+            .flat_map(|soft| [(soft, 1, 1.0), (soft, 4, 1.0)])
+            .chain([(false, 1, 0.5)]);
+        for ((soft, copies, fence), bound) in scenes.zip(BOUNDS) {
             let name = bound.0;
-            let (mut base, obstacles) = parse(&text, false);
+            let (mut base, obstacles) = parse(&text, false, fence);
             if soft {
                 // The lamp sizes of the variant with soft shadows, on the same lamps.
-                let sized = parse(&plain, true).0;
+                let sized = parse(&plain, true, 1.0).0;
                 assert_eq!(sized.len(), base.len());
                 for (d, s) in base.iter_mut().zip(&sized) {
                     assert_eq!(d.position, s.position);

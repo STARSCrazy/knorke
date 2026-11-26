@@ -339,7 +339,7 @@ fn steady_state_light2d_paths_allocate_nothing() {
         row_cache.commit();
         let space = RowSpace::new(&Projection::IDENTITY, &row_domain);
         let _ = (
-            RowBuildParams::new(&space, row_mask.size).to_bytes(),
+            RowBuildParams::new(&space, row_mask.size, true).to_bytes(),
             RowEdgeParams::new(&space, row_cache.rows()).to_bytes(),
             RowLookupParams::new(&space, row_mask.size, row_cache.rows(), 0.05).to_bytes(),
         );

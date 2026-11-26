@@ -67,8 +67,8 @@ pub const GROUND_TOLERANCE: f32 = 1e-3;
 /// - with a sprite occlusion mask (not examined with rows yet),
 /// - with a finite obstacle top (`max_top`, the highest) of [`MAX_TOP`] or more.
 ///
-/// Partly transparent and pattern obstacles exclude only the lamps that reach them
-/// ([`RowBlockers`]).
+/// Pattern obstacles exclude only the lamps that reach them ([`RowBlockers`]); partly
+/// transparent ones are runs of the row.
 pub fn frame_suits(
     settings: &LightSettings,
     surface: bool,
@@ -79,10 +79,10 @@ pub fn frame_suits(
     settings.light_rows && surface && !medium_map && !sprite && max_top < MAX_TOP
 }
 
-/// Mask rectangles of the active partly transparent and pattern obstacles: a row knows opaque
-/// runs only, so a shadow-casting lamp whose reach meets one stays with Chiaro's programs. One
-/// that meets none is exact as a row light: its row describes the mask within its reach only,
-/// and an obstacle beyond can shadow nothing it lights.
+/// Mask rectangles of the active pattern obstacles: a row knows a run's transmittance but not
+/// the pattern at the crossing, so a shadow-casting lamp whose reach meets one stays with
+/// Chiaro's programs. One that meets none is exact as a row light: its row describes the mask
+/// within its reach only, and an obstacle beyond can shadow nothing it lights.
 ///
 /// A lamp switching between the two ways sits the other's frames out, so its row is rebuilt
 /// when it comes back ([`RowCache::assign`]).
@@ -104,12 +104,12 @@ impl RowBlockers {
         domain: &OcclusionDomain,
     ) {
         self.rects.clear();
-        if !rows || !(obstacles.any_partial() || obstacles.any_pattern()) {
+        if !rows || !obstacles.any_pattern() {
             return;
         }
         let [sx, sy] = MaskAnchor::compute(p, domain).snapped;
         for (id, s) in obstacles.iter() {
-            if s.is_active() && s.is_partial() {
+            if s.is_active() && s.patterns.refs > 0 {
                 let r = obstacle_grid_rect(obstacles, id, p, domain, &mut self.scratch);
                 self.rects.add(r.offset(sx, sy));
             }
@@ -227,7 +227,8 @@ uniform_block! {
     pub struct RowBuildParams[32] {
         /// [`RowSpace::world_from_mask`].
         pub world_from_mask: [f32; 4],
-        /// xy mask size in texels, z [`MARCH_STEP`].
+        /// xy mask size in texels, z [`MARCH_STEP`], w 1 if an obstacle is partly transparent
+        /// (the build reads the mask's opacity then).
         pub domain: [f32; 4],
     }
 }
@@ -259,11 +260,16 @@ uniform_block! {
 }
 
 impl RowBuildParams {
-    /// The block of a frame.
-    pub fn new(space: &RowSpace, mask: [u32; 2]) -> Self {
+    /// The block of a frame; `partial`: an active obstacle is partly transparent.
+    pub fn new(space: &RowSpace, mask: [u32; 2], partial: bool) -> Self {
         Self {
             world_from_mask: space.world_from_mask,
-            domain: [mask[0] as f32, mask[1] as f32, MARCH_STEP, 0.0],
+            domain: [
+                mask[0] as f32,
+                mask[1] as f32,
+                MARCH_STEP,
+                f32::from(u8::from(partial)),
+            ],
         }
     }
 }
@@ -580,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_obstacles_block_only_the_lamps_reaching_them() {
+    fn pattern_obstacles_block_only_the_lamps_reaching_them() {
         use crate::obstacle::ShapeDesc;
         const SQUARE: [knorke_math::Vec2; 4] = [
             knorke_math::Vec2::new(0.0, 0.0),
@@ -592,10 +598,14 @@ mod tests {
         let mut store = ObstacleStore::new();
         let opaque = store.create_shape(&ShapeDesc::polygon(&SQUARE)).unwrap();
         store.set_transform(opaque, at(-10.0, 0.0), 0.0).unwrap();
-        let mut fence = ShapeDesc::polygon(&SQUARE);
-        fence.common.opacity = 0.5;
-        let fence = store.create_shape(&fence).unwrap();
+        let mut glass = ShapeDesc::polygon(&SQUARE);
+        glass.common.opacity = 0.5;
+        let glass = store.create_shape(&glass).unwrap();
+        store.set_transform(glass, at(-20.0, 0.0), 0.0).unwrap();
+        let fence = store.create_shape(&ShapeDesc::polygon(&SQUARE)).unwrap();
         store.set_transform(fence, at(10.0, 0.0), 0.0).unwrap();
+        let patterns = |_| Some(0.5);
+        store.set_pattern(fence, 1, &patterns).unwrap();
 
         let p = Projection::iso(at(3.0, 4.0), 48.0, 0.5, 1280, 720);
         let domain = OcclusionDomain::new(1280, 720, 0.5);
@@ -618,6 +628,10 @@ mod tests {
         // The test is conservative: a square of the reach in the mask.
         assert!(!meets(&blockers, 0.0, 3.0), "short of it");
         assert!(!meets(&blockers, -10.0, 2.0), "at the opaque obstacle");
+        assert!(
+            !meets(&blockers, -20.0, 2.0),
+            "a partly transparent one is in the row"
+        );
         store.set_transform(fence, at(30.0, 0.0), 0.0).unwrap();
         blockers.collect(true, &store, &p, &domain);
         assert!(!meets(&blockers, 12.0, 2.0), "the fence moved away");

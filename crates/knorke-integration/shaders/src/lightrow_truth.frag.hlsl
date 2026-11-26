@@ -2,7 +2,8 @@
 // pixel over the height texture, from the lamp to one texel before the receiver in quarter texels, as many steps as
 // the way needs, no distance field. A sample blocks if the ray's height there lies in the texel's interval, with
 // Chiaro's tolerance below a top (shadow_trace.hlsli, WithinInterval). A lamp whose height lies in the interval of
-// its own texel does not count that obstacle while the ray stays in it, as the row build does.
+// its own texel does not count that obstacle while the ray stays in it, as the row build does. A partly transparent
+// texel (mask opacity o below kOpaqueOpacity) multiplies by 1 - o once per crossing, as Chiaro's trace.
 // A lamp with a source radius R is Domain.w x Domain.w points: across the ray in the ground plane and upright,
 // each within +-R; the result is the mean of their marches.
 #include "lightrow_surface.hlsli"
@@ -19,7 +20,7 @@ float2 IntervalAt(float2 p)
     return i.y > -i.x ? float2(max(-i.x, 0.0), i.y) : float2(1.0, -1.0);
 }
 
-// 1 if the lamp point (mask texels, height zl) sees the place `start` at height z.
+// The share of the light from the lamp point (mask texels, height zl) that reaches the place `start` at height z.
 float March(float2 lamp, float zl, float2 start, float z)
 {
     float r = length(start - lamp);
@@ -30,6 +31,8 @@ float March(float2 lamp, float zl, float2 start, float z)
     float2 own = IntervalAt(lamp);
     bool skipping = own.y >= own.x && own.x <= zl && zl <= own.y;
     int steps = int(floor((r - RowSize.z) / kStep));
+    float seen = 1.0;
+    bool inside = false;
     [loop] for (int s = 1; s <= steps; ++s) {
         float q = float(s) * kStep;
         float2 here = IntervalAt(lamp + dir * q);
@@ -40,11 +43,17 @@ float March(float2 lamp, float zl, float2 start, float z)
             skipping = false;
         }
         float h = lerp(zl, z, q / r);
-        if (h >= here.x && h < here.y - RowSize.w) {
-            return 0.0;
+        bool blocked = h >= here.x && h < here.y - RowSize.w;
+        if (blocked) {
+            float o = FetchTexel(Mask, MaskSampler, int2(floor(lamp + dir * q)), 1.0 / Domain.xy).r;
+            if (o >= kOpaqueOpacity) {
+                return 0.0;
+            }
+            seen *= inside ? 1.0 : 1.0 - o;
         }
+        inside = blocked;
     }
-    return 1.0;
+    return seen;
 }
 
 float Sight(SurfaceLightVaryings l, float2 start, float z, float r)

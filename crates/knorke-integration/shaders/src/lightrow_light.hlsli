@@ -2,6 +2,10 @@
 // runs (rn, rf, base, top); a run blocks if the heights the ray passes over its piece before the receiver meet its
 // interval (ADR 0019, "Die Lichtzeile"). As in Chiaro's trace the last texel before the receiver does not count.
 // A lamp with a size reads two more texels, written by lightrow_edge.frag, and is soft along and across the ray.
+// A partly transparent run that blocks multiplies the light by its transmittance, once per run as Chiaro once per
+// crossing (shadow_trace.hlsli). For a lamp with a size that is decided on the ray to the lamp's middle and the result
+// is the smaller of it and the opaque runs' sight, as Chiaro's min(visibility, transmittance): Chiaro's thin fringe
+// outside such a shadow (opening narrowed by the opacity) is left out, its edge stays hard.
 // lightrow_light.frag, lightrow_light_exact.frag and lightrow_light_direction.frag are this file for the three
 // target layouts of the light pass (surface_light.hlsli).
 // The profile atlas after all other samplers, as in Chiaro's light_sdf_surface.frag: a lamp without a profile does
@@ -47,6 +51,16 @@ float2 Hidden(float4 run, float z, float r)
     float2 from = (run.z - z * q) / (1.0 - q);
     float2 to = (run.w - RowSize.w - z * q) / (1.0 - q);
     return float2(min(from.x, from.y), max(to.x, to.y));
+}
+
+// What the blocking runs let through: all of them (`hard`), or the partly transparent ones only.
+float Through(float4 runs[kRuns], float4 pass, float zl, float slope, float r, bool hard)
+{
+    float through = 1.0;
+    for (int k = 0; k < kRuns; ++k) {
+        through *= (hard || pass[k] > 0.0) && Blocks(runs[k], zl, slope, r) ? pass[k] : 1.0;
+    }
+    return through;
 }
 
 static const float kFar = 1e30;
@@ -110,7 +124,10 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
     float a = floor(turn);
     float f = turn - a;
     float4 runs[kRuns];
-    Runs(a, ROW_SLOT(l), runs);
+    float4 pass;
+    Runs(a, ROW_SLOT(l), runs, pass);
+    float through = Through(runs, pass, zl, (zl - z) / r, r, false);
+    OpaqueOnly(runs, pass);
     float2 uv = float2((a + 0.5) / RowSize.x, (ROW_SLOT(l) + 0.5) / RowSize.y);
     float4 first = EdgeFirst.SampleLevel(EdgeFirstSampler, uv, 0.0);
     float angle = kTwoPi / RowSize.x;
@@ -156,10 +173,10 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
         }
     }
     if (!some && all(other <= 0.0)) {
-        return 1.0; // most lit places: nothing hides any of it
+        return through; // most lit places: nothing hides any of it
     }
     float area = Half(left, share, begin.x, other.x, wide) + Half(right, share, begin.y, other.y, wide);
-    return 1.0 - area / (2.0 * wide);
+    return min(through, 1.0 - area / (2.0 * wide));
 }
 
 float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
@@ -172,10 +189,7 @@ float Sight(SurfaceLightVaryings l, float2 start, float z, float r)
     float zl = ROW_HEIGHT(l);
     float slope = (zl - z) / r;
     float4 runs[kRuns];
-    Runs(floor(turn), ROW_SLOT(l), runs);
-    bool blocked = false;
-    for (int k = 0; k < kRuns; ++k) {
-        blocked = blocked || Blocks(runs[k], zl, slope, r);
-    }
-    return blocked ? 0.0 : 1.0;
+    float4 pass;
+    Runs(floor(turn), ROW_SLOT(l), runs, pass);
+    return Through(runs, pass, zl, slope, r, true);
 }

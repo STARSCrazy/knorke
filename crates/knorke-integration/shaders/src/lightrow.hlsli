@@ -46,4 +46,13 @@ float4 UnpackRun(float2 packed)
     return float4(lo.x * 0.25, hi.x * 0.25, lo.y * 0.01, hi.y >= 4095.0 ? 65504.0 : hi.y * 0.01);
 }
 
+// An angle with a partly transparent run: the first float is -1 - its value (all 24 bits are taken, and -0 would not
+// survive), and the fourth run's first float holds the transmittances of runs 0 to 2 in bytes (0 = opaque). In
+// 255ths a mask opacity of k / 255 leaves exactly 255 - k.
+float2 PackPasses(float a, float b, float c)
+{
+    float3 t = round(saturate(float3(a, b, c)) * 255.0);
+    return float2(t.x + 256.0 * t.y + 65536.0 * t.z, 0.0);
+}
+
 #endif
