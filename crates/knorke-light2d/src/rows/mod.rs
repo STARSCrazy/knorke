@@ -10,7 +10,8 @@
 //! pass); the light reads the pattern there at the height of its own ray. A row depends only on
 //! the lamp and the mask around it, so it is kept until one of them changes ([`RowCache`]).
 //! A hard sun takes its shadow from a map turned to it, kept the same way ([`SunCache`], module
-//! `sun`).
+//! `sun`); a pan or a redrawn rectangle rebuilds only the map texels whose rays reach the change
+//! ([`sun_bands`]).
 //!
 //! This is the transition of plan 17.13: with [`LightSettings::light_rows`] the pass plan draws
 //! every light [`light_suits`] accepts in a frame [`frame_suits`] accepts with the row
@@ -34,7 +35,8 @@ mod sun;
 #[cfg(feature = "gpu")]
 pub use gpu::{ROWS_INPUT_MISSING, RowLights, RowsRecord};
 pub use sun::{
-    MAX_SUN_MAP, MAX_SUNS, SUN_ACROSS, SUN_ALONG, SunGrid, SunParams, SunSource, sun_suits,
+    MAX_SUN_BANDS, MAX_SUN_MAP, MAX_SUNS, SUN_ACROSS, SUN_ALONG, SunBands, SunGrid, SunParams,
+    SunSource, mask_offset, sun_bands, sun_suits,
 };
 
 use knorke_math::uniform_block;
@@ -419,10 +421,21 @@ pub struct RowMask<'a> {
     pub change: MaskChange<'a>,
 }
 
+/// What a cache slot needs this frame ([`SlotCache`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Refresh<S> {
+    /// It still holds.
+    Keep,
+    /// Parts of it are stale; it was built from this source (a sun map, [`sun_bands`]).
+    Update(S),
+    /// It is built anew.
+    Build,
+}
+
 /// What a cache slot was built from ([`SlotCache`]).
 pub trait Source: Copy {
-    /// A slot built from `self` still holds for `now`, after the mask changed by `change`.
-    fn holds(&self, now: &Self, change: MaskChange<'_>) -> bool;
+    /// What a slot built from `self` needs for `now`, after the mask changed by `change`.
+    fn refresh(&self, now: &Self, change: MaskChange<'_>) -> Refresh<Self>;
 }
 
 /// What a row was built from.
@@ -464,25 +477,21 @@ impl Source for RowSource {
     /// A pan by whole texels moves the lamp and the mask's contents alike, so the row stays as
     /// long as its whole reach lay and lies inside the mask; what the pan exposed at the mask's
     /// rim is new to a lamp reaching there.
-    fn holds(&self, now: &Self, change: MaskChange<'_>) -> bool {
+    fn refresh(&self, now: &Self, change: MaskChange<'_>) -> Refresh<Self> {
         let shift = [0, 1].map(|i| i64::from(now.snapped[i]) - i64::from(self.snapped[i]));
         let panned = shift != [0, 0];
-        if self.lamp != now.lamp
-            || self.window != now.window
-            || (panned && !(self.inside && now.inside))
-        {
-            return false;
-        }
-        if (0..2)
-            .any(|i| (now.ground[i] - self.ground[i] - shift[i] as f32).abs() > GROUND_TOLERANCE)
-        {
-            return false;
-        }
-        match change {
-            MaskChange::All => false,
-            MaskChange::None => true,
-            MaskChange::Rects(list) => !touches(list, now.ground, now.reach),
-        }
+        let holds = self.lamp == now.lamp
+            && self.window == now.window
+            && (!panned || (self.inside && now.inside))
+            && (0..2).all(|i| {
+                (now.ground[i] - self.ground[i] - shift[i] as f32).abs() <= GROUND_TOLERANCE
+            })
+            && match change {
+                MaskChange::All => false,
+                MaskChange::None => true,
+                MaskChange::Rects(list) => !touches(list, now.ground, now.reach),
+            };
+        if holds { Refresh::Keep } else { Refresh::Build }
     }
 }
 
@@ -563,11 +572,11 @@ impl<S: Source> SlotCache<S> {
         self.frame += 1;
     }
 
-    /// The slot of owner `key` this frame and whether it must be built from `now`. An owner
-    /// keeps its slot from one frame to the next; a frame it sat out may have changed the mask
-    /// unseen, so its slot is built anew then. A new owner takes a slot never used, else the
-    /// one unused for longest. `None` if all slots are taken by owners of this frame.
-    fn take(&mut self, key: u64, now: S, change: MaskChange<'_>) -> Option<(u32, bool)> {
+    /// The slot of owner `key` this frame and what it needs to hold `now`. An owner keeps its
+    /// slot from one frame to the next; a frame it sat out may have changed the mask unseen, so
+    /// its slot is built anew then. A new owner takes a slot never used, else the one unused for
+    /// longest. `None` if all slots are taken by owners of this frame.
+    fn take(&mut self, key: u64, now: S, change: MaskChange<'_>) -> Option<(u32, Refresh<S>)> {
         let frame = self.frame;
         let at = match self.slots.iter().position(|s| s.key == key) {
             Some(at) => at,
@@ -592,13 +601,13 @@ impl<S: Source> SlotCache<S> {
             // Another owner's slot, a frame sat out, or asked twice in a frame: nothing to keep.
             slot.built = None;
         }
-        let keep = slot.built.is_some_and(|b| b.holds(&now, change));
-        if !keep {
-            slot.built = Some(now);
-        }
+        let refresh = slot
+            .built
+            .map_or(Refresh::Build, |b| b.refresh(&now, change));
+        slot.built = Some(now);
         slot.key = key;
         slot.used = frame;
-        Some((at as u32, !keep))
+        Some((at as u32, refresh))
     }
 
     /// The slot `assign` gave the owner `key` this frame.
@@ -617,19 +626,20 @@ impl RowCache {
     /// The row of `light` this frame and whether it must be built (see `take`); `None` if all
     /// [`MAX_ROWS`] rows are taken by lamps of this frame.
     pub fn assign(&mut self, light: &RowLight, mask: &RowMask<'_>) -> Option<(u32, bool)> {
-        self.take(light.key, RowSource::new(light, mask), mask.change)
+        let (row, refresh) = self.take(light.key, RowSource::new(light, mask), mask.change)?;
+        Some((row, refresh != Refresh::Keep))
     }
 }
 
 impl SunCache {
-    /// The map of sun `key` this frame and whether it must be built from `now` (see `take`);
-    /// `None` if all [`MAX_SUNS`] maps are taken by suns of this frame.
+    /// The map of sun `key` this frame and what it needs to hold `now` (see `take`); `None` if
+    /// all [`MAX_SUNS`] maps are taken by suns of this frame.
     pub fn assign(
         &mut self,
         key: u64,
         now: SunSource,
         change: MaskChange<'_>,
-    ) -> Option<(u32, bool)> {
+    ) -> Option<(u32, Refresh<SunSource>)> {
         self.take(key, now, change)
     }
 }

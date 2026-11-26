@@ -13,13 +13,22 @@
     float4 Color;      /* rgb color * intensity */                                                                   \
     float4 World;      /* xyz unit vector toward the sun in world space, w specular factor (E47) */                  \
     float4 Domain;     /* xy mask size in texels, z tolerance below a top, w highest finite top */                   \
-    float4 MapAxes;    /* xy, zw: the steps of map texel i and j in mask texels */                                   \
-    float4 MapOrigin;  /* xy the map's corner in mask texels, zw its size in texels */                               \
+    float4 MapAxes;    /* xy, zw: the steps of lattice texel I and J in mask texels */                               \
+    float4 MapOrigin;  /* xy the corner of the map's first lattice texel in mask texels, zw the map's size */        \
     float4 MapInverse; /* map texel coordinates of mask point p: (dot(xy, p - corner), dot(zw, p - corner)) */      \
     float4 MapBuild;   /* x texels before the receiver that do not count (Chiaro: 1), y the lowest receiver */      \
-                       /* height a map texel stands in for */
+                       /* height a map texel stands in for */                                                       \
+    float4 MapLattice; /* int bits: xy the map's first lattice texel, zw the mask anchor (mask = world + zw) */
 
 static const float kSunEmpty = 1e30; // an unused interval: (kSunEmpty, -kSunEmpty)
+
+// v mod size, in [0, size): where the map of `size` texels stores lattice texel v (wrapped around it, so a pan keeps
+// every texel in place).
+int2 SunWrap(int2 v, int2 size)
+{
+    int2 t = v % size;
+    return select(t < 0, t + size, t);
+}
 
 // (base, top) of the finite obstacle in mask texel `cell`, top below base where none stands.
 float2 FiniteInterval(Texture2D<float4> heights, SamplerState nearestSampler, int2 cell, float2 size)

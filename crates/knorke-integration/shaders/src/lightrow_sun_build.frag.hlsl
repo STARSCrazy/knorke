@@ -1,5 +1,7 @@
 // Light rows (ADR 0019, plan 17.13 L3): a hard sun's shadow map (lightrow_sun.hlsli), one fullscreen draw over the
-// map. A map texel's middle c casts the ray c + DirSlope.xy * q toward the sun; it walks the mask texel by texel (DDA)
+// map, or over the bands an update rebuilds (lightrow_sun_band.vert). A map texel stores lattice texel (I, J)
+// (SunWrap); its middle c, in world texels so that the result does not depend on the camera, casts the ray c + DirSlope.xy * q
+// toward the sun; it walks the mask (world texel + anchor) texel by texel (DDA)
 // from q = MapBuild.x until it leaves the mask or rises above the highest finite top from the lowest receiver
 // (MapBuild.y). A texel crossed over [q0, q1] with a finite obstacle (base, top) shadows the receiver heights
 // [base - s q1, top - tolerance - s q0) at c (s = DirSlope.z): the ray from there sweeps the heights z + s q0 to
@@ -57,8 +59,13 @@ void Insert(inout float2 iv[kSlots + 1], inout int n, float2 v)
 
 float4 main(float2 uv : TEXCOORD0) : SV_Target0
 {
-    float2 ij = floor(uv * MapOrigin.zw) + 0.5;
-    float2 c = MapOrigin.xy + ij.x * MapAxes.xy + ij.y * MapAxes.zw;
+    int2 size = int2(MapOrigin.zw);
+    int2 corner = asint(MapLattice.xy);
+    int2 anchor = asint(MapLattice.zw);
+    // The lattice texel this map texel stores: the one in [corner, corner + size) congruent to it.
+    int2 local = SunWrap(int2(floor(uv * MapOrigin.zw)) - corner, size);
+    float2 ij = float2(corner + local) + 0.5;
+    float2 c = ij.x * MapAxes.xy + ij.y * MapAxes.zw;
     float2 d = DirSlope.xy;
     float s = DirSlope.z;
     float zMin = MapBuild.y;
@@ -73,11 +80,12 @@ float4 main(float2 uv : TEXCOORD0) : SV_Target0
     float2 frac = p - float2(cell);
     float2 next = q + float2(step.x > 0 ? 1.0 - frac.x : frac.x, step.y > 0 ? 1.0 - frac.y : frac.y) * inv;
     [loop] for (int k = 0; k < kMaxSteps; ++k) {
-        if (any(cell < 0) || any(cell >= int2(Domain.xy)) || zMin + s * q > Domain.w) {
+        int2 texel = cell + anchor;
+        if (any(texel < 0) || any(texel >= int2(Domain.xy)) || zMin + s * q > Domain.w) {
             break;
         }
         float leave = min(next.x, next.y);
-        float2 i = FiniteInterval(Heights, HeightSampler, cell, Domain.xy);
+        float2 i = FiniteInterval(Heights, HeightSampler, texel, Domain.xy);
         float hi = i.y - Domain.z - s * q;
         if (i.y > i.x && hi > zMin) {
             Insert(iv, n, float2(max(i.x - s * leave, zMin), hi));

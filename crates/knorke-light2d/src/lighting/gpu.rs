@@ -248,8 +248,12 @@ pub struct LightingRecord {
     pub rows_built: u32,
     /// Directional lights drawn with a sun map (not in `lights_drawn`, as Chiaro's).
     pub row_suns: u32,
-    /// Sun maps built this frame; 0 while suns and obstacles rest.
+    /// Sun maps built whole this frame; 0 while suns and obstacles rest.
     pub suns_built: u32,
+    /// Sun maps updated in part this frame (a pan, redrawn rectangles).
+    pub suns_updated: u32,
+    /// Sun map texels built or updated this frame.
+    pub sun_texels: u64,
 }
 
 /// Slot of each program of the frame.
@@ -681,6 +685,8 @@ impl<'d> LightingStage<'d> {
         self.rows.record_builds(cmd, samplers, frame)?;
         record.rows_built = rows.built;
         record.suns_built = rows.suns_built;
+        record.suns_updated = rows.suns_updated;
+        record.sun_texels = rows.sun_texels;
         let second = match self.detail {
             DetailMode::Exact => self.specular.texture_ref(),
             DetailMode::Direction => self.direction.texture_ref(),
