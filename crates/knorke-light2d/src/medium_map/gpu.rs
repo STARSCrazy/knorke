@@ -51,6 +51,7 @@ pub const MEDIUM_MAP_PROGRAMS: [ProgramDesc; 3] = [
             format: MEDIUM_SPLAT_FORMAT,
             blend: Blend::Max,
         }),
+        more: &[],
         primitive: SDL_GPU_PRIMITIVETYPE_POINTLIST,
     },
     ProgramDesc {
@@ -58,6 +59,7 @@ pub const MEDIUM_MAP_PROGRAMS: [ProgramDesc; 3] = [
         fragment: "medium_world_top.frag",
         blend: Blend::Max,
         second: None,
+        more: &[],
         primitive: SDL_GPU_PRIMITIVETYPE_POINTLIST,
     },
     ProgramDesc::new(

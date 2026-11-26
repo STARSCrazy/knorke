@@ -56,14 +56,32 @@ const fn soft_build(vertex: &'static str) -> ProgramDesc {
     }
 }
 
-/// The program that builds a sun's map whole or over its bands (`update`), with the second
-/// target if `soft` (the hard programs drop the build's second output).
-const fn sun_build_program(update: bool, soft: bool) -> usize {
-    match (update, soft) {
-        (false, false) => SUN_BUILD,
-        (true, false) => SUN_BAND,
-        (false, true) => 17,
-        (true, true) => 18,
+/// A map with partly transparent runs has two more targets, a run (lo, hi, q, pass) each
+/// (`lightrow_sun_build_partial.frag`), and its second one also for a hard sun.
+const PARTIAL_TARGETS: [SecondTarget; 2] = [SecondTarget {
+    format: ROW_FORMAT,
+    blend: Blend::Opaque,
+}; 2];
+
+const fn partial_build(vertex: &'static str) -> ProgramDesc {
+    ProgramDesc {
+        fragment: "lightrow_sun_build_partial.frag",
+        more: &PARTIAL_TARGETS,
+        ..soft_build(vertex)
+    }
+}
+
+/// The program that builds a sun's map whole or over its bands (`update`): with the second
+/// target if `soft` (the hard programs drop the build's second output), with all four if
+/// `partial`.
+const fn sun_build_program(update: bool, soft: bool, partial: bool) -> usize {
+    match (update, soft, partial) {
+        (false, false, false) => SUN_BUILD,
+        (true, false, false) => SUN_BAND,
+        (false, true, false) => 17,
+        (true, true, false) => 18,
+        (false, _, true) => 19,
+        (true, _, true) => 20,
     }
 }
 /// Bytes of a band (`SunBand` of `lightrow_sun_band.vert`).
@@ -95,8 +113,8 @@ const fn material_program(vertex: &'static str, fragment: &'static str) -> Progr
 /// buffer has Chiaro's flat light (no Lambert term), with and without a mask. A sun is a
 /// fullscreen draw (Chiaro's `fullscreen.vert`) in the same four layouts, its map build one too;
 /// an update of the map draws the build over its bands (`lightrow_sun_band.vert`); both again
-/// for a soft sun's map with its second target.
-const PROGRAMS: [ProgramDesc; 19] = [
+/// for a soft sun's map with its second target and for a map with partly transparent runs.
+const PROGRAMS: [ProgramDesc; 21] = [
     atlas_program("lightrow_build.frag"),
     atlas_program("lightrow_edge.frag"),
     ProgramDesc::new("lightrow.vert", "lightrow_light.frag", Blend::Additive),
@@ -136,6 +154,8 @@ const PROGRAMS: [ProgramDesc; 19] = [
     ),
     soft_build("fullscreen.vert"),
     soft_build("lightrow_sun_band.vert"),
+    partial_build("fullscreen.vert"),
+    partial_build("lightrow_sun_band.vert"),
 ];
 
 /// `flat`: no surface and no material buffer, so no detail targets either.
@@ -219,7 +239,11 @@ impl FrameSun {
     fn build_program(&self) -> Option<usize> {
         match self.work {
             MapWork::Keep => None,
-            work => Some(sun_build_program(work == MapWork::Update, self.soft())),
+            work => Some(sun_build_program(
+                work == MapWork::Update,
+                self.soft(),
+                self.params.partial(),
+            )),
         }
     }
 }
@@ -245,8 +269,10 @@ pub struct RowLights<'d> {
     flat: bool,
     /// The sun maps (`lightrow_sun_build.frag`).
     maps: [RenderTarget<'d>; MAX_SUNS],
-    /// Their second targets, a soft sun's only.
+    /// Their second targets, a soft sun's or a map's with partly transparent runs.
     reaches: [RenderTarget<'d>; MAX_SUNS],
+    /// Their partly transparent runs, two targets each.
+    partials: [[RenderTarget<'d>; 2]; MAX_SUNS],
     sun_cache: SunCache,
     /// The frame's suns with a map, [`RowsRecord::suns`] of them.
     suns: [FrameSun; MAX_SUNS],
@@ -278,6 +304,7 @@ impl<'d> RowLights<'d> {
             flat: false,
             maps: core::array::from_fn(|_| RenderTarget::new(gpu)),
             reaches: core::array::from_fn(|_| RenderTarget::new(gpu)),
+            partials: core::array::from_fn(|_| [RenderTarget::new(gpu), RenderTarget::new(gpu)]),
             sun_cache: SunCache::default(),
             suns: [FrameSun::default(); MAX_SUNS],
             bands: [SunBands::default(); MAX_SUNS],
@@ -333,6 +360,30 @@ impl<'d> RowLights<'d> {
         self.dirty.clear();
         self.cache.begin();
         self.sun_cache.begin();
+        // A crossing (a sun's pattern run) names its obstacle by record index, which moves when
+        // the frame's pattern obstacles change anywhere; and a row built without them has none.
+        // A sun's map rebuilds only if an obstacle it may name moved to another index: the texels
+        // that named one which left are rebuilt with the mask change that took it out.
+        let shadows = frame.shadows.filter(|s| s.height_mode);
+        let members = shadows
+            .and_then(|s| s.patterns.as_ref())
+            .map_or(&[][..], |p| p.members);
+        if !members
+            .iter()
+            .map(|m| m.0)
+            .eq(self.pattern_ids.iter().copied())
+        {
+            self.cache.invalidate();
+            let moved =
+                self.pattern_ids.iter().enumerate().any(|(k, &id)| {
+                    (members.iter().position(|m| m.0 == id)).is_some_and(|j| j != k)
+                });
+            if moved {
+                self.sun_cache.invalidate();
+            }
+            self.pattern_ids.clear();
+            self.pattern_ids.extend(members.iter().map(|m| m.0));
+        }
         let allocations = self.prepare_suns(frame)? + self.prepare_rows(frame)?;
 
         let f = self.frame;
@@ -375,16 +426,13 @@ impl<'d> RowLights<'d> {
     }
 
     /// The frame's suns with a map ([`sun_suits`], in a frame [`frame_suits`] accepts with
-    /// active shadows whose obstacles are all opaque without pattern; at most [`MAX_SUNS`]) and
+    /// active shadows and no tile grid with a pattern in the mask; at most [`MAX_SUNS`]) and
     /// their maps. A map no sun uses this frame is released: the cache builds it anew when a sun
     /// takes it again. Returns the maps (re)allocated.
     fn prepare_suns(&mut self, frame: &LightingFrame<'_>) -> Result<u32, Diagnostic> {
         let list = frame.lights;
         let mut n = 0;
-        if let Some(s) = frame
-            .shadows
-            .filter(|s| s.height_mode && !s.partial_in_mask)
-        {
+        if let Some(s) = frame.shadows.filter(|s| s.height_mode && !s.grid_in_mask) {
             let mask = row_mask(s);
             let suits = SunGrid::size_of(mask.size)[1] <= MAX_SUN_MAP
                 && frame_suits(frame.settings, frame.medium_map.is_some(), s.scene_max_top);
@@ -395,7 +443,8 @@ impl<'d> RowLights<'d> {
                 .filter(|(_, ((g, c), _))| suits && sun_suits(g, **c));
             for (i, ((g, _), &rise)) in candidates {
                 let (top, snapped) = (s.scene_max_top, mask.snapped);
-                let params = SunParams::new(g, rise, mask.size, snapped, tolerance, top);
+                let params = SunParams::new(g, rise, mask.size, snapped, tolerance, top)
+                    .with_partial(s.any_partial, s.patterns.is_some());
                 let source = SunSource::new(&params, &mask);
                 let Some((map, refresh)) = self.sun_cache.assign(i as u64, source, mask.change)
                 else {
@@ -422,26 +471,42 @@ impl<'d> RowLights<'d> {
             }
         }
         let mut allocations = 0;
-        for (k, (target, reach)) in self.maps.iter_mut().zip(&mut self.reaches).enumerate() {
-            match self.suns[..n].iter_mut().find(|f| f.map as usize == k) {
-                Some(f) => {
-                    let [w, h] = [f.params.origin[2], f.params.origin[3]].map(|v| v as u32);
-                    if target.ensure(w, h, ROW_FORMAT)? {
-                        allocations += 1;
-                        f.work = MapWork::Build;
-                    }
-                    if !f.soft() {
-                        reach.release();
-                    } else if reach.ensure(w, h, REACH_FORMAT)? {
-                        allocations += 1;
-                        f.work = MapWork::Build;
-                    }
-                }
-                None => {
-                    target.release();
-                    reach.release();
+        let targets = self.maps.iter_mut().zip(&mut self.reaches);
+        for (k, ((target, reach), partial)) in targets.zip(&mut self.partials).enumerate() {
+            let f = self.suns[..n].iter_mut().find(|f| f.map as usize == k);
+            let size = f
+                .as_ref()
+                .map(|f| [f.params.origin[2], f.params.origin[3]].map(|v| v as u32));
+            let partial_runs = f.as_ref().is_some_and(|f| f.params.partial());
+            let wanted = [
+                (target, size.is_some(), ROW_FORMAT),
+                (
+                    reach,
+                    f.as_ref().is_some_and(|f| f.soft()) || partial_runs,
+                    REACH_FORMAT,
+                ),
+            ];
+            let [p0, p1] = partial;
+            let more = [
+                (p0, partial_runs, ROW_FORMAT),
+                (p1, partial_runs, ROW_FORMAT),
+            ];
+            let mut grown = false;
+            for (t, needed, format) in wanted.into_iter().chain(more) {
+                match size.filter(|_| needed) {
+                    Some([w, h]) => grown |= t.ensure(w, h, format)?,
+                    None => t.release(),
                 }
             }
+            if let Some(f) = f.filter(|_| grown) {
+                allocations += 1;
+                f.work = MapWork::Build;
+            }
+        }
+        if n > 0 {
+            // The stand-in for the pattern records of a frame without them.
+            let bytes = MAX_SUNS * MAX_SUN_BANDS * SUN_BAND_SIZE;
+            self.band_buffer.reserve(bytes as u64)?;
         }
         self.frame.suns = n as u32;
         for (f, bands) in self.suns[..n].iter().zip(&self.bands) {
@@ -482,18 +547,6 @@ impl<'d> RowLights<'d> {
         let shadows = frame.shadows.filter(|s| s.height_mode);
         let mask = shadows.map(row_mask);
         let patterns = shadows.and_then(|s| s.patterns.as_ref());
-        // A crossing names its obstacle by record index, which moves when the frame's pattern
-        // obstacles change anywhere; and a row built without them has no crossings.
-        let members = patterns.map_or(&[][..], |p| p.members);
-        if !members
-            .iter()
-            .map(|m| m.0)
-            .eq(self.pattern_ids.iter().copied())
-        {
-            self.cache.invalidate();
-            self.pattern_ids.clear();
-            self.pattern_ids.extend(members.iter().map(|m| m.0));
-        }
         let mut allocations = 0;
         // Twice at most: growing the atlas loses its rows, so every lamp is assigned anew.
         for _ in 0..2 {
@@ -667,6 +720,7 @@ impl<'d> RowLights<'d> {
                 .texture_ref()
                 .ok_or_else(|| missing("a sun map"))?;
             let reach = self.reaches[sun.map as usize].texture_ref();
+            let [p0, p1] = &self.partials[sun.map as usize];
             let params = sun.params.to_bytes();
             // `SunBandPass` of lightrow_sun_band.vert: where the map's first lattice texel lies in
             // the texture, the map's size and this sun's first band.
@@ -686,14 +740,19 @@ impl<'d> RowLights<'d> {
             pass_bytes[..16].copy_from_slice(bytemuck::bytes_of(&band));
             pass_bytes[16..20].copy_from_slice(&((k * MAX_SUN_BANDS) as u32).to_le_bytes());
             let buffer = self.band_buffer.buffer_ref();
-            let targets = match (sun.soft(), reach) {
-                (false, _) => &[ColorTarget::new(map, load)][..],
-                (true, Some(reach)) => {
-                    &[ColorTarget::new(map, load), ColorTarget::new(reach, load)]
-                }
-                (true, None) => return Err(missing("a soft sun's second map")),
+            let all = [Some(map), reach, p0.texture_ref(), p1.texture_ref()];
+            let used = if sun.params.partial() {
+                4
+            } else if sun.soft() {
+                2
+            } else {
+                1
             };
-            let mut pass = cmd.render_pass(targets)?;
+            let mut targets = [ColorTarget::new(map, load); 4];
+            for (t, texture) in targets.iter_mut().zip(&all).take(used) {
+                *t = ColorTarget::new(texture.ok_or_else(|| missing("a sun map target"))?, load);
+            }
+            let mut pass = cmd.render_pass(&targets[..used])?;
             let update = sun.work == MapWork::Update;
             let vertex = match (update, buffer) {
                 (true, Some(buffer)) => StageBindings {
@@ -709,7 +768,15 @@ impl<'d> RowLights<'d> {
                 &Bindings {
                     vertex,
                     fragment: StageBindings {
-                        samplers: &[SamplerBinding::new(heights, nearest)],
+                        // The partial program reads mask and ids too (the ids only with
+                        // pattern obstacles).
+                        samplers: &[
+                            heights,
+                            shadows.mask,
+                            shadows.patterns.as_ref().map_or(heights, |p| p.ids),
+                        ]
+                        .map(|t| SamplerBinding::new(t, nearest))
+                            [..if used == 4 { 3 } else { 1 }],
                         uniforms: &[&params],
                         ..Default::default()
                     },
@@ -933,23 +1000,33 @@ impl<'d> RowLights<'d> {
             .texture_ref()
             .ok_or_else(|| missing("a sun map"))?;
         // Neither surface nor material buffer: the flat program does not read the first; a hard
-        // sun does not read the second map.
+        // sun does not read the second map, a map without partly transparent runs not the next
+        // two, a frame without pattern obstacles not the atlas and the records.
         let stand_in = frame.scene;
+        let [p0, p1] = &self.partials[sun.map as usize];
+        let patterns = shadows.patterns.as_ref();
         let textures = [
             frame.surface.or(frame.material).unwrap_or(stand_in),
             shadows.mask,
             shadows.height.ok_or_else(|| missing("the height map"))?,
             map,
             self.reaches[sun.map as usize].texture_ref().unwrap_or(map),
+            p0.texture_ref().unwrap_or(map),
+            p1.texture_ref().unwrap_or(map),
+            patterns.map_or(map, |p| p.atlas),
             frame.material.unwrap_or(stand_in),
         ]
         .map(|t| SamplerBinding::new(t, samplers.sampler(Filter::Nearest)));
         // Only the exact program reads the material buffer.
         let count = if self.detail == DetailMode::Exact && !self.flat {
-            6
+            9
         } else {
-            5
+            8
         };
+        let stand_in =
+            (self.band_buffer.buffer_ref()).ok_or_else(|| missing("the sun band buffer"))?;
+        let records = patterns.map_or([stand_in; 3], |p| [p.obstacles, p.records, p.data]);
+        let pattern_params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
         let params = sun.params.to_bytes();
         pass.bind_program(
             self.pipeline(sun_program(self.detail, self.flat), LIGHT_FORMAT)?,
@@ -957,7 +1034,8 @@ impl<'d> RowLights<'d> {
                 vertex: StageBindings::default(),
                 fragment: StageBindings {
                     samplers: &textures[..count],
-                    uniforms: &[surface_params, &params],
+                    storage_buffers: &records,
+                    uniforms: &[surface_params, &params, &pattern_params],
                     ..Default::default()
                 },
             },

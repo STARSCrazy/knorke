@@ -40,11 +40,11 @@ use sdl3_sys::gpu::{
     SDL_GPUPrimitiveType, SDL_GPUTextureFormat,
 };
 
-use crate::PipelineRef;
 use crate::formats::format_text;
 use crate::handle::sdl_error;
 use crate::kpak::{Reflection, SHADER_PACK_MISSING_PROGRAM, Stage};
 use crate::{Gpu, GpuHandle, ShaderId, ShaderLibrary};
+use crate::{MAX_COLOR_TARGETS, PipelineRef};
 
 /// `SDL_CreateGPUGraphicsPipeline` failed.
 pub const PIPELINE_CREATE_FAILED: DiagnosticCode =
@@ -133,6 +133,8 @@ pub struct ProgramDesc {
     pub blend: Blend,
     /// Optional second color target.
     pub second: Option<SecondTarget>,
+    /// Color targets after the second (with one), at most [`MAX_COLOR_TARGETS`] in all.
+    pub more: &'static [SecondTarget],
     /// Primitive topology.
     pub primitive: SDL_GPUPrimitiveType,
 }
@@ -145,6 +147,7 @@ impl ProgramDesc {
             fragment,
             blend,
             second: None,
+            more: &[],
             primitive: SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         }
     }
@@ -237,20 +240,18 @@ impl<'d> PipelineCache<'d> {
                 format!("no program {program} in the pipeline table"),
             )
         })?;
-        let mut colors = [
-            SDL_GPUColorTargetDescription {
-                format: target,
-                blend_state: blend_state(p.desc.blend),
-            },
-            SDL_GPUColorTargetDescription::default(),
-        ];
+        let mut colors = [SDL_GPUColorTargetDescription::default(); MAX_COLOR_TARGETS];
+        colors[0] = SDL_GPUColorTargetDescription {
+            format: target,
+            blend_state: blend_state(p.desc.blend),
+        };
         let mut targets = 1;
-        if let Some(second) = p.desc.second {
-            colors[1] = SDL_GPUColorTargetDescription {
-                format: second.format,
-                blend_state: blend_state(second.blend),
+        for t in p.desc.second.iter().chain(p.desc.more) {
+            colors[targets as usize] = SDL_GPUColorTargetDescription {
+                format: t.format,
+                blend_state: blend_state(t.blend),
             };
-            targets = 2;
+            targets += 1;
         }
         let mut info = SDL_GPUGraphicsPipelineCreateInfo {
             vertex_shader: shaders.shader(p.vertex)?,
@@ -302,16 +303,18 @@ impl<'d> PipelineCache<'d> {
             .iter()
             .find(|e| e.program == program && e.format == target)?;
         let p = self.programs.get(program)?;
-        let (formats, targets) = match p.desc.second {
-            Some(second) => ([target, second.format], 2),
-            None => ([target, target], 1),
-        };
+        let mut formats = [target; MAX_COLOR_TARGETS];
+        let mut targets = 1;
+        for t in p.desc.second.iter().chain(p.desc.more) {
+            formats[targets] = t.format;
+            targets += 1;
+        }
         Some(PipelineRef::new(
             e.pipeline.non_null(),
             self.gpu.device().non_null(),
             (p.vertex_reflection, p.fragment_reflection),
             formats,
-            targets,
+            targets as u8,
         ))
     }
 

@@ -50,6 +50,7 @@ const fn program(vertex: &'static str, fragment: &'static str) -> ProgramDesc {
         fragment,
         blend: Blend::Opaque,
         second: None,
+        more: &[],
         primitive: SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
     }
 }

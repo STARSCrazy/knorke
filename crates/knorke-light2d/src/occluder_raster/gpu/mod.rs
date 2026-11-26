@@ -49,6 +49,7 @@ const fn program(vertex: &'static str, fragment: &'static str, second: bool) -> 
         fragment,
         blend: Blend::Max,
         second: if second { Some(HEIGHT_TARGET) } else { None },
+        more: &[],
         primitive: SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
     }
 }

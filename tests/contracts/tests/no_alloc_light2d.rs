@@ -360,7 +360,8 @@ fn steady_state_light2d_paths_allocate_nothing() {
             .zip(&row_list.directional_rise);
         for (k, ((g, &casters), &rise)) in directional.enumerate() {
             let _ = sun_suits(g, casters);
-            let params = SunParams::new(g, rise, row_mask.size, row_mask.snapped, 0.05, 3.0);
+            let params = SunParams::new(g, rise, row_mask.size, row_mask.snapped, 0.05, 3.0)
+                .with_partial(i.is_multiple_of(2), true);
             let _ = params.to_bytes();
             let source = SunSource::new(&params, &row_mask);
             if let Some((_, Refresh::Update(before))) =

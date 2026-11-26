@@ -25,7 +25,7 @@ use knorke_integration::layers::{Layer, LayerSet};
 use knorke_integration::light2d::Light2dSettings;
 use knorke_light2d::NoResources;
 use knorke_light2d::light::{LightDesc, LightType, MaskMode, ShadowFilter};
-use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
+use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc, TileGridDesc};
 use knorke_light2d::settings::{Quality, Resolutions};
 use knorke_math::{At, Vec2, Vec3};
 
@@ -340,7 +340,8 @@ fn row_lights_and_chiaro_lights_share_a_frame() {
 }
 
 /// The demo as it is: its two pattern fences are runs of the row whose crossings the pattern pass
-/// finds, so the lamps that reach them are row lights too.
+/// finds, so the lamps that reach them are row lights too; and runs of the moon's map, so the
+/// moon takes its shadow from the map.
 #[test]
 fn pattern_obstacles_are_runs_of_the_row() {
     with_chiaro_pack(|gpu, pack| {
@@ -353,12 +354,15 @@ fn pattern_obstacles_are_runs_of_the_row() {
                 let (max, mean, share) = diff(&on, &off);
                 let (rows, drawn) = (with.lighting.row_lights, with.lighting.lights_drawn);
                 assert_eq!(drawn, without.lighting.lights_drawn);
+                let suns = with.lighting.row_suns;
                 eprintln!(
-                    "iso_night_hard: {rows} of {drawn} lights are row lights; against rows off: \
-                     largest difference {max}/255, mean {mean:.4}, {share:.2} % of the pixels"
+                    "iso_night_hard: {rows} of {drawn} lights are row lights, {suns} row suns; \
+                     against rows off: largest difference {max}/255, mean {mean:.4}, {share:.2} % \
+                     of the pixels"
                 );
                 // Every lamp, the masked hall window's too (the sun is no instanced light).
                 assert_eq!(rows, drawn);
+                assert_eq!(suns, 1, "the moon has a map");
                 assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
 
                 // Every shadowed lamp whose disc holds a corner of a fence triangle.
@@ -718,29 +722,106 @@ fn rows_are_built_only_when_lamp_or_mask_change() {
     });
 }
 
-/// A sun takes its shadow from a map unless a partly transparent or pattern obstacle lies in the
-/// mask (the map holds opaque obstacles only); one outside it does not count. The demo as it is
-/// has its two pattern fences in the picture, so its moon keeps Chiaro's programs; with them
-/// opaque it has a map, also with a half-transparent box far outside the picture, not with the
-/// box in it.
+/// The demo as it is: its moon takes its shadow from a map with the two pattern fences in it
+/// (the map keeps their runs), built whole once, kept while nothing changes, updated in part when
+/// a half-transparent box appears in the picture or the camera pans by a mask texel, and right
+/// after a pattern fence moved. Built whole when a fence loses its pattern (the other's record index moves) and
+/// when the moon gets a size. A tile grid with a pattern in the picture takes the map away (the
+/// map finds crossings of boxes, circles and polygons only); far outside it gives it back. Each
+/// picture is that of a plan that builds every row and map.
 #[test]
-fn only_partial_obstacles_in_the_mask_keep_a_sun_from_its_map() {
+fn pattern_and_partial_obstacles_keep_the_suns_map() {
     with_chiaro_pack(|gpu, pack| {
         iso_night::with_demo("hard", 44, "", |demo| {
             demo.with_frames(gpu, pack, &with_rows, &mut |f| {
-                let suns = |f: &mut DemoFrames<'_, '_>| f.frame().1.lighting.row_suns;
-                assert_eq!(suns(f), 0, "the pattern fences in the picture");
-                drop_patterns(&mut f.scene);
-                assert_eq!(suns(f), 1, "opaque fences");
+                // Row suns, sun maps built whole, updated, texels drawn.
+                let check = |f: &mut DemoFrames<'_, '_>, what: &str| {
+                    let (pixels, record) = f.frame();
+                    let l = record.lighting;
+                    let (max, _, share) = diff(&pixels, &f.fresh_frame(pack));
+                    eprintln!(
+                        "{what}: {} row suns, map {} whole / {} in part, {} texels; against a \
+                         new plan: largest difference {max}/255, {share:.3} % of the pixels",
+                        l.row_suns, l.suns_built, l.suns_updated, l.sun_texels
+                    );
+                    assert_eq!(max, 0, "{what}");
+                    (l.row_suns, l.suns_built, l.suns_updated, l.sun_texels)
+                };
+                let rest = (1, 0, 0, 0);
+                let (suns, full, _, whole) = check(f, "the demo");
+                assert_eq!(
+                    (suns, full),
+                    (1, 1),
+                    "the moon has a map with the fences in it"
+                );
+                assert_eq!(check(f, "resting"), rest);
+                let part = |f: &mut DemoFrames<'_, '_>, what: &str, most: u64| {
+                    let (suns, full, part, texels) = check(f, what);
+                    assert!(
+                        suns == 1 && full == 0 && part == 1 && texels < most,
+                        "{what}: {texels} of {whole}"
+                    );
+                    assert_eq!(check(f, "resting"), rest);
+                };
+
+                let inside = f.scene.obstacles.iter().next().unwrap().1.common.position;
                 let mut glass = ShapeDesc::rect(1.0, 1.0);
                 glass.common.height = 2.0;
                 glass.common.opacity = 0.5;
-                glass.common.position = At::new(Vec2::new(-500.0, -500.0));
-                let id = f.scene.obstacles.create_shape(&glass).unwrap();
-                assert_eq!(suns(f), 1, "a half-transparent box far outside");
-                let inside = f.scene.obstacles.iter().next().unwrap().1.common.position;
-                f.scene.obstacles.set_transform(id, inside, 0.0).unwrap();
-                assert_eq!(suns(f), 0, "the box in the picture");
+                glass.common.dynamic = true;
+                glass.common.position = inside;
+                f.scene.obstacles.create_shape(&glass).unwrap();
+                part(f, "a half-transparent box in the picture", whole / 4);
+                let fences: Vec<_> = (f.scene.obstacles.iter())
+                    .filter(|(_, o)| o.patterns.refs > 0)
+                    .map(|(id, o)| (id, o.common.position, o.patterns.pattern))
+                    .collect();
+                assert_eq!(fences.len(), 2, "the demo's pattern fences");
+                let (fence, at, pattern) = fences[1];
+                let moved = At::new(at.raw() + Vec2::new(0.5, 0.0));
+                f.scene.obstacles.set_transform(fence, moved, 0.0).unwrap();
+                assert_eq!(check(f, "a pattern fence moved").0, 1);
+                assert_eq!(check(f, "resting"), rest);
+                f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(2.0, 0.0));
+                part(f, "camera moved 1 mask texel", whole / 2);
+
+                f.scene
+                    .obstacles
+                    .set_pattern(fences[0].0, 0, &f.scene.patterns)
+                    .unwrap();
+                let (suns, full, _, _) = check(f, "the first fence lost its pattern");
+                assert_eq!(
+                    (suns, full),
+                    (1, 1),
+                    "the second fence's record index moved"
+                );
+                assert_eq!(check(f, "resting"), rest);
+                f.scene
+                    .obstacles
+                    .set_pattern(fences[0].0, pattern, &f.scene.patterns)
+                    .unwrap();
+                let moon = *(f.scene.light_ids.iter())
+                    .find(|&&id| f.scene.lights.get(id).unwrap().kind == LightType::Directional)
+                    .unwrap();
+                f.scene.change_light(moon, |d| d.source_radius = 1.0);
+                assert_eq!(check(f, "a soft moon").1, 1);
+                assert_eq!(check(f, "resting"), rest);
+                f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(2.0, 0.0));
+                part(f, "soft moon, camera moved 1 mask texel", whole / 2);
+
+                let solid = [1u8; 4];
+                let mut grid = TileGridDesc::new(2, 2, &solid);
+                grid.common.height = 2.0;
+                grid.common.position = inside;
+                let id = f.scene.obstacles.create_tile_grid(&grid).unwrap();
+                f.scene
+                    .obstacles
+                    .set_pattern(id, pattern, &f.scene.patterns)
+                    .unwrap();
+                assert_eq!(check(f, "a tile grid with a pattern in the picture").0, 0);
+                let far = At::new(Vec2::new(-500.0, -500.0));
+                f.scene.obstacles.set_transform(id, far, 0.0).unwrap();
+                assert_eq!(check(f, "the grid far outside").0, 1);
             });
         });
     });

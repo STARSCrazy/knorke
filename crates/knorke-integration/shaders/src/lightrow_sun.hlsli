@@ -2,7 +2,8 @@
 // writes, per map texel, the receiver heights a ray toward the sun from there finds shadowed (and, for a soft sun, how
 // far along the ray their ends lie); lightrow_sun_light.hlsli looks a pixel's height up there, lightrow_sun_truth.frag
 // (a test tool) marches instead. Like Chiaro's directional
-// lights (E24) only finite obstacles block (the height texture's .ba), with Chiaro's tolerance below a top.
+// lights (E24) only finite obstacles block (the height texture's .ba), with Chiaro's tolerance below a top; partly
+// transparent ones and pattern obstacles let through what Chiaro's trace lets through (E25).
 #ifndef KNORKE_LIGHTROW_SUN_HLSLI
 #define KNORKE_LIGHTROW_SUN_HLSLI
 
@@ -20,7 +21,8 @@
     float4 MapBuild;   /* x texels before the receiver that do not count (Chiaro: 1), y the lowest receiver */      \
                        /* height a map texel stands in for, z a soft sun's rise (0: hard), w the height the */     \
                        /* march rises by per texel (the disc's lowest ray) */                                       \
-    float4 MapLattice; /* int bits: xy the map's first lattice texel, zw the mask anchor (mask = world + zw) */
+    float4 MapLattice; /* int bits: xy the map's first lattice texel, zw the mask anchor (mask = world + zw) */  \
+    float4 MapPartial; /* x 1: the map keeps partly transparent runs, y 1: their pattern ids */
 
 static const float kSunEmpty = 1e30; // an unused interval: (kSunEmpty, -kSunEmpty)
 
@@ -30,6 +32,13 @@ int2 SunWrap(int2 v, int2 size)
 {
     int2 t = v % size;
     return select(t < 0, t + size, t);
+}
+
+// The pass of a partly transparent run's code (lightrow_sun_build.frag): a pattern run's (-(id + pass / 2)) is the
+// mask's, the pattern's mean.
+float SunMeanPass(float code)
+{
+    return code >= 0.0 ? code : 2.0 * (-code - floor(-code));
 }
 
 // (base, top) of the finite obstacle in mask texel `cell`, top below base where none stands.

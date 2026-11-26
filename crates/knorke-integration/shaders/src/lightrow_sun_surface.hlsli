@@ -22,9 +22,9 @@ Texture2D<float4> Heights : register(t2, space2); // RGBA16F, .ba the finite obs
 SamplerState SurfaceSampler : register(s0, space2); // nearest
 SamplerState MaskSampler : register(s1, space2);    // nearest
 SamplerState HeightSampler : register(s2, space2);  // nearest
-#ifdef CHI_MATERIAL_EXACT // after the map of lightrow_sun_light.hlsli
-Texture2D<float4> MaterialTex : register(t5, space2);
-SamplerState MaterialSampler : register(s5, space2); // nearest
+#ifdef CHI_MATERIAL_EXACT // after the map, the runs and the pattern atlas of lightrow_sun_light.hlsli
+Texture2D<float4> MaterialTex : register(t8, space2);
+SamplerState MaterialSampler : register(s8, space2); // nearest
 #endif
 
 cbuffer SurfaceParams : register(b0, space3)

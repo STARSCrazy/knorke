@@ -107,9 +107,9 @@ pub struct ShadowMaps<'a> {
     pub height_mode: bool,
     /// An active obstacle is partly transparent (E25).
     pub any_partial: bool,
-    /// One of them lies in the mask (`RowBlockers::partial_in_mask`; computed only in frames
-    /// with row lights).
-    pub partial_in_mask: bool,
+    /// A tile grid with a pattern lies in the mask (`RowBlockers::grid_in_mask`; computed only
+    /// in frames with row lights).
+    pub grid_in_mask: bool,
     /// Above it no obstacle blocks a point/spot ray (`INFINITE_TOP` if one is infinitely tall).
     pub shadow_top: f32,
     /// Highest finite obstacle top; 0 unless height mode.
