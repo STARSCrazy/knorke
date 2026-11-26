@@ -63,8 +63,8 @@ float March(float3 ray, float2 start, float z)
             if (id == 0u) { // HLSL's ?: would run both sides
                 seen *= 1.0 - o;
             } else {
-                float2 exit = PatternExit(id, start, ray.xy, u + 1.0, u - 1.0);
-                seen *= PatternPass(id, exit.y, z + ray.z * exit.x, 1.0 - o);
+                float3 exit = PatternExit(id, start, ray.xy, u + 1.0, u - 1.0);
+                seen *= PatternPass(id, exit.y, uint(exit.z), z + ray.z * exit.x, 1.0 - o);
             }
         }
         inside = blocked;

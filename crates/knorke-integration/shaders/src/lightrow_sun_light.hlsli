@@ -66,8 +66,8 @@ float RunPass(float4 r, float2 start, float z, float a)
         return SunMeanPass(r.w);
     }
     float id = floor(-r.w);
-    float2 exit = PatternExit(uint(id), start, DirSlope.xy, r.z - a + 2.0, r.z - a - 1.0);
-    return PatternPass(uint(id), exit.y, z + DirSlope.z * exit.x, 2.0 * (-r.w - id));
+    float3 exit = PatternExit(uint(id), start, DirSlope.xy, r.z - a + 2.0, r.z - a - 1.0);
+    return PatternPass(uint(id), exit.y, uint(exit.z), z + DirSlope.z * exit.x, 2.0 * (-r.w - id));
 }
 
 // Shadow of interval i = (lo, hi) at height z, its ends at distances w = (q of hi, q of lo) widened.

@@ -2,7 +2,8 @@
 //! `PassPlan::prepare` and `PassPlan::record` of an unchanged scene with a pattern box, a rotated
 //! pattern polygon and a tile grid with a pattern table under a shadow-casting light make no Rust
 //! allocation (ADR 0006), both when the mask is redrawn every frame (a sprite mask) and when it
-//! is reused. Command buffer acquire and submit are the host's and stay outside.
+//! is reused, on Chiaro's programs (light rows off) and as a row light (ADR 0019). Command buffer
+//! acquire and submit are the host's and stay outside.
 //!
 //! Needs the feature `gpu` of this crate, a Vulkan device and the shader pack of
 //! `cargo xtask shaders`; skips without them (a failure with `KNORKE_REQUIRE_GPU=1`).
@@ -112,7 +113,11 @@ fn steady_state_pattern_obstacles_allocate_nothing() {
         d.radius = 60.0;
         d.cast_shadows = true;
         lights.create(&d, &NoResources).unwrap();
-        let settings = LightSettings::default();
+        let rows = LightSettings::default();
+        let chiaro = LightSettings {
+            light_rows: false,
+            ..rows
+        };
         let scene = sampled_rgba8(gpu, w, h, &vec![255u8; (w * h * 4) as usize]);
         let mut sprite_px = vec![0u8; (w * h * 4) as usize];
         for y in 30..40 {
@@ -129,20 +134,25 @@ fn steady_state_pattern_obstacles_allocate_nothing() {
 
         // With the sprite the mask (and the pattern id texture) is redrawn every frame; without it
         // the mask and the pattern list are reused.
-        for sprite in [Some(sprite.texture_ref()), None] {
+        let cases = [Some(sprite.texture_ref()), None]
+            .into_iter()
+            .flat_map(|sprite| [(sprite, &chiaro), (sprite, &rows)]);
+        for (sprite, settings) in cases {
             let frame = PassFrame {
                 occlusion: sprite,
                 ..PassFrame::new(scene.texture_ref(), &projection)
             };
             let mut plan = PassPlan::new(gpu, pack.to_vec()).unwrap();
+            let mut row_lights = 0;
             let mut frames = |n: u32| -> u64 {
                 let mut counted = 0;
                 for _ in 0..n {
                     let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
                     let before = allocations();
-                    plan.prepare(&frame, &stores, &settings).unwrap();
-                    plan.record(&mut cmd, &frame, &settings).unwrap();
+                    plan.prepare(&frame, &stores, settings).unwrap();
+                    let record = plan.record(&mut cmd, &frame, settings).unwrap();
                     counted += allocations() - before;
+                    row_lights = record.lighting.row_lights;
                     cmd.submit_and_wait().unwrap();
                 }
                 counted
@@ -150,21 +160,25 @@ fn steady_state_pattern_obstacles_allocate_nothing() {
             frames(3); // warm: targets, atlas, pipelines, buffers, lists
             let live = gpu.counter().live();
             let allocated = frames(5);
+            let case = (sprite.is_some(), settings.light_rows);
             assert_eq!(
-                allocated,
-                0,
-                "steady-state pattern frames allocated (sprite {})",
-                sprite.is_some()
+                allocated, 0,
+                "steady-state pattern frames allocated (sprite, rows) {case:?}"
             );
             assert_eq!(gpu.counter().live(), live, "no GPU object per frame");
-            let programs = plan
-                .lighting()
-                .program(knorke_light2d::lighting::DrawProgram::Shadowed);
-            assert!(
-                programs
-                    .is_some_and(|p| p.has(knorke_light2d::light_program::LightFeature::Pattern)),
-                "the patterns are not drawn"
-            );
+            if settings.light_rows {
+                assert_eq!(row_lights, 1, "the light is a row light {case:?}");
+            } else {
+                let programs = plan
+                    .lighting()
+                    .program(knorke_light2d::lighting::DrawProgram::Shadowed);
+                assert!(
+                    programs.is_some_and(
+                        |p| p.has(knorke_light2d::light_program::LightFeature::Pattern)
+                    ),
+                    "the patterns are not drawn {case:?}"
+                );
+            }
         }
     });
 }

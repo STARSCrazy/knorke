@@ -426,13 +426,13 @@ impl<'d> RowLights<'d> {
     }
 
     /// The frame's suns with a map ([`sun_suits`], in a frame [`frame_suits`] accepts with
-    /// active shadows and no tile grid with a pattern in the mask; at most [`MAX_SUNS`]) and
+    /// active shadows; at most [`MAX_SUNS`]) and
     /// their maps. A map no sun uses this frame is released: the cache builds it anew when a sun
     /// takes it again. Returns the maps (re)allocated.
     fn prepare_suns(&mut self, frame: &LightingFrame<'_>) -> Result<u32, Diagnostic> {
         let list = frame.lights;
         let mut n = 0;
-        if let Some(s) = frame.shadows.filter(|s| s.height_mode && !s.grid_in_mask) {
+        if let Some(s) = frame.shadows.filter(|s| s.height_mode) {
             let mask = row_mask(s);
             let suits = SunGrid::size_of(mask.size)[1] <= MAX_SUN_MAP
                 && frame_suits(frame.settings, frame.medium_map.is_some(), s.scene_max_top);

@@ -120,6 +120,8 @@ void ClipRuns(inout float4 runs[kRuns], float from)
 // it enters where it leaves, so for a hard lamp its entry is sought around the last quarter texel still inside, on
 // this ray (`ground`, `dir`), as Chiaro and lightrow_truth.frag do. A lamp with a size keeps the stored crossing:
 // its one ray stands for many that blur the pattern, and the sharper entry measured worse there (probe "zaun weich").
+// A tile grid's crossing does not store the entered cell, so every lamp seeks it on its own ray around the stored
+// crossing.
 float Through(float4 runs[kRuns], float4 pass, float4 crossings, float2 ground, float2 dir, float zl, float slope,
               float r, bool hard)
 {
@@ -133,17 +135,17 @@ float Through(float4 runs[kRuns], float4 pass, float4 crossings, float2 ground, 
                 if (f > 0.0 && floor(whole / 65536.0) == float(k)) {
                     uint id = uint(whole) & 0xFFFFu;
                     float q = runs[k].y - ((f - whole) * 4.0 - 1.0);
-                    float u = crossings[2 * c + 1];
+                    float3 exit = float3(q, crossings[2 * c + 1], 0.0);
                     float h = zl - slope * q;
                     float top = runs[k].w - RowSize.w;
                     if (hard && (h >= top || h < runs[k].z)) {
                         float leave = (zl - (h >= top ? top : runs[k].z)) / slope;
                         float last = (ceil(leave * 4.0) - 1.0) * 0.25;
-                        float2 exit = PatternExit(id, ground, dir, last - 1.0, last + 1.0);
-                        q = exit.x;
-                        u = exit.y;
+                        exit = PatternExit(id, ground, dir, last - 1.0, last + 1.0);
+                    } else if (PatternObstacles[id - 1u].kind.x == kPatternTileGrid) {
+                        exit = PatternExit(id, ground, dir, q - 1.0, q + 1.0); // the cell is not stored
                     }
-                    open = PatternPass(id, u, zl - slope * q, open);
+                    open = PatternPass(id, exit.y, uint(exit.z), zl - slope * exit.x, open);
                 }
             }
             through *= open;

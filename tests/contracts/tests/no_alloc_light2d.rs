@@ -48,9 +48,8 @@ use knorke_light2d::occluder_raster::{
 use knorke_light2d::profile::{ProfilePreset, ProfileShape, build_shape_profile};
 use knorke_light2d::profile_store::ProfileStore;
 use knorke_light2d::rows::{
-    MaskChange, Refresh, RowBlockers, RowBuildParams, RowCache, RowEdgeParams, RowLamp,
-    RowLookupParams, RowMask, RowSpace, SunBands, SunCache, SunParams, SunSource, sun_bands,
-    sun_suits,
+    MaskChange, Refresh, RowBuildParams, RowCache, RowEdgeParams, RowLamp, RowLookupParams,
+    RowMask, RowSpace, SunBands, SunCache, SunParams, SunSource, sun_bands, sun_suits,
 };
 use knorke_light2d::settings::LightSettings;
 use knorke_light2d::shadow::{MaskPlanInput, MaskUpdateLimits, MaskUpdatePlan, OcclusionDomain};
@@ -223,13 +222,6 @@ fn steady_state_light2d_paths_allocate_nothing() {
     let mut sun_cache = SunCache::default();
     let mut sun_bands_out = SunBands::default();
     let row_domain = OcclusionDomain::new(128, 64, 1.0);
-    // A tile grid with a pattern keeps the lamps reaching it from the rows.
-    let mut fences = ObstacleStore::new();
-    let fence = fences
-        .create_tile_grid(&TileGridDesc::new(1, 1, &[1]))
-        .unwrap();
-    fences.set_pattern(fence, 1, &|_| Some(0.5)).unwrap();
-    let mut row_blockers = RowBlockers::default();
 
     let mut step = |i: u32| {
         // Shadow cache plan: move some dynamic obstacles, pan, decide and commit.
@@ -306,13 +298,8 @@ fn steady_state_light2d_paths_allocate_nothing() {
         );
         // The light rows: the lights that suit them, their rows (the mask changed in the
         // plan's rectangles) and the blocks of the row programs.
-        fences
-            .set_transform(fence, At::new(Vec2::new(i as f32, 3.0)), 0.0)
-            .unwrap();
-        row_blockers.collect(true, &fences, &Projection::IDENTITY, &row_domain);
         let row_modes = LightModes {
             rows: true,
-            row_blockers: Some(&row_blockers),
             ..modes
         };
         collect_lights(

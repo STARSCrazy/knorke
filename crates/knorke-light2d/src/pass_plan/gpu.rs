@@ -49,7 +49,7 @@ use crate::pattern_store::PatternStore;
 use crate::profile_store::ProfileStore;
 use crate::projection::Projection;
 use crate::ring_light::RingLight;
-use crate::rows::{MaskChange, RowBlockers, frame_suits};
+use crate::rows::{MaskChange, frame_suits};
 use crate::settings::LightSettings;
 use crate::shadow::{MaskAnchor, MaskPlanInput, MaskUpdate, OcclusionDomain};
 use crate::zone_pass::ZoneInput;
@@ -245,7 +245,6 @@ struct ShadowState {
     anchor: MaskAnchor,
     height_mode: bool,
     any_partial: bool,
-    grid_in_mask: bool,
     shadow_top: f32,
     scene_max_top: f32,
 }
@@ -280,7 +279,6 @@ pub struct PassPlan<'d> {
     last_size: (u32, u32),
     last_shadow_scale: f32,
     thin_obstacles: u32,
-    row_blockers: RowBlockers,
     stats: PassStats,
 }
 
@@ -310,7 +308,6 @@ impl ShadowState {
             },
             height_mode: self.height_mode,
             any_partial: self.any_partial,
-            grid_in_mask: self.grid_in_mask,
             shadow_top: self.shadow_top,
             scene_max_top: self.scene_max_top,
             casters: [mask.caster_maps(0), mask.caster_maps(1)],
@@ -456,7 +453,6 @@ impl<'d> PassPlan<'d> {
             last_size: (0, 0),
             last_shadow_scale: 1.0,
             thin_obstacles: 0,
-            row_blockers: RowBlockers::default(),
             stats: PassStats::default(),
         })
     }
@@ -524,12 +520,6 @@ impl<'d> PassPlan<'d> {
         );
         let builds_medium = medium_map_builds(frame.medium.is_some(), stores.lights);
         let rows = frame_suits(settings, builds_medium, max_top);
-        self.row_blockers.collect(
-            rows,
-            obstacles,
-            frame.projection,
-            &OcclusionDomain::new(w, h, settings.resolutions().shadow),
-        );
         let modes = LightModes {
             height_mode: obstacles.any_finite_height(),
             normal_mode,
@@ -539,7 +529,6 @@ impl<'d> PassPlan<'d> {
             animations: stores.animations,
             masks: stores.masks,
             rows,
-            row_blockers: Some(&self.row_blockers),
         };
         collect_lights(
             stores.lights,
@@ -651,7 +640,6 @@ impl<'d> PassPlan<'d> {
                 height_mode,
                 // The crossing path must run to read a pattern (Chiaro E25).
                 any_partial: obstacles.any_partial() || self.patterns.is_active(),
-                grid_in_mask: self.row_blockers.grid_in_mask(),
                 shadow_top: if sprite || obstacles.any_infinite_enabled() {
                     INFINITE_TOP
                 } else {

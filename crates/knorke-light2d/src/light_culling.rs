@@ -39,7 +39,7 @@ use crate::light_math::{
 };
 use crate::mask::mask_atlas_blocks;
 use crate::mask_store::MaskStore;
-use crate::rows::{MAX_ROWS, RowBlockers, RowLight, RowSpace, light_suits, row_key, row_span};
+use crate::rows::{MAX_ROWS, RowLight, RowSpace, light_suits, row_key, row_span};
 use crate::settings::LightSettings;
 pub use crate::shadow::{MaskAnchor, OcclusionDomain};
 use crate::{LightStore, Projection};
@@ -79,8 +79,6 @@ pub struct LightModes<'a> {
     pub masks: Option<&'a MaskStore>,
     /// The frame draws suitable lights with light rows ([`crate::rows::frame_suits`]).
     pub rows: bool,
-    /// With `rows`: the obstacles that keep a shadow-casting lamp reaching them from the rows.
-    pub row_blockers: Option<&'a RowBlockers>,
 }
 
 impl core::fmt::Debug for LightModes<'_> {
@@ -94,7 +92,6 @@ impl core::fmt::Debug for LightModes<'_> {
             .field("animations", &self.animations.is_some())
             .field("masks", &self.masks.is_some())
             .field("rows", &self.rows)
-            .field("row_blockers", &self.row_blockers)
             .finish()
     }
 }
@@ -730,15 +727,9 @@ pub fn collect_lights(
                 mask: gpu_mask,
                 window,
             };
-            // Beyond the atlas's rows, or reaching a blocker (from the emitter's middle, as far
-            // as its support points' rows), a shadowed light stays with Chiaro's programs.
-            let blocked = || {
-                out.row_shadows + row.rows() > MAX_ROWS
-                    || modes
-                        .row_blockers
-                        .is_some_and(|b| b.meet([g.shadow[2], g.shadow[3]], row.reach))
-            };
-            if light_suits(d, row.reach) && !(d.cast_shadows && blocked()) {
+            // Beyond the atlas's rows a shadowed light stays with Chiaro's programs.
+            let blocked = d.cast_shadows && out.row_shadows + row.rows() > MAX_ROWS;
+            if light_suits(d, row.reach) && !blocked {
                 out.row_shadows += row.rows();
                 out.rows.push(row);
                 continue;

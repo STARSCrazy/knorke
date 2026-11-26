@@ -115,24 +115,35 @@ float4 Hull(float4 near, float4 far)
 // outline steps out of the mask's staircase and back in, which leaves two runs of one interval and kind within two
 // texels. The joined run lets through the product, as the two crossings do in Chiaro's trace. Used only when the
 // slots overflow, where the hull behind a split partly transparent obstacle (a low building and the facade beyond
-// it) hid the facade from all of the light. False if no two runs are such a pair.
+// it) hid the facade from all of the light. Failing such a pair, two partly transparent runs that touch become their
+// hull: cells of one tile grid with different heights (Chiaro's trace crosses them once where the ray stays inside;
+// the hull may hide a little too much over the lower one, where the last slot's hull with an opaque run behind
+// would hide everything there). False if no two runs are such a pair.
 bool Squeeze(inout float4 runs[kRuns], inout float pass[kRuns], int n)
 {
-    for (int k = 0; k + 1 < n; ++k) {
-        if (all(runs[k].zw == runs[k + 1].zw) && (pass[k] > 0.0) == (pass[k + 1] > 0.0)
-            && runs[k + 1].x <= runs[k].y + 2.0) {
-            runs[k].y = runs[k + 1].y;
-            pass[k] *= pass[k + 1];
-            for (int j = k + 1; j + 1 < n; ++j) {
-                runs[j] = runs[j + 1];
-                pass[j] = pass[j + 1];
-            }
-            runs[n - 1] = float4(0.0, 0.0, 0.0, 0.0);
-            pass[n - 1] = 0.0;
-            return true;
+    int k = -1;
+    for (int j = 0; j + 1 < n; ++j) {
+        if (all(runs[j].zw == runs[j + 1].zw) && (pass[j] > 0.0) == (pass[j + 1] > 0.0)
+            && runs[j + 1].x <= runs[j].y + 2.0) {
+            k = j;
+            break;
+        }
+        if (k < 0 && pass[j] > 0.0 && pass[j + 1] > 0.0 && runs[j + 1].x <= runs[j].y + 0.5) {
+            k = j;
         }
     }
-    return false;
+    if (k < 0) {
+        return false;
+    }
+    runs[k] = Hull(runs[k], runs[k + 1]);
+    pass[k] *= pass[k + 1];
+    for (int j = k + 1; j + 1 < n; ++j) {
+        runs[j] = runs[j + 1];
+        pass[j] = pass[j + 1];
+    }
+    runs[n - 1] = float4(0.0, 0.0, 0.0, 0.0);
+    pass[n - 1] = 0.0;
+    return true;
 }
 
 // Adds a closed run that lets `through` of the light pass to the kept ones; false once nothing behind it can matter.

@@ -50,8 +50,8 @@ pub const MAX_SUN_MAP: u32 = 8192;
 const SUN_RECEIVER_GAP: f32 = 1.0;
 
 /// Whether a directional light of [`LightList::directional`](crate::light_culling::LightList)
-/// can take its shadow from a map, in a frame [`super::frame_suits`] accepts without a tile grid
-/// with a pattern in the mask: it casts shadows from every caster (E53), does not stand overhead
+/// can take its shadow from a map, in a frame [`super::frame_suits`] accepts: it casts shadows
+/// from every caster (E53), does not stand overhead
 /// and does not shine from below the horizon. All others stay with Chiaro's programs.
 pub fn sun_suits(g: &GpuDirectional, casters: Casters) -> bool {
     let [x, y, slope, _] = g.dir_slope;
