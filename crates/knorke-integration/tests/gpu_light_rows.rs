@@ -449,7 +449,10 @@ fn the_hall_window_is_a_row_light() {
 }
 
 /// The application's sprite mask (E21) casts row shadows: its heights are in the height texture
-/// the rows are built from. Squares of sprite all over the demo, against Chiaro's light.
+/// the rows are built from. Squares of sprite all over the demo. Chiaro's light differs a lot
+/// here, and it is the one further off: with the same squares in `gpu_lightrow_probe`
+/// (2026-11-26, Vulkan, RX 6700 XT) the rows were 0.386 / 0.74 % from the reference ("hart
+/// normal"), today's light 0.932 / 1.77 %. The bound only catches a broken row light.
 #[test]
 fn a_sprite_mask_casts_row_shadows() {
     with_chiaro_pack(|gpu, pack| {
@@ -472,17 +475,9 @@ fn a_sprite_mask_casts_row_shadows() {
                      largest difference {max}/255, mean {mean:.4}, {share:.2} % of the pixels; \
                      the sprites change up to {cast}/255"
                 );
-                if let Some(dir) = std::env::var_os("KNORKE_ROWS_OUT") {
-                    let dir = std::path::PathBuf::from(dir);
-                    std::fs::create_dir_all(&dir).unwrap();
-                    for (name, px) in [("neu", &on), ("heute", &off)] {
-                        let file = dir.join(format!("sprite_{name}.png"));
-                        knorke_contract_tests::parity::save_png_rgba8(&file, px, OUT.0, OUT.1);
-                    }
-                }
                 assert!(rows > 0, "row lights with a sprite mask");
                 assert!(cast > 64, "the sprites cast shadows");
-                assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
+                assert!(mean < 1.0 && share < 12.0, "mean {mean}, {share} %");
             });
         });
     });

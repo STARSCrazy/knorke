@@ -71,8 +71,9 @@ pub const GROUND_TOLERANCE: f32 = 1e-3;
 ///
 /// Tile grids with a pattern exclude only the lamps that reach them ([`RowBlockers`]); partly
 /// transparent obstacles, the other pattern obstacles and the application's sprite mask (its
-/// heights are in the height texture, its scene rectangle is redrawn every frame) are runs of
-/// the row.
+/// heights are in the height texture) are runs of the row. The sprite mask may change anywhere
+/// every frame, so its scene rectangle counts as changed every frame and the rows of the lamps
+/// that reach it are rebuilt every frame.
 pub fn frame_suits(
     settings: &LightSettings,
     surface: bool,
