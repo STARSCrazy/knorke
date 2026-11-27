@@ -1,12 +1,13 @@
 // Light rows (ADR 0019, plan 17.13 L3): a sun's light at a surface pixel, one fullscreen draw into the targets
-// of Chiaro's light pass. The light is Chiaro's directional_surface.frag without the medium and pattern variants
+// of Chiaro's light pass. The light is Chiaro's directional_surface.frag without the pattern variants
 // (CHI_MATERIAL_EXACT: Lambert with the detail normal, the highlight to SV_Target1; CHI_MATERIAL_DIRECTION: the
 // direction sample to SV_Target1), KNORKE_FLAT Chiaro's directional.frag (no surface and no material buffer: every
-// pixel is ground, no Lambert term); only the visibility differs. The including program defines SunSight.
+// pixel is ground, no Lambert term), each with its medium variant (CHI_MEDIUM); only the visibility differs. The
+// including program defines SunSight and, with CHI_MEDIUM, the medium map's slots.
 // Origin of the light body below: chiaro @ 9bc5b9b, shaders/src/directional_surface.frag.hlsl and
 // directional.frag.hlsl. Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without
 // any express or implied warranty; the origin must not be misrepresented; altered source versions must be plainly
-// marked as such (this file is altered: the shadow from SunSight, no medium and pattern variants, one file for the
+// marked as such (this file is altered: the shadow from SunSight, no pattern variants, one file for the
 // material variants and the flat light) and this notice may not be removed or altered from any source distribution.
 // Full text: LICENSE-CHIARO-ZLIB.txt.
 #ifndef KNORKE_LIGHTROW_SUN_SURFACE_HLSLI
@@ -36,6 +37,10 @@ cbuffer SunParams : register(b1, space3)
 {
     LIGHTROW_SUN_PARAMS
 };
+
+#ifdef CHI_MEDIUM
+#include "medium_transmit.hlsli"
+#endif
 
 // Share of the sun the place `start` (mask texels) at height z sees.
 float SunSight(float2 start, float z);
@@ -79,9 +84,16 @@ LightOutput main(float2 uv : TEXCOORD0)
         return o;
     }
     float visibility = Visibility(scene, s);
+#ifdef CHI_MEDIUM
+    float3 color = Color.rgb * MediumTransmitToward(world, World.xyz, kLightMediumSamples);
+    o.light = float4(color * (lambert * visibility), 0.0);
+    o.specular = float4(SurfaceSpecularWet(color, visibility, n, World.xyz, m, ViewDir.xyz, ZAxisSpec.z * World.w, s.n,
+                                           ScreenRight.xyz, world.xy, Wet), 0.0);
+#else
     o.light = float4(Color.rgb * (lambert * visibility), 0.0);
     o.specular = float4(SurfaceSpecularWet(Color.rgb, visibility, n, World.xyz, m, ViewDir.xyz, ZAxisSpec.z * World.w, s.n,
                                            ScreenRight.xyz, world.xy, Wet), 0.0);
+#endif
     return o;
 }
 #elif defined(CHI_MATERIAL_DIRECTION)
@@ -103,7 +115,11 @@ LightOutput main(float2 uv : TEXCOORD0)
     if (lambert <= 0.0) {
         return o;
     }
+#ifdef CHI_MEDIUM
+    float3 visibility = Visibility(scene, s) * MediumTransmitToward(world, World.xyz, kLightMediumSamples);
+#else
     float visibility = Visibility(scene, s);
+#endif
     o.light = float4(Color.rgb * (lambert * visibility), 0.0);
     o.direction = DirectionSample(Color.rgb * visibility, World.xyz, lambert, World.w);
     return o;
@@ -114,7 +130,12 @@ float4 main(float2 uv : TEXCOORD0) : SV_Target0
     float2 scene = uv * SceneStep.xy;
     float3 world;
     Surface s = SurfaceAt(SurfaceTex, SurfaceSampler, scene, SceneStep, world, InvAxes, OriginZAxis);
+#ifdef CHI_MEDIUM
+    float3 ground = float3(MediumMapGround(scene), 0.0);
+    return float4(Color.rgb * Visibility(scene, s) * MediumTransmitToward(ground, World.xyz, kLightMediumSamples), 0.0);
+#else
     return float4(Color.rgb * Visibility(scene, s), 0.0);
+#endif
 }
 #else
 float4 main(float2 uv : TEXCOORD0) : SV_Target0
@@ -126,7 +147,12 @@ float4 main(float2 uv : TEXCOORD0) : SV_Target0
     if (lambert <= 0.0) {
         return float4(0.0, 0.0, 0.0, 0.0);
     }
+#ifdef CHI_MEDIUM
+    return float4(Color.rgb * lambert * Visibility(scene, s) * MediumTransmitToward(world, World.xyz, kLightMediumSamples),
+                  0.0);
+#else
     return float4(Color.rgb * (lambert * Visibility(scene, s)), 0.0);
+#endif
 }
 #endif
 

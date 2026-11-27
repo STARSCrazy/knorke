@@ -13,6 +13,14 @@
 // along the light), at that ray's height there (PatternPass): c's ray would read the pattern up to an eighth of a
 // texel aside. A soft sun reads it on each of its four texels' own rays (their spread across the light stands in for
 // the disc's) and ramps a run's ends as an interval's, both at the distance of its begin.
+// The *_medium programs (CHI_MEDIUM) multiply by the transmittance of the medium world map toward the sun as Chiaro's
+// directional_surface.frag and directional.frag; its map after every other sampler, its block after the pattern block.
+#ifdef CHI_MATERIAL_EXACT
+#define CHI_MEDIUM_MAP_SLOT 9
+#else
+#define CHI_MEDIUM_MAP_SLOT 8
+#endif
+#define CHI_MEDIUM_MAP_PARAMS_SLOT 3
 #include "lightrow_sun_surface.hlsli"
 #include "lightrow_pattern.hlsli"
 
@@ -26,8 +34,12 @@ SamplerState Run0Sampler : register(s5, space2); // nearest
 SamplerState Run1Sampler : register(s6, space2); // nearest
 Texture2D<float4> PatternAtlas : register(t7, space2); // read for pattern runs only
 SamplerState PatternAtlasSampler : register(s7, space2); // nearest
-// The storage buffers follow all samplers (the material buffer's too).
-#ifdef CHI_MATERIAL_EXACT
+// The storage buffers follow all samplers (the material buffer's and the medium map's too).
+#if defined(CHI_MATERIAL_EXACT) && defined(CHI_MEDIUM)
+StructuredBuffer<GpuPatternObstacle> PatternObstacles : register(t10, space2);
+StructuredBuffer<GpuPattern> Patterns : register(t11, space2);
+StructuredBuffer<uint> PatternData : register(t12, space2);
+#elif defined(CHI_MATERIAL_EXACT) || defined(CHI_MEDIUM)
 StructuredBuffer<GpuPatternObstacle> PatternObstacles : register(t9, space2);
 StructuredBuffer<GpuPattern> Patterns : register(t10, space2);
 StructuredBuffer<uint> PatternData : register(t11, space2);

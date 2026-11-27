@@ -519,7 +519,7 @@ impl<'d> PassPlan<'d> {
             settings.surface_height_step,
         );
         let builds_medium = medium_map_builds(frame.medium.is_some(), stores.lights);
-        let rows = frame_suits(settings, builds_medium, max_top);
+        let rows = frame_suits(settings, max_top);
         let modes = LightModes {
             height_mode: obstacles.any_finite_height(),
             normal_mode,

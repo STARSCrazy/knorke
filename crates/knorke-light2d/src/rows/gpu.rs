@@ -114,7 +114,9 @@ const fn material_program(vertex: &'static str, fragment: &'static str) -> Progr
 /// fullscreen draw (Chiaro's `fullscreen.vert`) in the same four layouts, its map build one too;
 /// an update of the map draws the build over its bands (`lightrow_sun_band.vert`); both again
 /// for a soft sun's map with its second target and for a map with partly transparent runs.
-const PROGRAMS: [ProgramDesc; 21] = [
+/// Last the light and sun programs again through the medium world map (`_medium`, Chiaro's
+/// `*_medium` light programs), in the order of [`light_program`] and [`sun_program`].
+const PROGRAMS: [ProgramDesc; 33] = [
     atlas_program("lightrow_build.frag"),
     atlas_program("lightrow_edge.frag"),
     ProgramDesc::new("lightrow.vert", "lightrow_light.frag", Blend::Additive),
@@ -156,27 +158,79 @@ const PROGRAMS: [ProgramDesc; 21] = [
     soft_build("lightrow_sun_band.vert"),
     partial_build("fullscreen.vert"),
     partial_build("lightrow_sun_band.vert"),
+    ProgramDesc::new(
+        "lightrow.vert",
+        "lightrow_light_medium.frag",
+        Blend::Additive,
+    ),
+    material_program("lightrow.vert", "lightrow_light_exact_medium.frag"),
+    material_program("lightrow.vert", "lightrow_light_direction_medium.frag"),
+    ProgramDesc::new(
+        "lightrow_mask.vert",
+        "lightrow_light_mask_medium.frag",
+        Blend::Additive,
+    ),
+    material_program(
+        "lightrow_mask.vert",
+        "lightrow_light_exact_mask_medium.frag",
+    ),
+    material_program(
+        "lightrow_mask.vert",
+        "lightrow_light_direction_mask_medium.frag",
+    ),
+    ProgramDesc::new(
+        "lightrow.vert",
+        "lightrow_light_flat_medium.frag",
+        Blend::Additive,
+    ),
+    ProgramDesc::new(
+        "lightrow_mask.vert",
+        "lightrow_light_flat_mask_medium.frag",
+        Blend::Additive,
+    ),
+    ProgramDesc::new(
+        "fullscreen.vert",
+        "lightrow_sun_light_medium.frag",
+        Blend::Additive,
+    ),
+    material_program("fullscreen.vert", "lightrow_sun_light_exact_medium.frag"),
+    material_program(
+        "fullscreen.vert",
+        "lightrow_sun_light_direction_medium.frag",
+    ),
+    ProgramDesc::new(
+        "fullscreen.vert",
+        "lightrow_sun_light_flat_medium.frag",
+        Blend::Additive,
+    ),
 ];
 
-/// `flat`: no surface and no material buffer, so no detail targets either.
-const fn light_program(detail: DetailMode, masked: bool, flat: bool) -> usize {
-    if flat {
-        return if masked { 10 } else { 9 };
-    }
-    let base = if masked { 6 } else { 2 };
-    base + match detail {
-        DetailMode::None => 0,
-        DetailMode::Exact => 1,
-        DetailMode::Direction => 2,
+/// The first `_medium` program of [`PROGRAMS`].
+const MEDIUM_PROGRAMS: usize = 21;
+
+/// `flat`: no surface and no material buffer, so no detail targets either; `medium`: through
+/// the medium world map.
+const fn light_program(detail: DetailMode, masked: bool, flat: bool, medium: bool) -> usize {
+    let k = if flat {
+        6 + masked as usize
+    } else {
+        3 * masked as usize + detail_index(detail)
+    };
+    if medium {
+        MEDIUM_PROGRAMS + k
+    } else {
+        [2, 3, 4, 6, 7, 8, 9, 10][k]
     }
 }
 
 /// The sun program of `detail` (see [`light_program`]).
-const fn sun_program(detail: DetailMode, flat: bool) -> usize {
-    if flat {
-        return 15;
-    }
-    12 + match detail {
+const fn sun_program(detail: DetailMode, flat: bool, medium: bool) -> usize {
+    let k = if flat { 3 } else { detail_index(detail) };
+    k + if medium { MEDIUM_PROGRAMS + 8 } else { 12 }
+}
+
+const fn detail_index(detail: DetailMode) -> usize {
+    match detail {
         DetailMode::None => 0,
         DetailMode::Exact => 1,
         DetailMode::Direction => 2,
@@ -267,6 +321,8 @@ pub struct RowLights<'d> {
     detail: DetailMode,
     /// The frame has neither surface nor material buffer.
     flat: bool,
+    /// The frame has a medium world map: the `_medium` programs.
+    medium: bool,
     /// The sun maps (`lightrow_sun_build.frag`).
     maps: [RenderTarget<'d>; MAX_SUNS],
     /// Their second targets, a soft sun's or a map's with partly transparent runs.
@@ -302,6 +358,7 @@ impl<'d> RowLights<'d> {
             frame: RowsRecord::default(),
             detail: DetailMode::None,
             flat: false,
+            medium: false,
             maps: core::array::from_fn(|_| RenderTarget::new(gpu)),
             reaches: core::array::from_fn(|_| RenderTarget::new(gpu)),
             partials: core::array::from_fn(|_| [RenderTarget::new(gpu), RenderTarget::new(gpu)]),
@@ -357,6 +414,7 @@ impl<'d> RowLights<'d> {
         self.frame = RowsRecord::default();
         self.detail = detail;
         self.flat = frame.surface.is_none() && frame.material.is_none();
+        self.medium = frame.medium_map.is_some();
         self.dirty.clear();
         self.cache.begin();
         self.sun_cache.begin();
@@ -394,23 +452,23 @@ impl<'d> RowLights<'d> {
             Some(p) => p,
             none => none.insert(PipelineCache::new(shaders, &PROGRAMS)?),
         };
-        let flat = self.flat;
+        let (flat, medium) = (self.flat, self.medium);
         let patterns = frame.shadows.is_some_and(|s| s.patterns.is_some());
         let programs = [
             (
                 f.masked < f.lights,
-                light_program(detail, false, flat),
+                light_program(detail, false, flat, medium),
                 LIGHT_FORMAT,
             ),
             (
                 f.masked > 0,
-                light_program(detail, true, flat),
+                light_program(detail, true, flat, medium),
                 LIGHT_FORMAT,
             ),
             (f.built > 0, BUILD, ROW_FORMAT),
             (f.edges > 0, EDGE, ROW_FORMAT),
             (f.built > 0 && patterns, PATTERN, ROW_FORMAT),
-            (f.suns > 0, sun_program(detail, flat), LIGHT_FORMAT),
+            (f.suns > 0, sun_program(detail, flat, medium), LIGHT_FORMAT),
         ];
         for (needed, program, format) in programs {
             if needed {
@@ -435,7 +493,7 @@ impl<'d> RowLights<'d> {
         if let Some(s) = frame.shadows.filter(|s| s.height_mode) {
             let mask = row_mask(s);
             let suits = SunGrid::size_of(mask.size)[1] <= MAX_SUN_MAP
-                && frame_suits(frame.settings, frame.medium_map.is_some(), s.scene_max_top);
+                && frame_suits(frame.settings, s.scene_max_top);
             let tolerance = height_tolerance(frame.settings);
             let candidates = (list.directional.iter().zip(&list.directional_casters))
                 .zip(&list.directional_rise)
@@ -926,6 +984,7 @@ impl<'d> RowLights<'d> {
             self.crossings.texture_ref().unwrap_or(stand_in),
             patterns.map_or(stand_in, |p| p.atlas),
             frame.mask_atlas.unwrap_or(stand_in),
+            stand_in, // the medium map's place (below)
         ]
         .map(|t| SamplerBinding::new(t, nearest));
         // Filtered as Chiaro's (`light_mask.hlsli`); only the `_mask` programs read it.
@@ -935,6 +994,8 @@ impl<'d> RowLights<'d> {
         if !exact {
             textures.copy_within(8.., 7);
         }
+        // The `_medium` programs read the medium map after all other samplers (nearest).
+        let medium = frame.medium_map.filter(|_| self.medium);
         let records = patterns.map_or([lamps; 3], |p| [p.obstacles, p.records, p.data]);
         let pattern_params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
         let lookup = match shadows {
@@ -947,7 +1008,11 @@ impl<'d> RowLights<'d> {
             None => RowLookupParams::default(),
         }
         .to_bytes();
-        let fragment_uniforms: [&[u8]; 3] = [surface_params, &lookup, &pattern_params];
+        let mut fragment_uniforms: [&[u8]; 4] = [surface_params, &lookup, &pattern_params, &[]];
+        if let Some(m) = &medium {
+            fragment_uniforms[3] = m.params;
+        }
+        let uniforms = 3 + usize::from(medium.is_some());
         let plain = self.frame.lights - self.frame.masked;
         for (masked, first, count) in [(false, 0, plain), (true, plain, self.frame.masked)] {
             if count == 0 {
@@ -955,9 +1020,18 @@ impl<'d> RowLights<'d> {
             }
             let vertex = Self::pass_params(frame, first, 0);
             let vertex_uniforms: [&[u8]; 1] = [&vertex];
-            let samplers = usize::from(exact) + usize::from(masked) + 10;
+            let mut samplers = usize::from(exact) + usize::from(masked) + 10;
+            // A copy: the unmasked lamps' medium map takes the masked ones' mask atlas place.
+            let mut textures = textures;
+            if let Some(m) = &medium {
+                textures[samplers] = SamplerBinding::new(m.map, nearest);
+                samplers += 1;
+            }
             pass.bind_program(
-                self.pipeline(light_program(self.detail, masked, self.flat), LIGHT_FORMAT)?,
+                self.pipeline(
+                    light_program(self.detail, masked, self.flat, self.medium),
+                    LIGHT_FORMAT,
+                )?,
                 &Bindings {
                     vertex: StageBindings {
                         storage_buffers: &[lamps],
@@ -967,7 +1041,7 @@ impl<'d> RowLights<'d> {
                     fragment: StageBindings {
                         samplers: &textures[..samplers],
                         storage_buffers: &records,
-                        uniforms: &fragment_uniforms,
+                        uniforms: &fragment_uniforms[..uniforms],
                         ..Default::default()
                     },
                 },
@@ -1005,7 +1079,7 @@ impl<'d> RowLights<'d> {
         let stand_in = frame.scene;
         let [p0, p1] = &self.partials[sun.map as usize];
         let patterns = shadows.patterns.as_ref();
-        let textures = [
+        let mut textures = [
             frame.surface.or(frame.material).unwrap_or(stand_in),
             shadows.mask,
             shadows.height.ok_or_else(|| missing("the height map"))?,
@@ -1015,27 +1089,43 @@ impl<'d> RowLights<'d> {
             p1.texture_ref().unwrap_or(map),
             patterns.map_or(map, |p| p.atlas),
             frame.material.unwrap_or(stand_in),
+            map, // the medium map's place (below)
         ]
         .map(|t| SamplerBinding::new(t, samplers.sampler(Filter::Nearest)));
-        // Only the exact program reads the material buffer.
-        let count = if self.detail == DetailMode::Exact && !self.flat {
+        // Only the exact program reads the material buffer; the `_medium` programs read the
+        // medium map after all other samplers.
+        let mut count = if self.detail == DetailMode::Exact && !self.flat {
             9
         } else {
             8
         };
+        let medium = frame.medium_map.filter(|_| self.medium);
+        if let Some(m) = &medium {
+            textures[count].texture = m.map;
+            count += 1;
+        }
         let stand_in =
             (self.band_buffer.buffer_ref()).ok_or_else(|| missing("the sun band buffer"))?;
         let records = patterns.map_or([stand_in; 3], |p| [p.obstacles, p.records, p.data]);
         let pattern_params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
         let params = sun.params.to_bytes();
+        let uniforms: [&[u8]; 4] = [
+            surface_params,
+            &params,
+            &pattern_params,
+            medium.map_or(&[], |m| m.params),
+        ];
         pass.bind_program(
-            self.pipeline(sun_program(self.detail, self.flat), LIGHT_FORMAT)?,
+            self.pipeline(
+                sun_program(self.detail, self.flat, self.medium),
+                LIGHT_FORMAT,
+            )?,
             &Bindings {
                 vertex: StageBindings::default(),
                 fragment: StageBindings {
                     samplers: &textures[..count],
                     storage_buffers: &records,
-                    uniforms: &[surface_params, &params, &pattern_params],
+                    uniforms: &uniforms[..3 + usize::from(medium.is_some())],
                     ..Default::default()
                 },
             },

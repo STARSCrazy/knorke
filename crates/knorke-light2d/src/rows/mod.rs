@@ -74,9 +74,8 @@ pub const EDGE_NEAR: f32 = 16.0;
 /// noise of a camera pan, far below the quarter texel a row resolves.
 pub const GROUND_TOLERANCE: f32 = 1e-3;
 
-/// Whether a frame can draw row lights at all. It cannot
-/// - with a medium world map (the row programs have no `*_medium` variant),
-/// - with a finite obstacle top (`max_top`, the highest) of [`MAX_TOP`] or more.
+/// Whether a frame can draw row lights at all: not with a finite obstacle top (`max_top`, the
+/// highest) of [`MAX_TOP`] or more.
 ///
 /// Partly transparent obstacles, pattern obstacles (tile grids too) and the application's sprite
 /// mask (its heights are in the height texture) are runs of the row. The sprite mask may change anywhere
@@ -84,9 +83,10 @@ pub const GROUND_TOLERANCE: f32 = 1e-3;
 /// that reach it are rebuilt every frame.
 ///
 /// A frame without surface buffer lights its pixels as ground, with the material buffer as
-/// Chiaro's surface programs, without one as Chiaro's flat programs (no Lambert term).
-pub fn frame_suits(settings: &LightSettings, medium_map: bool, max_top: f32) -> bool {
-    settings.light_rows && !medium_map && max_top < MAX_TOP
+/// Chiaro's surface programs, without one as Chiaro's flat programs (no Lambert term). With a
+/// medium world map the row programs dim the light through it as Chiaro's `*_medium` programs.
+pub fn frame_suits(settings: &LightSettings, max_top: f32) -> bool {
+    settings.light_rows && max_top < MAX_TOP
 }
 
 /// The square of `reach` around `ground` (mask texels) overlaps a rectangle of `list`, or the
@@ -636,10 +636,9 @@ mod tests {
             light_rows: false,
             ..on
         };
-        assert!(frame_suits(&on, false, 3.0));
-        assert!(!frame_suits(&off, false, 3.0));
-        assert!(!frame_suits(&on, true, 3.0), "medium map");
-        assert!(!frame_suits(&on, false, MAX_TOP), "tall obstacle");
+        assert!(frame_suits(&on, 3.0));
+        assert!(!frame_suits(&off, 3.0));
+        assert!(!frame_suits(&on, MAX_TOP), "tall obstacle");
 
         let point = LightDesc::new(LightType::Point);
         assert!(light_suits(&point, 100.0));

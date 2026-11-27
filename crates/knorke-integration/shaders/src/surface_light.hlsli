@@ -1,5 +1,6 @@
-// Origin: chiaro @ 9bc5b9b, shaders/src/surface_light.hlsli, copied unchanged below this notice for the light row
-// programs (lightrow_*, ADR 0019), so they light exactly as Chiaro's light programs do.
+// Origin: chiaro @ 9bc5b9b, shaders/src/surface_light.hlsli, copied below this notice for the light row programs
+// (lightrow_*, ADR 0019), so they light exactly as Chiaro's light programs do. Altered: the *_medium variants march
+// the medium only where the light is visible (MediumVisibility), with the same result.
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any express or
 // implied warranty; the origin must not be misrepresented; altered source versions must be plainly marked as
 // such and this notice may not be removed or altered from any source distribution. Full text:
@@ -133,6 +134,18 @@ float3 LightSpecularDirection(float3 world, float3 n, float3 v, LightParams l, f
     return d > 1e-6 ? q / d : float3(0.0, 0.0, 0.0);
 }
 
+#ifdef CHI_MEDIUM
+// The visibility times the medium's transmittance, which is only marched where the light is visible (altered for the
+// row programs: Chiaro marches it in the shadow too; its light_sdf.frag skips it there as here). The same result.
+float3 MediumVisibility(float visibility, float3 world, float3 nearest)
+{
+    if (visibility <= 0.0) {
+        return float3(0.0, 0.0, 0.0);
+    }
+    return visibility * MediumTransmit(world, nearest, kLightMediumSamples);
+}
+#endif
+
 #if defined(CHI_MATERIAL_EXACT)
 struct LightOutput
 {
@@ -175,7 +188,7 @@ LightOutput main(SurfaceLightVaryings i)
         return o;
     }
 #ifdef CHI_MEDIUM
-    float3 visibility = CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest) * MediumTransmit(world, nearest, kLightMediumSamples);
+    float3 visibility = MediumVisibility(CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest), world, nearest);
 #else
     float visibility = CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest);
 #endif
@@ -212,7 +225,7 @@ LightOutput main(SurfaceLightVaryings i)
         return o;
     }
 #ifdef CHI_MEDIUM
-    float3 visibility = CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest) * MediumTransmit(world, nearest, kLightMediumSamples);
+    float3 visibility = MediumVisibility(CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest), world, nearest);
     o.light = float4(light * visibility, 0.0);
     o.direction = DirectionSample(CHI_LIGHT_COLOR(i) * reach * visibility, toLight, lambert, i.spotCos.z);
 #else
@@ -241,7 +254,7 @@ float4 main(SurfaceLightVaryings i) : SV_Target0
         return float4(0.0, 0.0, 0.0, 0.0);
     }
 #ifdef CHI_MEDIUM
-    return float4(light * CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest) * MediumTransmit(world, nearest, kLightMediumSamples),
+    return float4(light * MediumVisibility(CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest), world, nearest),
                   0.0);
 #else
     return float4(light * CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest), 0.0);

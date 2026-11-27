@@ -16,6 +16,9 @@
 // do not count (`Clip`). The lamp keeps its size, as Chiaro's ray to the window keeps the angle of the lamp's.
 // The profile atlas after all other samplers, as in Chiaro's light_sdf_surface.frag: a lamp without a profile does
 // not read it (profile.hlsli); the mask atlas after the pattern resources.
+// The *_medium programs (CHI_MEDIUM) multiply by the transmittance of the medium world map from the receiver to the
+// lamp's nearest point as Chiaro's (surface_light.hlsli, light_sdf.frag); its map after every other sampler, its
+// block after the pattern block.
 #ifdef CHI_MATERIAL_EXACT
 #define CHI_PROFILE_SLOT 8
 #else
@@ -23,9 +26,16 @@
 #endif
 #if defined(CHI_LIGHT_MASK) && defined(CHI_MATERIAL_EXACT)
 #define CHI_MASK_SLOT 11
+#define CHI_MEDIUM_MAP_SLOT 12
 #elif defined(CHI_LIGHT_MASK)
 #define CHI_MASK_SLOT 10
+#define CHI_MEDIUM_MAP_SLOT 11
+#elif defined(CHI_MATERIAL_EXACT)
+#define CHI_MEDIUM_MAP_SLOT 11
+#else
+#define CHI_MEDIUM_MAP_SLOT 10
 #endif
+#define CHI_MEDIUM_MAP_PARAMS_SLOT 3
 #include "lightrow_surface.hlsli"
 
 Texture2D<float4> RowFirst : register(t3, space2);
@@ -41,8 +51,16 @@ SamplerState EdgeSecondSampler : register(s6, space2); // nearest
 // crossings of the pattern pass, Chiaro's pattern atlas, the records and the polygon corners (`Through`).
 #include "lightrow_pattern.hlsli"
 #define ROW_PATTERN_RESOURCES(cross, atlas, obstacles, patterns, data)                                         Texture2D<float4> RowCross : register(t##cross, space2);                                               SamplerState RowCrossSampler : register(s##cross, space2);                                             Texture2D<float4> PatternAtlas : register(t##atlas, space2);                                           SamplerState PatternAtlasSampler : register(s##atlas, space2);                                         StructuredBuffer<GpuPatternObstacle> PatternObstacles : register(t##obstacles, space2);                StructuredBuffer<GpuPattern> Patterns : register(t##patterns, space2); StructuredBuffer<uint> PatternData : register(t##data, space2);
-// The storage buffers follow all samplers, the mask atlas too.
-#if defined(CHI_LIGHT_MASK) && defined(CHI_MATERIAL_EXACT)
+// The storage buffers follow all samplers, the mask atlas and the medium map too.
+#if defined(CHI_MEDIUM) && defined(CHI_LIGHT_MASK) && defined(CHI_MATERIAL_EXACT)
+ROW_PATTERN_RESOURCES(9, 10, 13, 14, 15)
+#elif defined(CHI_MEDIUM) && defined(CHI_LIGHT_MASK)
+ROW_PATTERN_RESOURCES(8, 9, 12, 13, 14)
+#elif defined(CHI_MEDIUM) && defined(CHI_MATERIAL_EXACT)
+ROW_PATTERN_RESOURCES(9, 10, 12, 13, 14)
+#elif defined(CHI_MEDIUM)
+ROW_PATTERN_RESOURCES(8, 9, 11, 12, 13)
+#elif defined(CHI_LIGHT_MASK) && defined(CHI_MATERIAL_EXACT)
 ROW_PATTERN_RESOURCES(9, 10, 12, 13, 14)
 #elif defined(CHI_LIGHT_MASK)
 ROW_PATTERN_RESOURCES(8, 9, 11, 12, 13)

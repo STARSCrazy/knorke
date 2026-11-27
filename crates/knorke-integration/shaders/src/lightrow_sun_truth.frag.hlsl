@@ -5,7 +5,13 @@
 // texel (mask opacity o below kOpaqueOpacity) multiplies by 1 - o once per crossing at its first blocked sample, as
 // Chiaro's trace; on a pattern obstacle by what its pattern lets through where the ray enters it, at the ray's height
 // there (lightrow_pattern.hlsli). The result is the mean over the directions Rays[0..Rays[0].w) (one for a hard sun,
-// points spread over a soft sun's disc).
+// points spread over a soft sun's disc). lightrow_sun_truth_medium.frag (CHI_MEDIUM) multiplies by the transmittance
+// of the medium world map toward the sun, as the sun map's and Chiaro's programs do; its map after the other samplers,
+// its block last.
+#ifdef CHI_MEDIUM
+#define CHI_MEDIUM_MAP_SLOT 5
+#define CHI_MEDIUM_MAP_PARAMS_SLOT 3
+#endif
 #include "lightrow_sun_surface.hlsli"
 #include "lightrow_pattern.hlsli"
 
@@ -13,17 +19,21 @@ Texture2D<float4> PatternIds : register(t3, space2); // read only with pattern o
 Texture2D<float4> PatternAtlas : register(t4, space2);
 SamplerState PatternIdSampler : register(s3, space2);    // nearest
 SamplerState PatternAtlasSampler : register(s4, space2); // nearest
+#ifdef CHI_MEDIUM
+StructuredBuffer<GpuPatternObstacle> PatternObstacles : register(t6, space2);
+StructuredBuffer<GpuPattern> Patterns : register(t7, space2);
+StructuredBuffer<uint> PatternData : register(t8, space2);
+#else
 StructuredBuffer<GpuPatternObstacle> PatternObstacles : register(t5, space2);
 StructuredBuffer<GpuPattern> Patterns : register(t6, space2);
 StructuredBuffer<uint> PatternData : register(t7, space2);
+#endif
 
+// The rays, then `PatternParams` of knorke-light2d in the same block: a stage takes four blocks, and the medium
+// variant's fourth is the map's.
 cbuffer SunRays : register(b2, space3)
 {
     float4 Rays[64]; // DirSlope.xyz of each direction; Rays[0].w their count
-};
-
-cbuffer PatternParams : register(b3, space3)
-{
     float4 PatternMaskToWorldX;
     float4 PatternMaskToWorldY;
     float4 PatternAtlasSize;

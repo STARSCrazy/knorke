@@ -9,6 +9,12 @@
 // A lamp with a source radius R is Domain.w x Domain.w points: across the ray in the ground plane and upright,
 // each within +-R; the result is the mean of their marches. A line or rect light is Domain.w x Domain.w points
 // spread evenly over its emitter (a line repeats each point), the mean of their hard marches.
+// lightrow_truth_medium.frag (CHI_MEDIUM) multiplies by the transmittance of the medium world map to the lamp, as the
+// row and Chiaro's programs do (surface_light.hlsli); its map after the other samplers, its block last.
+#ifdef CHI_MEDIUM
+#define CHI_MEDIUM_MAP_SLOT 5
+#define CHI_MEDIUM_MAP_PARAMS_SLOT 3
+#endif
 #include "lightrow_surface.hlsli"
 #include "lightrow_pattern.hlsli"
 
@@ -16,9 +22,15 @@ Texture2D<float4> PatternIds : register(t3, space2); // read only with pattern o
 Texture2D<float4> PatternAtlas : register(t4, space2);
 SamplerState PatternIdSampler : register(s3, space2);    // nearest
 SamplerState PatternAtlasSampler : register(s4, space2); // nearest
+#ifdef CHI_MEDIUM
+StructuredBuffer<GpuPatternObstacle> PatternObstacles : register(t6, space2);
+StructuredBuffer<GpuPattern> Patterns : register(t7, space2);
+StructuredBuffer<uint> PatternData : register(t8, space2);
+#else
 StructuredBuffer<GpuPatternObstacle> PatternObstacles : register(t5, space2);
 StructuredBuffer<GpuPattern> Patterns : register(t6, space2);
 StructuredBuffer<uint> PatternData : register(t7, space2);
+#endif
 
 cbuffer PatternParams : register(b2, space3)
 {

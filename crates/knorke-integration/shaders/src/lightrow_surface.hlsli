@@ -34,6 +34,10 @@ cbuffer LookupParams : register(b1, space3)
     float4 WorldFromMask; // world = (dot(xy, m), dot(zw, m)) for a vector m in mask texels
 };
 
+#ifdef CHI_MEDIUM // the *_medium programs: the including program defines the map's slots
+#include "medium_transmit.hlsli"
+#endif
+
 // A point of a line or rect light's emitter at emitter coordinates ts (t along U, s along V): its ground point in
 // mask texels and its height. Chiaro's ray ends at the nearest such point (ShadowTarget in light_common.hlsli).
 #ifndef CHI_POINT_LIGHTS
@@ -79,7 +83,8 @@ float Visibility(SurfaceLightVaryings i, Surface s, float maskT)
 #ifdef KNORKE_FLAT
 // A frame without surface and material buffer: Chiaro's flat light (light_sdf.frag, light_sdf_height.frag main).
 // Every pixel is ground (SurfaceParams without a surface buffer: SurfaceAt reads no texture), and the light has no
-// Lambert term.
+// Lambert term. With CHI_MEDIUM the light is dimmed toward the lamp's nearest point (the window with a window mask)
+// where it is visible at all, as in light_sdf.frag.
 #include "light_common.hlsli"
 #include "surface.hlsli"
 
@@ -94,11 +99,18 @@ float4 main(SurfaceLightVaryings i) : SV_Target0
 #ifdef CHI_LIGHT_MASK
     float maskT;
     light *= CHI_LIGHT_MASK_TINT(i, world - i.positionRadius.xyz, maskT);
+    nearest = lerp(nearest, world, maskT);
 #endif
     if (all(light <= 0.0)) {
         return float4(0.0, 0.0, 0.0, 0.0);
     }
-    return float4(light * CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest), 0.0);
+    float visibility = CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest);
+#ifdef CHI_MEDIUM
+    if (visibility > 0.0) {
+        light *= MediumTransmit(world, nearest, kLightMediumSamples);
+    }
+#endif
+    return float4(light * visibility, 0.0);
 }
 #else
 #include "surface_light.hlsli"
