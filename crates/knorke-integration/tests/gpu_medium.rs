@@ -17,9 +17,7 @@
 //! record + submit + wait; the C++ side is `medium_stage_ref <outdir> <frames>`).
 #![cfg(feature = "gpu")]
 
-use std::path::PathBuf;
-
-use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, save_png_rgba8};
+use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, save_png_rgba8, scene_out};
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 };
@@ -398,7 +396,7 @@ fn medium_scenes_match_chiaro() {
         // context, and the occlusion heights of an earlier frame must not help.
         let fresh = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
         let mut renderer = fresh();
-        let out_dir = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
+        let out_dir = scene_out();
         let bench = std::env::var("KNORKE_SCENE_BENCH")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())

@@ -14,9 +14,9 @@
 //! each image there.
 #![cfg(feature = "gpu")]
 
-use std::path::PathBuf;
-
-use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, load_png_rgba8, save_png_rgba8};
+use knorke_contract_tests::parity::{
+    ParityBudget, compare_rgba8, load_png_rgba8, save_png_rgba8, scene_out,
+};
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 };
@@ -121,7 +121,7 @@ fn scenes() -> [Scene; 2] {
 fn ring_lights_match_chiaro() {
     with_chiaro_pack(|gpu, pack_bytes| {
         let mut renderer = Light2dRenderer::new(gpu, pack_bytes.to_vec()).unwrap();
-        let out = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
+        let out = scene_out();
         let color = sampled_rgba8(gpu, W, H, &checker());
         let target = texture(
             gpu,

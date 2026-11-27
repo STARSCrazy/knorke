@@ -15,6 +15,39 @@
 
 use std::path::{Path, PathBuf};
 
+/// The directory of `KNORKE_SCENE_OUT`, where the image tests write what they drew, if set.
+pub fn scene_out() -> Option<PathBuf> {
+    std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from)
+}
+
+/// Largest colour difference per pixel x32, red where it exceeds the STRICT tolerance.
+pub fn diff_image(a: &[u8], b: &[u8]) -> Vec<u8> {
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .flat_map(|(a, b)| {
+            let m = (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap();
+            let v = m.saturating_mul(32);
+            let g = if m > ParityBudget::STRICT.tolerance {
+                0
+            } else {
+                v
+            };
+            [v, g, g, 255]
+        })
+        .collect()
+}
+
+/// Writes `<name>.rust.png` and `<name>.diff.png` (against `reference`) of a `w` x `h` image
+/// into `dir`.
+pub fn save_with_diff(dir: &Path, name: &str, pixels: &[u8], reference: &[u8], (w, h): (u32, u32)) {
+    std::fs::create_dir_all(dir).unwrap();
+    save_png_rgba8(&dir.join(format!("{name}.rust.png")), pixels, w, h);
+    let diff = diff_image(pixels, reference);
+    save_png_rgba8(&dir.join(format!("{name}.diff.png")), &diff, w, h);
+}
+
 /// An axis-aligned pixel rectangle `x, y, w, h` excluded from a comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rect {

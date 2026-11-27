@@ -533,17 +533,17 @@ fn render_torch(
     if let Some(n) = name {
         check(n, &img);
     }
-    let view = camera::View::new(cam, W, H, opts.snap);
-    let pos = r
-        .depth()
-        .iter()
-        .enumerate()
-        .map(|(i, z)| {
-            z.is_finite()
-                .then(|| renderer::world_pos(&view, i % W, i / W, *z))
-        })
-        .collect();
-    (img, pos)
+    (img, world_positions(r, cam, opts.snap))
+}
+
+/// World position per pixel of the last frame of `r`, `None` where nothing was drawn.
+fn world_positions(r: &Renderer, cam: &Camera, snap: f32) -> Vec<Option<Vec3>> {
+    let view = camera::View::new(cam, W, H, snap);
+    let at = |(i, z): (usize, &f32)| {
+        z.is_finite()
+            .then(|| renderer::world_pos(&view, i % W, i / W, *z))
+    };
+    r.depth().iter().enumerate().map(at).collect()
 }
 
 fn lum(img: &[u8], i: usize) -> u32 {
@@ -854,17 +854,7 @@ fn sun_shadow_stable_while_gliding() {
             r.begin(&cam);
             r.draw_grid(&s.grid);
             r.end();
-            let view = camera::View::new(&cam, W, H, 0.0);
-            let pos: Vec<Option<Vec3>> = r
-                .depth()
-                .iter()
-                .enumerate()
-                .map(|(i, z)| {
-                    z.is_finite()
-                        .then(|| renderer::world_pos(&view, i % W, i / W, *z))
-                })
-                .collect();
-            (r.rgba().to_vec(), pos)
+            (r.rgba().to_vec(), world_positions(r, &cam, 0.0))
         };
         let (img, pos) = shot(true);
         let (img_no, _) = shot(false);
@@ -2644,17 +2634,7 @@ fn soft_sun_shadow_stable_while_gliding() {
             r.begin(&cam);
             r.draw_grid(&s.grid);
             r.end();
-            let view = camera::View::new(&cam, W, H, 0.0);
-            let pos: Vec<Option<Vec3>> = r
-                .depth()
-                .iter()
-                .enumerate()
-                .map(|(i, z)| {
-                    z.is_finite()
-                        .then(|| renderer::world_pos(&view, i % W, i / W, *z))
-                })
-                .collect();
-            (r.rgba().to_vec(), pos)
+            (r.rgba().to_vec(), world_positions(r, &cam, 0.0))
         };
         let (img, pos) = shot(true, true);
         let (lit, _) = shot(true, false);

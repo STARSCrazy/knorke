@@ -1,11 +1,9 @@
 //! Helpers of the Chiaro demo scene tests (`gpu_wet_street.rs`, `gpu_iso_night.rs`): layer
-//! fixtures dumped by their C++ reference programs, and diff images for `KNORKE_SCENE_OUT`.
-//! Included with `#[path]`, because `common/mod.rs` needs the `pixel` feature.
+//! fixtures dumped by their C++ reference programs. Included with `#[path]`, because
+//! `common/mod.rs` needs the `pixel` feature.
 #![allow(dead_code)]
 
-use std::path::{Path, PathBuf};
-
-use knorke_contract_tests::parity::{expected_png_rgba8, load_png_rgba8, save_png_rgba8};
+use knorke_contract_tests::parity::{expected_png_rgba8, load_png_rgba8};
 use knorke_gpu::sys::gpu::SDL_GPUBufferUsageFlags;
 use knorke_gpu::test_support::workspace_root;
 use knorke_gpu::{CommandBuffer, Gpu, UploadBuffer};
@@ -56,42 +54,4 @@ pub(crate) fn upload_layers<'d>(
     drop(copy);
     layers.mark_drawn(drawn);
     uploads
-}
-
-/// Max channel difference per pixel x32, red where it exceeds the STRICT tolerance.
-pub(crate) fn diff_image(a: &[u8], b: &[u8]) -> Vec<u8> {
-    a.as_chunks::<4>()
-        .0
-        .iter()
-        .zip(b.as_chunks::<4>().0)
-        .flat_map(|(a, b)| {
-            let m = (0..4).map(|i| a[i].abs_diff(b[i])).max().unwrap();
-            let v = m.saturating_mul(32);
-            let g = if m > 2 { 0 } else { v };
-            [v, g, g, 255]
-        })
-        .collect()
-}
-
-/// The directory of `KNORKE_SCENE_OUT`, if set.
-pub(crate) fn scene_out() -> Option<PathBuf> {
-    std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from)
-}
-
-/// Writes `<name>.rust.png` and `<name>.diff.png` (against `reference`) of a `w` x `h` image.
-pub(crate) fn save_with_diff(
-    dir: &Path,
-    name: &str,
-    pixels: &[u8],
-    reference: &[u8],
-    (w, h): (u32, u32),
-) {
-    std::fs::create_dir_all(dir).unwrap();
-    save_png_rgba8(&dir.join(format!("{name}.rust.png")), pixels, w, h);
-    save_png_rgba8(
-        &dir.join(format!("{name}.diff.png")),
-        &diff_image(pixels, reference),
-        w,
-        h,
-    );
 }

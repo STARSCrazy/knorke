@@ -19,7 +19,7 @@
 #[path = "common/gpu.rs"]
 mod scene_common;
 
-use knorke_contract_tests::parity::{ParityBudget, compare_rgba8};
+use knorke_contract_tests::parity::{self, ParityBudget, compare_rgba8};
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 };
@@ -231,15 +231,9 @@ fn wet_street_matches_chiaro() {
         let strict =
             compare_rgba8(&pixels, &golden, OUT.0, OUT.1, &[], &ParityBudget::STRICT).unwrap();
         strict.print("wet_street", "STRICT");
-        if let Some(dir) = scene_common::scene_out() {
-            scene_common::save_with_diff(&dir, "wet_street", &pixels, &golden, OUT);
-            scene_common::save_with_diff(
-                &dir,
-                "wet_street.surface",
-                &surface,
-                &surface_ref,
-                (W, H),
-            );
+        if let Some(dir) = parity::scene_out() {
+            parity::save_with_diff(&dir, "wet_street", &pixels, &golden, OUT);
+            parity::save_with_diff(&dir, "wet_street.surface", &surface, &surface_ref, (W, H));
         }
         assert!(
             surface == surface_ref,

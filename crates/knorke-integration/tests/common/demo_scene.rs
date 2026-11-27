@@ -32,7 +32,7 @@
 //!   intensity: Chiaro's `CHI_ExplosionShockwave` of these arguments.
 #![allow(dead_code)]
 
-use knorke_contract_tests::parity::{ParityBudget, Rect, compare_rgba8};
+use knorke_contract_tests::parity::{self, ParityBudget, Rect, compare_rgba8};
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 };
@@ -560,9 +560,9 @@ impl Demo<'_> {
             "{} {layer:?} layer vs {name}: {n} differing bytes (max {max})",
             self.golden
         );
-        if let Some(dir) = scene_common::scene_out() {
+        if let Some(dir) = parity::scene_out() {
             let file = format!("{}.{layer:?}", self.golden);
-            scene_common::save_with_diff(&dir, &file, &got, &want, (W, H));
+            parity::save_with_diff(&dir, &file, &got, &want, (W, H));
         }
         (n > 0).then(|| format!("{layer:?} layer vs {name}: {n} differing bytes, max {max}"))
     }
@@ -718,8 +718,8 @@ impl Demo<'_> {
         )
         .unwrap();
         strict.print(self.golden, "STRICT");
-        if let Some(dir) = scene_common::scene_out() {
-            scene_common::save_with_diff(&dir, self.golden, &pixels, &golden, OUT);
+        if let Some(dir) = parity::scene_out() {
+            parity::save_with_diff(&dir, self.golden, &pixels, &golden, OUT);
         }
         assert!(
             parity.is_empty(),

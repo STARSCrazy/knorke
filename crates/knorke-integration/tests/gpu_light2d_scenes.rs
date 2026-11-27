@@ -18,11 +18,10 @@
 //! wait, as `gate_ref.c` does with `CHI_Render`).
 #![cfg(feature = "gpu")]
 
-use std::path::PathBuf;
 use std::time::Instant;
 
 use knorke_contract_tests::parity::{
-    ParityBudget, compare_rgba8, expected_png_rgba8, save_png_rgba8,
+    ParityBudget, compare_rgba8, expected_png_rgba8, save_with_diff, scene_out,
 };
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
@@ -186,7 +185,7 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
         let bench = std::env::var("KNORKE_SCENE_BENCH")
             .ok()
             .and_then(|s| s.parse::<u32>().ok());
-        let out = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
+        let out = scene_out();
         let mut failures = Vec::new();
 
         for scene in [minimal_normal_map(), gate_sprite_shadow()] {
@@ -267,22 +266,7 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
                 failures.push(format!("{}: {strict:?}", scene.name));
             }
             if let Some(dir) = &out {
-                std::fs::create_dir_all(dir).unwrap();
-                save_png_rgba8(&dir.join(format!("{}.rust.png", scene.name)), &pixels, w, h);
-                // Diff x32, red where it exceeds the STRICT tolerance.
-                let diff: Vec<u8> = pixels
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .zip(reference.as_chunks::<4>().0)
-                    .flat_map(|(a, b)| {
-                        let m = (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap();
-                        let v = m.saturating_mul(32);
-                        let g = if m > 2 { 0 } else { v };
-                        [v, g, g, 255]
-                    })
-                    .collect();
-                save_png_rgba8(&dir.join(format!("{}.diff.png", scene.name)), &diff, w, h);
+                save_with_diff(dir, scene.name, &pixels, &reference, (w, h));
             }
             // Host-side wall clock for the benchmark only; the renderers read no clock.
             #[allow(clippy::disallowed_methods)]
