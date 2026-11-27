@@ -9,12 +9,7 @@
 //! copy of a camera pan.
 
 use crate::shadow::DirtyRectList;
-
-fn put_f32(out: &mut [u8], at: usize, values: &[f32]) {
-    for (i, v) in values.iter().enumerate() {
-        out[at + 4 * i..at + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
-    }
-}
+use knorke_math::uniform::write_f32s;
 
 /// `cbuffer RectParams` of `rect.vert`: up to [`DirtyRectList::MAX_DIRTY_RECTS`] half-open texel
 /// rectangles, one quad instance each, in a target of the given size. Kept and rewritten in
@@ -45,9 +40,8 @@ impl RectParams {
             }
         }
         let size_at = DirtyRectList::MAX_DIRTY_RECTS * 16;
-        put_f32(
-            &mut self.bytes,
-            size_at,
+        write_f32s(
+            &mut self.bytes[size_at..],
             &[width as f32, height as f32, 0.0, 0.0],
         );
         list.len() as u32

@@ -23,7 +23,7 @@ use knorke_light2d::lighting::{
 use knorke_light2d::mask::{MaskPreset, MaskShape, build_pixel_mask};
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::occluder_raster::{
-    INFINITE_TOP, NoPatterns, OCCLUDER_PROGRAMS, OccluderGeometry, OccluderPrograms, TileOccluders,
+    NoPatterns, OCCLUDER_PROGRAMS, OccluderGeometry, OccluderPrograms, TileOccluders,
     thin_circle_radius,
 };
 use knorke_light2d::occlusion::{MaskPrograms, OcclusionMask};
@@ -429,24 +429,13 @@ impl<'d> Host<'d> {
                 .unwrap();
             self.occlusion.commit();
         }
-        let scene_max_top = if height_mode {
-            s.obstacles.max_finite_top()
-        } else {
-            0.0
-        };
         let maps = shadows.then(|| ShadowMaps {
             domain: input.domain,
             remainder: input.anchor.remainder,
             mask: self.occlusion.mask().unwrap(),
             height: self.occlusion.height(),
-            height_mode,
             any_partial: s.obstacles.any_partial(),
-            shadow_top: if s.obstacles.any_infinite_enabled() {
-                INFINITE_TOP
-            } else {
-                scene_max_top
-            },
-            scene_max_top,
+            scene_max_top: s.obstacles.max_finite_top(),
             casters: [None, None],
             patterns: None,
             snapped: input.anchor.snapped,

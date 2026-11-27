@@ -443,8 +443,8 @@ impl<'d> RowLights<'d> {
         // the frame's pattern obstacles change anywhere; and a row built without them has none.
         // A sun's map rebuilds only if an obstacle it may name moved to another index: the texels
         // that named one which left are rebuilt with the mask change that took it out.
-        let shadows = frame.shadows.filter(|s| s.height_mode);
-        let members = shadows
+        let members = frame
+            .shadows
             .and_then(|s| s.patterns.as_ref())
             .map_or(&[][..], |p| p.members);
         if !members
@@ -523,7 +523,7 @@ impl<'d> RowLights<'d> {
     fn prepare_suns(&mut self, frame: &LightingFrame<'_>) -> Result<u32, Diagnostic> {
         let list = frame.lights;
         let mut n = 0;
-        if let Some(s) = frame.shadows.filter(|s| s.height_mode) {
+        if let Some(s) = frame.shadows {
             let mask = row_mask(s);
             let tolerance = height_tolerance(frame.settings);
             let candidates = (list.directional.iter().zip(&list.directional_casters))
@@ -625,8 +625,7 @@ impl<'d> RowLights<'d> {
             self.frame.sun_texels += texels;
         }
         if self.frame.suns_updated > 0 {
-            let bytes = n * MAX_SUN_BANDS * SUN_BAND_SIZE;
-            self.band_buffer.reserve(bytes as u64)?;
+            // Reserved above (an updated map means n > 0).
             let mut mapped = self.band_buffer.map()?;
             let out = mapped.bytes();
             for (k, bands) in self.bands[..n].iter().enumerate() {
@@ -649,7 +648,7 @@ impl<'d> RowLights<'d> {
         }
         // Without the occlusion stage nothing casts a shadow this frame. (Not `height`: the
         // stage creates its textures when it records its first frame.)
-        let shadows = frame.shadows.filter(|s| s.height_mode);
+        let shadows = frame.shadows;
         if let Some(code) = shadows.map(|s| height_code(s.scene_max_top))
             && code != self.heights
         {
@@ -1023,7 +1022,7 @@ impl<'d> RowLights<'d> {
         // profile before the profile atlas, a frame without pattern obstacles has all-zero
         // pattern params and reads no crossing); the lamp buffer stands in for the records.
         let stand_in = frame.scene;
-        let shadows = frame.shadows.filter(|s| s.height_mode);
+        let shadows = frame.shadows;
         let patterns = shadows.and_then(|s| s.patterns.as_ref());
         let lamps = self
             .lamps

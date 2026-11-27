@@ -66,6 +66,21 @@ impl ProjectionError {
 }
 
 impl Projection {
+    /// `x_axis.x * y_axis.y - x_axis.y * y_axis.x` and the rows of the inverse of
+    /// `[x_axis y_axis]`, in double as in Chiaro (one inverse for every block that maps scene
+    /// pixels back to the ground, so their world points agree).
+    pub(crate) fn inverse_axes(&self) -> (f64, [f32; 4]) {
+        let (x, y) = (self.x_axis, self.y_axis);
+        let det = f64::from(x.x) * f64::from(y.y) - f64::from(x.y) * f64::from(y.x);
+        let inv = [
+            (f64::from(y.y) / det) as f32,
+            (-f64::from(y.x) / det) as f32,
+            (-f64::from(x.y) / det) as f32,
+            (f64::from(x.x) / det) as f32,
+        ];
+        (det, inv)
+    }
+
     /// One world unit per scene pixel, height without effect.
     pub const IDENTITY: Self = Self {
         origin: At::new(Vec2::ZERO),

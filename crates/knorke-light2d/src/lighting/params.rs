@@ -139,19 +139,12 @@ impl SurfaceParams {
         domain: &ShadowDomain,
         surface_buffer: bool,
     ) -> Self {
-        let det = f64::from(p.x_axis.x) * f64::from(p.y_axis.y)
-            - f64::from(p.x_axis.y) * f64::from(p.y_axis.x);
         let o = p.origin.raw();
         let v = view_direction(p);
         let r = screen_right(p);
         let wet = settings.material.wet_mapping();
         Self {
-            inv_axes: [
-                (f64::from(p.y_axis.y) / det) as f32,
-                (-f64::from(p.y_axis.x) / det) as f32,
-                (-f64::from(p.x_axis.y) / det) as f32,
-                (f64::from(p.x_axis.x) / det) as f32,
-            ],
+            inv_axes: p.inverse_axes().1,
             origin_z_axis: [o.x, o.y, p.z_axis.x, p.z_axis.y],
             scene_step: [
                 scene_w as f32,
@@ -191,10 +184,6 @@ impl SurfaceParams {
 pub struct ShadowDomain {
     /// Band width in scene pixels.
     pub margin: u32,
-    /// Mask width in texels.
-    pub width: u32,
-    /// Mask height in texels.
-    pub height: u32,
     /// Mask texels per scene pixel.
     pub texels_per_scene: [f32; 2],
     /// Mask anchor remainder.
@@ -206,8 +195,6 @@ impl ShadowDomain {
     pub fn new(d: &OcclusionDomain, remainder: [f32; 2]) -> Self {
         Self {
             margin: d.margin,
-            width: d.width,
-            height: d.height,
             texels_per_scene: d.texels_per_scene,
             remainder,
         }

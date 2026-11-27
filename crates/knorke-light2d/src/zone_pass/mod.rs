@@ -24,8 +24,8 @@
 //!   (store and the frame's [`AmbientZoneList`]) given to
 //!   [`LightingStage::prepare_with_zones`](crate::lighting::LightingStage::prepare_with_zones)
 //!   instead of fields of a frame struct; `prepare` without zones is unchanged.
-//! - The medium stage (P29) does not exist yet: the pure ambient copy is made in direction
-//!   mode with a light pass only.
+//! - The pure ambient copy is made in direction mode with a light pass, and whenever the
+//!   medium stage runs (Chiaro's dual path).
 //! - Writing the zone records and the vertex texels is a plain function over a byte slice
 //!   ([`write_zones`], [`fill_zone_vertices`]).
 
@@ -157,16 +157,9 @@ impl ZoneFragParams {
         surface_buffer: bool,
         vertex_rows: u32,
     ) -> Self {
-        let det = f64::from(p.x_axis.x) * f64::from(p.y_axis.y)
-            - f64::from(p.x_axis.y) * f64::from(p.y_axis.x);
         let o = p.origin.raw();
         Self {
-            inv_axes: [
-                (f64::from(p.y_axis.y) / det) as f32,
-                (-f64::from(p.y_axis.x) / det) as f32,
-                (-f64::from(p.x_axis.y) / det) as f32,
-                (f64::from(p.x_axis.x) / det) as f32,
-            ],
+            inv_axes: p.inverse_axes().1,
             origin_z_axis: [o.x, o.y, p.z_axis.x, p.z_axis.y],
             scene_step: [
                 scene_w as f32,

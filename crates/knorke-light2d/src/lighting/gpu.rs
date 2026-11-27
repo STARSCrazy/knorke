@@ -85,15 +85,11 @@ pub struct ShadowMaps<'a> {
     pub remainder: [f32; 2],
     /// Occlusion mask of all casters.
     pub mask: TextureRef<'a>,
-    /// Its heights; `Some` in height mode.
+    /// Its heights (the rows are built from them).
     pub height: Option<TextureRef<'a>>,
-    /// The mask has heights (an obstacle with a finite height, or normal mode).
-    pub height_mode: bool,
     /// An active obstacle is partly transparent (E25).
     pub any_partial: bool,
-    /// Above it no obstacle blocks a point/spot ray (`INFINITE_TOP` if one is infinitely tall).
-    pub shadow_top: f32,
-    /// Highest finite obstacle top; 0 unless height mode.
+    /// Highest finite obstacle top.
     pub scene_max_top: f32,
     /// The maps of the caster classes `[Static, Dynamic]` (E53), where built.
     pub casters: [Option<CasterMaps<'a>>; 2],

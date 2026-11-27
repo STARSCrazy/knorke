@@ -248,14 +248,7 @@ impl CompositeParams {
                 i.scene_size.0 as f32,
                 i.scene_size.1 as f32,
             ];
-            let det = f64::from(pr.x_axis.x) * f64::from(pr.y_axis.y)
-                - f64::from(pr.x_axis.y) * f64::from(pr.y_axis.x);
-            p.inv_axes = [
-                (f64::from(pr.y_axis.y) / det) as f32,
-                (-f64::from(pr.y_axis.x) / det) as f32,
-                (-f64::from(pr.x_axis.y) / det) as f32,
-                (f64::from(pr.x_axis.x) / det) as f32,
-            ];
+            p.inv_axes = pr.inverse_axes().1;
             p.origin_step = [o.x, o.y, settings.surface_height_step, 0.0];
             let wet = settings.material.wet_mapping();
             p.wet = [

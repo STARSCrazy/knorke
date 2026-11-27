@@ -151,20 +151,6 @@ pub fn medium_buffer_size(size: u32, resolution: f32) -> u32 {
     if scaled < 1.0 { 1 } else { scaled as u32 }
 }
 
-/// `[x_axis.x * y_axis.y - x_axis.y * y_axis.x]` and the rows of the inverse of
-/// `[x_axis y_axis]`, in double as in Chiaro.
-fn inverse_axes(p: &Projection) -> (f64, [f32; 4]) {
-    let (x, y) = (p.x_axis, p.y_axis);
-    let det = f64::from(x.x) * f64::from(y.y) - f64::from(x.y) * f64::from(y.x);
-    let inv = [
-        (f64::from(y.y) / det) as f32,
-        (-f64::from(y.x) / det) as f32,
-        (-f64::from(x.y) / det) as f32,
-        (f64::from(x.x) / det) as f32,
-    ];
-    (det, inv)
-}
-
 /// The medium programs' block of a frame (Chiaro `FillMediumParams`): projection, scene and
 /// scatter buffer size (the quality's medium resolution), steps, haze, ambient, media table and
 /// sample counts. `surface`, `layer`: the frame has a surface buffer, a medium layer.
@@ -178,7 +164,7 @@ pub fn medium_params(
 ) -> MediumParams {
     let haze = &settings.haze;
     let quality = settings.quality.quality.medium_cost();
-    let (det, inv_axes) = inverse_axes(p);
+    let (det, inv_axes) = p.inverse_axes();
     let w = view_direction(p);
     let origin = p.origin.raw();
     let a = settings.ambient;
@@ -285,7 +271,7 @@ impl MediumMapLayout {
         let (bx, by) = (cell / tps[0], cell / tps[1]);
         let block_pixels = if bx > by { bx } else { by } / f64::from(BLOCKS_PER_CELL);
         let block_taps = ((block_pixels - 1e-6).ceil() as u32).clamp(1, MAX_BLOCK_TAPS);
-        let (_, inv_axes) = inverse_axes(p);
+        let (_, inv_axes) = p.inverse_axes();
         let params = MediumMapParams {
             map_x: rows[0],
             map_y: rows[1],

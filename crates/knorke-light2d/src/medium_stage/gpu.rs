@@ -85,15 +85,9 @@ pub const MEDIUM_PROGRAMS: [ProgramDesc; 6] = {
     out
 };
 
+/// Index in [`MEDIUM_PROGRAMS`]: the declaration order, which [`MediumProgram::ALL`] keeps.
 const fn index(program: MediumProgram) -> usize {
-    match program {
-        MediumProgram::Base => 0,
-        MediumProgram::BaseZones => 1,
-        MediumProgram::Light => 2,
-        MediumProgram::LightMask => 3,
-        MediumProgram::Directional => 4,
-        MediumProgram::Filter => 5,
-    }
+    program as usize
 }
 
 /// Initial light buffer capacity in lights.
@@ -467,11 +461,9 @@ impl<'d> MediumStage<'d> {
             domain: s.domain,
             scene_max_top: s.scene_max_top,
         });
-        // `height_mode`, not `height`: at prepare the maps hold the last committed frame, and
-        // this frame's heights exist only from its record on (the first frame had none).
-        let shafts = f.settings.haze.shafts
-            && f.shadows
-                .is_some_and(|s| s.height_mode && s.scene_max_top > 0.0);
+        // Not `height`: at prepare the maps hold the last committed frame, and this frame's
+        // heights exist only from its record on (the first frame had none).
+        let shafts = f.settings.haze.shafts && f.shadows.is_some_and(|s| s.scene_max_top > 0.0);
         let has_heights = |sun: &MediumSun| {
             let class = sun.casters.filter_index().is_none_or(|i| {
                 f.shadows
