@@ -1,8 +1,9 @@
 //! Shadow caster filter per light (E53) through the pass plan: port of Chiaro's
 //! `tests/gpu/ShadowFilterTests.cpp` (chiaro @ 9bc5b9b). A dynamic-only light is shadowed by the
 //! dynamic disc but not by the static wall, a static-only one the other way round; the caster
-//! class masks and fields exist only while a visible light uses a filter, and without one the
-//! frame is bit-identical. (The flag validation case of the C++ test has no counterpart: the
+//! class masks exist only while a visible light uses a filter, and without one the frame is
+//! bit-identical. Filtered lights and suns are row lights and sun maps (L7): they read the class
+//! masks, no class field is built. (The flag validation case of the C++ test has no counterpart: the
 //! filter is one enum, both flags at once cannot be expressed.)
 //!
 //! Needs a Vulkan device and the shader pack of `cargo xtask shaders`; skips without them (a
@@ -15,7 +16,7 @@ use knorke_gpu::test_support::{
 use knorke_gpu::{CommandBuffer, Gpu, Texture};
 use knorke_light2d::codec::surface_pixel;
 use knorke_light2d::light::{LightDesc, LightId, LightType, ShadowFilter};
-use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
+use knorke_light2d::obstacle::{ObstacleCommon, ObstacleId, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassFrame, PassPlan, PassRecord, SceneStores};
 use knorke_light2d::settings::LightSettings;
 use knorke_light2d::{LightStore, NoResources, ObstacleStore, Projection};
@@ -33,6 +34,7 @@ struct Fx<'d> {
     normals: bool,
     lights: LightStore,
     obstacles: ObstacleStore,
+    disc: ObstacleId,
     projection: Projection,
     settings: LightSettings,
 }
@@ -59,7 +61,7 @@ impl<'d> Fx<'d> {
                 },
             })
             .unwrap();
-        obstacles
+        let disc = obstacles
             .create_shape(&ShapeDesc {
                 common: ObstacleCommon {
                     position: At::new(Vec2::new(21.0, 24.0)),
@@ -70,6 +72,7 @@ impl<'d> Fx<'d> {
             })
             .unwrap();
         Self {
+            disc,
             gpu,
             plan: PassPlan::new(gpu, pack.to_vec()).unwrap(),
             scene: sampled_rgba8(gpu, W, H, &vec![255u8; BYTES]),
@@ -149,8 +152,9 @@ fn dynamic_only_shadows_the_disc_but_not_the_wall_static_only_the_reverse() {
                     let (record, img) = fx.render();
                     let y = row as u32;
                     let (behind, open) = (red(&img, 30, y), red(&img, 12, y));
-                    let fields = 1 + record.mask.caster_fields;
-                    assert_eq!(fields, if filter == ShadowFilter::All { 1 } else { 2 });
+                    let masks = record.mask.caster_masks;
+                    assert_eq!(masks, u32::from(filter != ShadowFilter::All));
+                    assert_eq!(record.mask.caster_fields, 0);
                     eprintln!("{normals} {filter:?} row {row}: behind {behind}, open {open}");
                     behind < open / SHADOWED
                 };
@@ -171,13 +175,16 @@ fn dynamic_only_shadows_the_disc_but_not_the_wall_static_only_the_reverse() {
 }
 
 #[test]
-fn both_filters_in_one_frame_use_three_fields_and_a_directional_light_filters_too() {
+fn both_filters_in_one_frame_use_both_class_masks_and_a_directional_light_filters_too() {
     with_chiaro_pack(|gpu, pack| {
         let mut fx = Fx::new(gpu, pack, 0.0);
         fx.light(Some(ShadowFilter::DynamicOnly), 8.0);
         fx.light(Some(ShadowFilter::StaticOnly), 24.0);
         let (record, img) = fx.render();
-        assert_eq!(record.mask.caster_fields, 2);
+        assert_eq!(
+            (record.mask.caster_masks, record.mask.caster_fields),
+            (2, 0)
+        );
         // The wall casts nothing for the dynamic-only light, the disc nothing for the static one.
         assert!(red(&img, 30, 8) > red(&img, 12, 8) / 3.0);
         assert!(red(&img, 30, 24) > red(&img, 12, 24) / 3.0);
@@ -192,15 +199,50 @@ fn both_filters_in_one_frame_use_three_fields_and_a_directional_light_filters_to
         d.shadow_filter = ShadowFilter::DynamicOnly;
         sun.lights.create(&d, &NoResources).unwrap();
         let (record, lit) = sun.render();
-        assert_eq!(record.mask.caster_fields, 1);
+        assert_eq!(
+            (record.mask.caster_masks, record.mask.caster_fields),
+            (1, 0)
+        );
         let (wall, disc, open) = (red(&lit, 30, 8), red(&lit, 30, 24), red(&lit, 12, 4));
         assert!(wall == open, "behind wall {wall}, open {open}");
         assert!(disc < open / SHADOWED, "behind disc {disc}, open {open}");
     });
 }
 
+/// A static-only light (row light, sun map) draws what an unfiltered one draws without the
+/// dynamic disc, bit for bit: the class mask and heights are the static obstacles' alone.
 #[test]
-fn caster_fields_count_up_and_back_to_none_in_one_plan() {
+fn a_static_only_light_equals_an_unfiltered_one_without_the_dynamic_disc() {
+    with_chiaro_pack(|gpu, pack| {
+        for sun in [false, true] {
+            let mut images = Vec::new();
+            for (filter, disc) in [(ShadowFilter::StaticOnly, true), (ShadowFilter::All, false)] {
+                let mut fx = Fx::new(gpu, pack, 10.0);
+                fx.normals = true;
+                if !disc {
+                    fx.obstacles.destroy(fx.disc).unwrap();
+                }
+                if sun {
+                    let mut d = LightDesc::new(LightType::Directional);
+                    d.direction = Vec3::new(0.939_692_6, 0.0, -0.342_020_14);
+                    d.intensity = 1.0;
+                    d.cast_shadows = true;
+                    d.shadow_filter = filter;
+                    fx.lights.create(&d, &NoResources).unwrap();
+                } else {
+                    fx.light(Some(filter), 16.0);
+                }
+                let (record, img) = fx.render();
+                assert_eq!(record.mask.field_texels, 0, "sun {sun}: rows and maps only");
+                images.push(img);
+            }
+            assert!(images[0] == images[1], "sun {sun}: the image differs");
+        }
+    });
+}
+
+#[test]
+fn caster_masks_count_up_and_back_to_none_in_one_plan() {
     with_chiaro_pack(|gpu, pack| {
         let mut fx = Fx::new(gpu, pack, 0.0);
         fx.light(None, 4.0);
@@ -209,10 +251,9 @@ fn caster_fields_count_up_and_back_to_none_in_one_plan() {
         for (n, filter) in FILTERS.into_iter().enumerate() {
             ids.push(fx.light(Some(filter), [8.0, 24.0, 28.0][n]));
             let (record, _) = fx.render();
-            // The unfiltered light is a row light: it reads no field. Filtered ones draw their
-            // caster fields.
-            assert_eq!(record.mask.field_texels > 0, n > 0, "{filter:?}");
-            assert_eq!(record.mask.caster_fields, n as u32);
+            // Row lights all: no field; the filtered ones draw their class masks.
+            assert_eq!(record.mask.field_texels, 0, "{filter:?}");
+            assert_eq!(record.mask.caster_masks, n as u32);
         }
         // The same frame again creates nothing.
         fx.render();
@@ -249,6 +290,6 @@ fn without_a_visible_filtered_light_the_frame_is_bit_identical_with_the_same_dra
         assert_eq!(out[0].0.mask, out[1].0.mask);
         assert_eq!(out[0].0.lighting, out[1].0.lighting);
         assert_eq!(out[0].2, out[1].2);
-        assert_eq!(out[1].0.mask.caster_fields, 0);
+        assert_eq!(out[1].0.mask.caster_masks, 0);
     });
 }

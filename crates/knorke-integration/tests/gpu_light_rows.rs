@@ -230,7 +230,8 @@ fn row_lights_equal_chiaro_lights_without_obstacles() {
 /// `plain.txt`'s moon, 1 degree): the same Lambert term, highlight, wet ground and direction
 /// sample into the same targets, in all three material modes and without surface and material
 /// buffer, to the bit. The demo's moon alone; one finite box far outside the picture keeps the
-/// frame's shadows (and so the moon's) on. Through the clouds of `t5` too.
+/// frame's shadows (and so the moon's) on. Through the clouds of `t5` too. So is a sun without
+/// shadow or straight overhead, which the sun programs draw without a map.
 #[test]
 fn a_sun_equals_chiaros_sun_without_obstacles() {
     with_chiaro_pack(|gpu, pack| {
@@ -241,98 +242,115 @@ fn a_sun_equals_chiaros_sun_without_obstacles() {
                     ..demo
                 };
                 demo.with_frames(gpu, pack, &with_rows, &mut |f| {
-                let ids: Vec<_> = f.scene.obstacles.iter().map(|(id, _)| id).collect();
-                for id in ids {
-                    f.scene.obstacles.destroy(id).unwrap();
-                }
-                let mut far = ShapeDesc::rect(1.0, 1.0);
-                far.common.height = 2.0;
-                far.common.position = At::new(Vec2::new(-500.0, -500.0));
-                f.scene.obstacles.create_shape(&far).unwrap();
-                for &id in &f.scene.light_ids {
-                    let sun =
-                        (f.scene.lights.get(id)).is_ok_and(|d| d.kind == LightType::Directional);
-                    if !sun && f.scene.lights.get(id).is_ok() {
-                        f.scene.lights.destroy(id).unwrap();
+                    let ids: Vec<_> = f.scene.obstacles.iter().map(|(id, _)| id).collect();
+                    for id in ids {
+                        f.scene.obstacles.destroy(id).unwrap();
                     }
-                }
-                // The car lights would be row lights, drawn after the moon.
-                f.scene.lights.clear_frame_lights();
-                let material: Vec<u8> = (0..W * H)
-                    .flat_map(|i| {
-                        let (x, y) = (i % W, i / W);
-                        [
-                            98 + ((x * 7 + y * 3) % 61) as u8,
-                            98 + ((x * 5 + y * 11) % 61) as u8,
-                            ((x * 13 + y * 7) % 256) as u8,
-                            ((x + 3 * y) % 256) as u8,
-                        ]
-                    })
-                    .collect();
-                let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
-                let fills = [(Layer::Material, &material[..])];
-                let uploads = scene_common::upload_layers(gpu, &mut cmd, f.layers, &fills);
-                cmd.submit_and_wait().unwrap();
-                drop(uploads);
-                f.settings.light.material.wetness = 0.6;
-                let modes = [
-                    ("exact", 1.0, LayerSet::NONE),
-                    ("direction", 0.5, LayerSet::NONE),
-                    ("none", 1.0, LayerSet::of(Layer::Material)),
-                    (
-                        "flat",
-                        1.0,
-                        LayerSet::of(Layer::Material).with(Layer::Surface),
-                    ),
-                ];
-                let moon = (f.scene.light_ids.iter().copied())
-                    .find(|&id| f.scene.lights.get(id).is_ok())
-                    .unwrap();
-                for (radius, (mode, light, skip)) in
-                    [0.0, 1.0].into_iter().flat_map(|r| modes.map(|m| (r, m)))
-                {
-                    let mut desc = f.scene.lights.get(moon).unwrap().clone();
-                    desc.source_radius = radius;
-                    f.scene.lights.update(moon, &desc, &NoResources).unwrap();
-                    f.settings.light.quality.quality = Quality::Custom(Resolutions {
-                        light,
-                        shadow: 0.5,
-                        medium: 0.5,
-                    });
-                    f.skip = skip;
-                    f.settings.light.light_rows = false;
-                    let (off, without) = f.frame();
-                    f.settings.light.light_rows = true;
-                    let (on, with) = f.frame();
-                    let (max, mean, share) = diff(&on, &off);
-                    eprintln!(
-                        "{variant}, the moon alone, radius {radius}, material mode {mode}: {} sun \
-                         maps; largest difference {max}/255, mean {mean:.5}, {share:.3} % of the \
-                         pixels",
-                        with.lighting.row_suns
-                    );
-                    let medium = f.renderer.plan().medium_map().view().is_some();
-                    assert_eq!(medium, variant == "t5", "the medium world map");
-                    assert_eq!(without.lighting.row_suns, 0, "{mode}: rows off");
-                    assert_eq!(with.lighting.row_suns, 1, "{mode}: the moon has a map");
-                    assert_eq!(max, 0, "{variant}, radius {radius}, {mode}");
-                }
-            });
+                    let mut far = ShapeDesc::rect(1.0, 1.0);
+                    far.common.height = 2.0;
+                    far.common.position = At::new(Vec2::new(-500.0, -500.0));
+                    f.scene.obstacles.create_shape(&far).unwrap();
+                    for &id in &f.scene.light_ids {
+                        let sun = (f.scene.lights.get(id))
+                            .is_ok_and(|d| d.kind == LightType::Directional);
+                        if !sun && f.scene.lights.get(id).is_ok() {
+                            f.scene.lights.destroy(id).unwrap();
+                        }
+                    }
+                    // The car lights would be row lights, drawn after the moon.
+                    f.scene.lights.clear_frame_lights();
+                    let material: Vec<u8> = (0..W * H)
+                        .flat_map(|i| {
+                            let (x, y) = (i % W, i / W);
+                            [
+                                98 + ((x * 7 + y * 3) % 61) as u8,
+                                98 + ((x * 5 + y * 11) % 61) as u8,
+                                ((x * 13 + y * 7) % 256) as u8,
+                                ((x + 3 * y) % 256) as u8,
+                            ]
+                        })
+                        .collect();
+                    let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+                    let fills = [(Layer::Material, &material[..])];
+                    let uploads = scene_common::upload_layers(gpu, &mut cmd, f.layers, &fills);
+                    cmd.submit_and_wait().unwrap();
+                    drop(uploads);
+                    f.settings.light.material.wetness = 0.6;
+                    let modes = [
+                        ("exact", 1.0, LayerSet::NONE),
+                        ("direction", 0.5, LayerSet::NONE),
+                        ("none", 1.0, LayerSet::of(Layer::Material)),
+                        (
+                            "flat",
+                            1.0,
+                            LayerSet::of(Layer::Material).with(Layer::Surface),
+                        ),
+                    ];
+                    let moon = (f.scene.light_ids.iter().copied())
+                        .find(|&id| f.scene.lights.get(id).is_ok())
+                        .unwrap();
+                    let original = f.scene.lights.get(moon).unwrap().clone();
+                    // Without shadow and straight overhead the moon needs no map: the sun programs
+                    // see everything then, as Chiaro's.
+                    let aims = ["shadow", "no shadow", "overhead"];
+                    let cases = (aims.into_iter()).flat_map(|a| [0.0, 1.0].map(|r| (a, r)));
+                    for ((aim, radius), (mode, light, skip)) in
+                        cases.flat_map(|c| modes.map(|m| (c, m)))
+                    {
+                        let mut desc = original.clone();
+                        desc.source_radius = radius;
+                        match aim {
+                            "no shadow" => desc.cast_shadows = false,
+                            "overhead" => desc.direction = Vec3::new(0.0, 0.0, -1.0),
+                            _ => {}
+                        }
+                        f.scene.lights.update(moon, &desc, &NoResources).unwrap();
+                        f.settings.light.quality.quality = Quality::Custom(Resolutions {
+                            light,
+                            shadow: 0.5,
+                            medium: 0.5,
+                        });
+                        f.skip = skip;
+                        f.settings.light.light_rows = false;
+                        let (off, without) = f.frame();
+                        f.settings.light.light_rows = true;
+                        let (on, with) = f.frame();
+                        let (max, mean, share) = diff(&on, &off);
+                        let maps = with.mask.field_texels;
+                        eprintln!(
+                            "{variant}, the moon alone ({aim}), radius {radius}, material mode \
+                         {mode}: {} row suns, {maps} field texels; largest difference {max}/255, \
+                         mean {mean:.5}, {share:.3} % of the pixels",
+                            with.lighting.row_suns
+                        );
+                        let medium = f.renderer.plan().medium_map().view().is_some();
+                        assert_eq!(medium, variant == "t5", "the medium world map");
+                        assert_eq!(without.lighting.row_suns, 0, "{mode}: rows off");
+                        // Without shadow, surface buffer and medium the moon is ambient (E24).
+                        let drawn = aim != "no shadow" || mode != "flat" || medium;
+                        let suns = u32::from(drawn);
+                        assert_eq!(
+                            with.lighting.row_suns, suns,
+                            "{aim}, {mode}: the sun programs"
+                        );
+                        assert_eq!(max, 0, "{variant}, {aim}, radius {radius}, {mode}");
+                    }
+                });
             });
         }
     });
 }
 
-/// The whole demo with opaque obstacles: row lights and Chiaro's lights (a lamp with a caster
-/// filter, the sun, zones) in one frame and the same targets.
+/// The whole demo with opaque obstacles: row lights and Chiaro's lights (a lamp reaching beyond
+/// `MAX_REACH`) in one frame and the same targets.
 #[test]
 fn row_lights_and_chiaro_lights_share_a_frame() {
     with_chiaro_pack(|gpu, pack| {
         iso_night::with_demo("hard", 44, "", |demo| {
             demo.with_frames(gpu, pack, &with_rows, &mut |f| {
                 drop_patterns(&mut f.scene);
-                // Every lamp of the demo is a row light; a caster filter (E53) keeps one with
-                // Chiaro's programs.
+                // Every lamp of the demo is a row light; a reach beyond `MAX_REACH` mask texels
+                // keeps one with Chiaro's programs.
                 f.frame();
                 let key = (f.renderer.plan().lights().rows.iter())
                     .find(|l| l.shadowed)
@@ -341,8 +359,7 @@ fn row_lights_and_chiaro_lights_share_a_frame() {
                 let id = *(f.scene.light_ids.iter())
                     .find(|id| id.index() == key)
                     .unwrap();
-                f.scene
-                    .change_light(id, |d| d.shadow_filter = ShadowFilter::StaticOnly);
+                f.scene.change_light(id, |d| d.radius = 1000.0);
                 f.settings.light.light_rows = false;
                 let (off, without) = f.frame();
                 f.settings.light.light_rows = true;

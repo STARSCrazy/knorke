@@ -92,7 +92,8 @@ fn steady_state_medium_map_allocates_nothing() {
                 counted += allocations() - before;
                 assert!(prepared.stages.contains(PassStages::MEDIUM_MAP));
                 let rows = (record.lighting.row_lights, record.lighting.row_suns);
-                assert_eq!(rows, (1, 1), "the spot light and the moon through the map");
+                // The sun without a shadow too: the sun program draws it without a map.
+                assert_eq!(rows, (1, 2), "the spot light, the moon and the sun");
                 cmd.submit_and_wait().unwrap();
             }
             counted

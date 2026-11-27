@@ -7,7 +7,10 @@
 //! ("flächen"); the shop sign's line light alone with a post close in front of it, a third
 //! along ("linie pfosten"); the point and spot lights with the demo's two pattern fences, hard
 //! and soft ("zaun"), and as tile grids ("gitter"); the walls in a bank of fog ("nebel", the
-//! medium world map dims every light on its way).
+//! medium world map dims every light on its way); every obstacle three times as tall, beyond
+//! the rows' old height limit ("hoch"); every lamp 20 times, 260 rows ("viele"); every lamp on a
+//! mast it stands in (`inside_obstacle`, "mast"); every lamp's shadow from the static obstacles
+//! alone, which are all of them (a caster filter, "filter").
 //!
 //! - Today: [`Light2dRenderer`] with `light_rows` off.
 //! - New: the same with `light_rows` on.
@@ -49,7 +52,7 @@ use knorke_integration::layers::{Layer, LayerSet, Layers};
 use knorke_integration::light2d::{Light2dFrame, Light2dRenderer, Light2dSettings};
 use knorke_light2d::codec::encode_medium_pixel;
 use knorke_light2d::composite::{CompositeFrame, CompositeLight, CompositeStage};
-use knorke_light2d::light::{Height, LightDesc, LightType};
+use knorke_light2d::light::{Height, LightDesc, LightType, ShadowFilter};
 use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
 use knorke_light2d::lighting::{
     LightSurfacePassParams, ShadowDomain, SurfaceParams, ambient_clear, height_tolerance,
@@ -97,6 +100,8 @@ enum Fences {
     Patterns,
     /// Tile grids with patterns in their place ([`fence_grid`]).
     Grids,
+    /// Opaque walls without their patterns, every obstacle this many times as tall.
+    Tall(f32),
 }
 
 /// The scene text cut down to what the probe compares: the enabled lights of the types in
@@ -152,16 +157,18 @@ fn parse(
             "shape" => {
                 // CHI_OBSTACLE_DYNAMIC, _DISABLED, _FOOTPRINT_SHADOW.
                 let flags: u32 = f[2].parse().unwrap();
+                let tall = if let Fences::Tall(k) = fence { k } else { 1.0 };
                 let common = ObstacleCommon {
                     position: At::new(Vec2::new(v(3), v(4))),
                     rotation: v(5),
-                    height: v(6),
-                    base_height: v(7),
+                    height: v(6) * tall,
+                    base_height: v(7) * tall,
                     opacity: match fence {
                         Fences::Walls(o) if f[12] != "0" => o,
                         _ => 1.0,
                     },
-                    dynamic: flags & 1 != 0,
+                    // "filter": every obstacle static, so the static ones alone are all.
+                    dynamic: flags & 1 != 0 && !kinds.ends_with('s'),
                     enabled: flags & 2 == 0,
                     shadow_footprint: false,
                 };
@@ -411,8 +418,9 @@ impl<'d> Truth<'d> {
         let shadow = ShadowDomain::new(&domain, anchor.remainder);
         let surface = SurfaceParams::new(p, W, H, light, &shadow, true).to_bytes();
         let mask = [domain.width, domain.height];
-        let mut lookup =
-            RowLookupParams::new(&RowSpace::new(p, &domain), mask, 1, height_tolerance(light));
+        let space = RowSpace::new(p, &domain);
+        // The reference reads no row, so no height code.
+        let mut lookup = RowLookupParams::new(&space, mask, 1, height_tolerance(light), [0.0; 4]);
         lookup.domain[3] = env("KNORKE_PROBE_POINTS", 8.0);
         let lookup = lookup.to_bytes();
         let vertex = LightSurfacePassParams::new(p, W, H, top, 0).to_bytes();
@@ -679,7 +687,13 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// Chiaro's own: a lamp beside the tower stands in a widened strip of its hollow cells, whose
 /// crossing Chiaro reads while the rows and the reference skip the obstacle a lamp stands in.)
 /// "nebel", the walls in [`fog_layer`]'s fog (the medium world map; 2026-11-27): hard
-/// 0.284 / 0.51, today 0.751 / 1.43, soft 0.485 / 1.81, today 1.195 / 3.67.
+/// 0.284 / 0.51, today 0.751 / 1.43, soft 0.485 / 1.81, today 1.195 / 3.67. "hoch", the walls
+/// three times as tall (tops to 60, so the rows store heights in fiftieths), hard 0.364 / 0.71,
+/// today 0.983 / 1.83; "viele", every lamp 20 times (260 rows) as bright as four, hard
+/// 0.683 / 2.35, today 1.719 / 4.77; "mast", every lamp on a mast 0.8 thick up to 1 above it
+/// and marked `inside_obstacle` (E147), hard 0.360 / 0.72, today 1.629 / 2.49, soft
+/// 0.626 / 2.30, today 3.924 / 14.69; "filter", every lamp static-only (E53) and every obstacle
+/// static: the rows as "normal", today as there too (2026-11-27).
 ///
 /// Timed 2026-11-27 (240 frames, 5 runs, release, medians in us), today / rows resting / rows
 /// all built / today scrolling / rows scrolling (the camera one mask texel a frame, 30 to and
@@ -691,9 +705,13 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// 110 / 110 / 169 / 175 / 131, "zaun hart" 416 / 181 / 320 / 471 / 202, "zaun weich"
 /// 456 / 219 / 433 / 501 / 235, "gitter hart" 870 / 216 / 388 / 785 / 233, "gitter weich"
 /// 896 / 254 / 492 / 884 / 266, "nebel hart" 427 / 320 / 443 / 481 / 334, "nebel weich"
-/// 442 / 366 / 555 / 498 / 374. Before (1.9 of 13 rows rebuilt a frame, the field kept),
-/// rows scrolling: "hart normal" 356, "weich normal" 438, "nebel weich" 581.
-const BOUNDS: [(&str, f64, f64); 13] = [
+/// 442 / 366 / 555 / 498 / 374, "hoch hart" 239 / 174 / 297 / 301 / 194, "viele hart"
+/// 3832 / 1644 / 2703 / 3921 / 1634, "mast hart" 321 / 180 / 297 / 378 / 198, "mast weich"
+/// 335 / 221 / 411 / 391 / 235, "filter hart" 362 / 182 / 308 / 424 / 196, "filter weich"
+/// 386 / 221 / 419 / 432 / 236 (today: the class field). Before (1.9 of 13 rows rebuilt a
+/// frame, the field kept), rows scrolling: "hart normal" 356, "weich normal" 438, "nebel weich"
+/// 581.
+const BOUNDS: [(&str, f64, f64); 19] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
     ("weich normal", 0.70, 2.55),
@@ -707,6 +725,12 @@ const BOUNDS: [(&str, f64, f64); 13] = [
     ("gitter weich", 1.27, 4.09),
     ("nebel hart", 0.32, 0.57),
     ("nebel weich", 0.54, 2.0),
+    ("hoch hart", 0.41, 0.79),
+    ("viele hart", 0.76, 2.59),
+    ("mast hart", 0.40, 0.80),
+    ("mast weich", 0.69, 2.53),
+    ("filter hart", 0.39, 0.73),
+    ("filter weich", 0.70, 2.55),
 ];
 
 /// The facade in "zaun hart" that the spot light beside the lattice tower lights through it
@@ -754,6 +778,21 @@ fn post() -> ShapeDesc<'static> {
     ShapeDesc {
         common,
         shape: Shape::Circle { radius: 0.25 },
+    }
+}
+
+/// A mast under lamp `d`: a post 0.8 thick (some 4 mask texels) from the ground to 1 above it.
+fn mast(d: &LightDesc) -> ShapeDesc<'static> {
+    let Height::At(h) = d.height else {
+        unreachable!("the probe's lamps have a height")
+    };
+    ShapeDesc {
+        common: ObstacleCommon {
+            position: d.position,
+            height: h + 1.0,
+            ..post().common
+        },
+        shape: Shape::Circle { radius: 0.4 },
     }
 }
 
@@ -838,8 +877,15 @@ fn light_rows_against_chiaro_and_the_reference() {
         };
         let mut truth = Truth::new(gpu, pack).unwrap();
 
-        // The load scene: every lamp four times, slightly apart.
-        let offsets = [(0.0, 0.0), (0.7, 0.3), (-0.5, 0.6), (0.4, -0.7)];
+        // The load scene: every lamp four times, slightly apart; "viele" 20 times (260 rows, more
+        // than the 256 the atlas once had), the others on a grid 0.3 apart.
+        let four = [(0.0, 0.0), (0.7, 0.3), (-0.5, 0.6), (0.4, -0.7)];
+        let offsets: Vec<(f32, f32)> = (0..20)
+            .map(|k| {
+                let grid = ((k % 4) as f32 * 0.3 - 0.45, (k / 4) as f32 * 0.3 - 0.75);
+                four.get(k).copied().unwrap_or(grid)
+            })
+            .collect();
         let scenes = [false, true]
             .into_iter()
             .flat_map(|soft| {
@@ -859,6 +905,12 @@ fn light_rows_against_chiaro_and_the_reference() {
             .chain([
                 (false, 1, Fences::Walls(1.0), "01", true),
                 (true, 1, Fences::Walls(1.0), "01", true),
+                (false, 1, Fences::Tall(3.0), "01", false),
+                (false, 20, Fences::Walls(1.0), "01", false),
+                (false, 1, Fences::Walls(1.0), "01m", false),
+                (true, 1, Fences::Walls(1.0), "01m", false),
+                (false, 1, Fences::Walls(1.0), "01s", false),
+                (true, 1, Fences::Walls(1.0), "01s", false),
             ]);
         let only = std::env::var("KNORKE_PROBE_ONLY").unwrap_or_default();
         for ((soft, copies, fence, kinds, fog), bound) in scenes.zip(BOUNDS) {
@@ -879,6 +931,19 @@ fn light_rows_against_chiaro_and_the_reference() {
             if kinds == "3" {
                 obstacles.create_shape(&post()).unwrap();
             }
+            if kinds.ends_with('m') {
+                // Every lamp on a mast up to above it, marked as standing in it (E147).
+                for d in &mut base {
+                    obstacles.create_shape(&mast(d)).unwrap();
+                    d.inside_obstacle = true;
+                }
+            }
+            if kinds.ends_with('s') {
+                // Every lamp's shadow from the static obstacles alone (E53): all of the probe's.
+                for d in &mut base {
+                    d.shadow_filter = ShadowFilter::StaticOnly;
+                }
+            }
             if soft {
                 // The lamp sizes of the variant with soft shadows, on the same lamps.
                 let sized = parse(&plain, true, Fences::Walls(1.0), kinds).0;
@@ -889,7 +954,7 @@ fn light_rows_against_chiaro_and_the_reference() {
                 }
             }
             let (expected, supports) = match kinds {
-                "01" => (13, 1),
+                "01" | "01m" | "01s" => (13, 1),
                 "34" => (4, SUPPORTS),
                 _ => (1, SUPPORTS),
             };
@@ -898,11 +963,14 @@ fn light_rows_against_chiaro_and_the_reference() {
                 expected,
                 "the scene's shadowed lights of the case"
             );
+            // More than four copies as bright as four, so the picture does not burn out.
+            let dim = 4.0 / copies.max(4) as f32;
             let descs: Vec<LightDesc> = offsets[..copies]
                 .iter()
                 .flat_map(|&(dx, dy)| {
                     base.iter().map(move |d| LightDesc {
                         position: At::new(d.position.raw() + Vec2::new(dx, dy)),
+                        intensity: d.intensity * dim,
                         ..d.clone()
                     })
                 })
@@ -918,7 +986,8 @@ fn light_rows_against_chiaro_and_the_reference() {
             let (lights, _) = store();
             let (mut moving, ids) = store();
             let none = LightStore::new();
-            let patterns = (!matches!(fence, Fences::Walls(_))).then_some(&patterns);
+            let patterns =
+                (!matches!(fence, Fences::Walls(_) | Fences::Tall(_))).then_some(&patterns);
             let new = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
             let mut renderers = [new(), new(), new(), new()];
             let all = descs.len() as u32;
@@ -1148,6 +1217,26 @@ const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 5] = [
     ],
 ];
 
+/// As [`SUN_BOUNDS`] for the hard moon from below the horizon ("unten"), per fences and camera.
+/// Measured on 2026-11-27 (Vulkan, RX 6700 XT), map against today's light: "mauer" A
+/// 0.0168 / 0.042 (today 0.0249 / 0.063), B 0.0087 / 0.022 (today 0.0590 / 0.135); "zaun" A
+/// 0.0198 / 0.048 (today 0.0341 / 0.083), B 0.0215 / 0.051 (today 0.0504 / 0.111); "halb" A
+/// 0.0209 / 0.071 (today 0.0272 / 0.076), B 0.0179 / 0.079 (today 0.0325 / 0.122); "gitter" A
+/// 0.0782 / 0.328 (today 0.1342 / 0.343), B 0.0762 / 0.335 (today 0.1417 / 0.361); "nebel" A
+/// 0.0082 / 0.026 (today 0.0199 / 0.056), B 0.0081 / 0.022 (today 0.0405 / 0.095).
+/// Timed (240 frames, 5 runs, release, medians in us), today / map kept / map built every frame
+/// / today scrolling / map scrolling +x: "mauer" 159 / 101 / 1808 / 238 / 124, "zaun"
+/// 201 / 113 / 2661 / 280 / 139, "halb" 163 / 106 / 2676 / 242 / 129, "gitter"
+/// 305 / 118 / 2674 / 283 / 164, "nebel" 241 / 188 / 1893 / 317 / 211 (a ray that does not rise
+/// walks the whole mask: a map built every frame costs more than from above).
+const SUN_LOW_BOUNDS: [[(f64, f64); 2]; 5] = [
+    [(0.019, 0.047), (0.010, 0.025)],
+    [(0.022, 0.053), (0.024, 0.057)],
+    [(0.023, 0.079), (0.020, 0.087)],
+    [(0.087, 0.361), (0.084, 0.369)],
+    [(0.010, 0.029), (0.009, 0.025)],
+];
+
 /// Radians the moon of the timed case "maps rebuilt" turns to and fro between frames.
 const TURN: f32 = 0.002;
 
@@ -1192,19 +1281,27 @@ fn sun_map_against_chiaro_and_the_reference() {
         let domain = OcclusionDomain::new(W, H, today.light.resolutions().shadow);
         let mut truth = Truth::new(gpu, pack).unwrap();
         let (mut report, mut results) = (String::new(), Vec::new());
-        let cases = SUN_FENCES
-            .into_iter()
-            .zip(SUN_BOUNDS)
-            .flat_map(|(fences, bounds)| {
-                [("hart", &hard), ("weich", &soft)]
-                    .into_iter()
-                    .zip(bounds)
-                    .map(move |(moon, bounds)| (fences, moon, bounds))
-            });
+        // The hard moon from below the horizon: its rays toward it fall.
+        let d = hard.direction;
+        let low = LightDesc {
+            direction: Vec3::new(d.x, d.y, 0.2 * d.z.abs()),
+            ..hard.clone()
+        };
+        let cases = (SUN_FENCES.into_iter().zip(SUN_BOUNDS).zip(SUN_LOW_BOUNDS)).flat_map(
+            |((fences, [hard_bounds, soft_bounds]), low_bounds)| {
+                [
+                    (("hart", &hard), hard_bounds),
+                    (("weich", &soft), soft_bounds),
+                    (("unten", &low), low_bounds),
+                ]
+                .map(move |(moon, bounds)| (fences, moon, bounds))
+            },
+        );
         for ((fences, fence, fog), (kind, moon), bounds) in cases {
             let layers = if fog { &foggy } else { &clear };
             let (_, obstacles, patterns) = parse(&text, false, fence, "2");
-            let patterns = (!matches!(fence, Fences::Walls(_))).then_some(&patterns);
+            let patterns =
+                (!matches!(fence, Fences::Walls(_) | Fences::Tall(_))).then_some(&patterns);
             let kind = format!("{fences} {kind}");
             let mut lights = LightStore::new();
             lights.create(moon, &NoResources).unwrap();

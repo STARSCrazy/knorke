@@ -143,15 +143,18 @@ const ROW_PASS: Layout = &[
 const ROW_BUILD: Layout = &[
     f!(RowBuildParams, "WorldFromMask", world_from_mask, 4),
     f!(RowBuildParams, "Domain", domain, 4),
+    f!(RowBuildParams, "HeightCode", heights, 4),
 ];
 const ROW_EDGE: Layout = &[
     f!(RowEdgeParams, "RowSize", row_size, 4),
     f!(RowEdgeParams, "Near", near, 4),
+    f!(RowEdgeParams, "HeightCode", heights, 4),
 ];
 const ROW_LOOKUP: Layout = &[
     f!(RowLookupParams, "RowSize", row_size, 4),
     f!(RowLookupParams, "Domain", domain, 4),
     f!(RowLookupParams, "WorldFromMask", world_from_mask, 4),
+    f!(RowLookupParams, "HeightCode", heights, 4),
 ];
 /// Chiaro's pattern records and block, which the row programs read too.
 const PATTERN_PARAMS: Layout = &[

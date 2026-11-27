@@ -49,7 +49,7 @@ use knorke_light2d::profile::{ProfilePreset, ProfileShape, build_shape_profile};
 use knorke_light2d::profile_store::ProfileStore;
 use knorke_light2d::rows::{
     MaskChange, Refresh, RowBuildParams, RowCache, RowEdgeParams, RowLamp, RowLookupParams,
-    RowMask, RowSpace, SunBands, SunCache, SunParams, SunSource, sun_bands, sun_suits,
+    RowMask, RowSpace, SunBands, SunCache, SunParams, SunSource, height_code, sun_bands, sun_plain,
 };
 use knorke_light2d::settings::LightSettings;
 use knorke_light2d::shadow::{MaskPlanInput, MaskUpdateLimits, MaskUpdatePlan, OcclusionDomain};
@@ -346,11 +346,11 @@ fn steady_state_light2d_paths_allocate_nothing() {
             .zip(&row_list.directional_casters)
             .zip(&row_list.directional_rise);
         for (k, ((g, &casters), &rise)) in directional.enumerate() {
-            let _ = sun_suits(g, casters);
+            let _ = sun_plain(g);
             let params = SunParams::new(g, rise, row_mask.size, row_mask.snapped, 0.05, 3.0)
                 .with_partial(i.is_multiple_of(2), true);
             let _ = params.to_bytes();
-            let source = SunSource::new(&params, &row_mask);
+            let source = SunSource::new(&params, &row_mask).with_casters(casters);
             if let Some((_, Refresh::Update(before))) =
                 sun_cache.assign(k as u64, source, row_mask.change)
             {
@@ -365,10 +365,11 @@ fn steady_state_light2d_paths_allocate_nothing() {
         }
         sun_cache.commit();
         let space = RowSpace::new(&Projection::IDENTITY, &row_domain);
+        let heights = height_code(50.0);
         let _ = (
-            RowBuildParams::new(&space, row_mask.size, true).to_bytes(),
-            RowEdgeParams::new(&space, row_cache.rows()).to_bytes(),
-            RowLookupParams::new(&space, row_mask.size, row_cache.rows(), 0.05).to_bytes(),
+            RowBuildParams::new(&space, row_mask.size, true, heights).to_bytes(),
+            RowEdgeParams::new(&space, row_cache.rows(), heights).to_bytes(),
+            RowLookupParams::new(&space, row_mask.size, row_cache.rows(), 0.05, heights).to_bytes(),
         );
         // The lights and suns of the medium stage.
         collect_medium_lights(
