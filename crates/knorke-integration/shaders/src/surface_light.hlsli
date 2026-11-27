@@ -8,8 +8,8 @@
 // The fragment shader body shared by the surface light programs (light_surface, light_sdf_surface and their exact
 // and direction variants): light one point/spot light at the surface point under the pixel. The including program
 // declares SurfaceTex (and MaterialTex in exact mode), their samplers and cbuffer SurfaceParams, and defines
-// CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest), the visibility of the light from the pixel (1.0 without shadows; the
-// shadow programs trace toward ShadowTarget). Visibility is only evaluated where the light reaches the pixel at all.
+// CHI_SURFACE_VISIBILITY(i, s, l, ts, nearest), the visibility of the light from the pixel (1.0 without shadows; Chiaro's
+// shadow programs traced toward ShadowTarget). Visibility is only evaluated where the light reaches the pixel at all.
 // Line and rect lights (E33) average the Lambert term over their nearest point and their ends or corners,
 // weighted by 1 / d^2 (AreaLambert), and take the highlight from the representative point (AreaSpecularPoint).
 //   default:                  Lambert with the base normal

@@ -456,12 +456,14 @@ fn shader_dir(sub: &str) -> PathBuf {
 /// The committed blobs were compiled from the committed sources
 /// (`cargo xtask shaders --compile crates/knorke-integration/shaders`). `chiaro/` holds the
 /// Chiaro programs still in use as Chiaro's shadercross blobs; recompiling them with DXC
-/// changes some SPIR-V and drops their MSL, so a change there is a deliberate step.
+/// changes some SPIR-V and drops their MSL, so a change there is a deliberate step. Both
+/// include `shared/`, so it counts for both.
 #[test]
 fn compiled_shaders_are_up_to_date() {
     for dir in ["", "chiaro/"] {
         let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(shader_dir(&format!("{dir}src")))
             .unwrap()
+            .chain(std::fs::read_dir(shader_dir("shared")).unwrap())
             .map(|e| e.unwrap().path())
             .map(|p| {
                 let name = p.file_name().unwrap().to_string_lossy().into_owned();

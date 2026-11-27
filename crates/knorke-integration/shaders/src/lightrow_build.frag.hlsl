@@ -71,7 +71,7 @@ float Cross(float2 a, float2 b)
 
 // A window lamp's row (RowLamp.window, carried as i.area and i.areaMask) begins where the ray enters the window's
 // rectangle on the ground, plus the 1.5 texels by which Chiaro's ray stops short of a window (MaskShadowStop in
-// light_common.hlsli): nothing nearer the lamp counts for a place the window lights (lightrow_light.hlsli clips at
+// Chiaro's light_common.hlsli): nothing nearer the lamp counts for a place the window lights (lightrow_light.hlsli clips at
 // that place's own crossing), and an infinitely tall wall the window sits in must not end the march. An upright
 // window's rectangle is a line on the ground, met at one distance; a tilted one is met over a stretch, (near end,
 // far end): a run beginning within it counts for some places only, so it neither hides a farther run nor ends the

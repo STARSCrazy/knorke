@@ -1,11 +1,11 @@
-// Origin: chiaro @ 9bc5b9b, shaders/src/light_common.hlsli, copied unchanged below this notice for the light row
-// programs (lightrow_*, ADR 0019), so they light exactly as Chiaro's light programs do.
+// Origin: chiaro @ 9bc5b9b, shaders/src/light_common.hlsli, copied below this notice; altered: code that no program
+// here reaches is removed. Shared by Chiaro's programs (../chiaro/src, whose blobs are Chiaro's shadercross output of
+// that revision) and the light row programs (../src, ADR 0019), so these light exactly as Chiaro's did.
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any express or
 // implied warranty; the origin must not be misrepresented; altered source versions must be plainly marked as
 // such and this notice may not be removed or altered from any source distribution. Full text:
 // LICENSE-CHIARO-ZLIB.txt.
-// Shared parts of the light pass programs (light, light_sdf):
-// the per-light data, the varyings of light.vert and the light model.
+// Shared parts of the light programs: the per-light data and the light model.
 // Same formulas as src/lighting/LightMath.cpp (Attenuation, SpotFactor).
 #ifndef CHI_LIGHT_COMMON_HLSLI
 #define CHI_LIGHT_COMMON_HLSLI
@@ -34,58 +34,7 @@ struct GpuLight
     float4 areaMask;       // shadowed line and rect lights: xy U, zw V (the rect's half extent across) in mask texels
 };
 
-// Varyings from light.vert to the light fragment shaders. light.frag does not read mask, shadow and areaMask; D3D12 needs
-// the inputs a fragment shader reads to be a prefix of the outputs, so they come last. light.vert appends
-// SV_Position after them; the fragment shaders do not read it (D3D12 rejects
-// the linkage when the pixel shader declares SV_Position with this layout).
-// CHI_POINT_LIGHTS (light_point.vert, light_surface_point.vert and the shadow programs of point and spot lights): no
-// area and areaMask, and every area light branch compiles away. Shadowed line and rect lights are drawn by the *_area
-// shadow programs instead (E33); their varyings and branches cost the shadowed point lights ~8 % otherwise.
-#if defined(CHI_LIGHT_MASK) && defined(CHI_POINT_LIGHTS)
-// The `_mask` programs (masked point and spot lights, always with CHI_POINT_LIGHTS): the three mask vectors
-// (light_mask.hlsli) before mask and shadow, which the unshadowed program does not read.
-#define CHI_LIGHT_VARYINGS                                                       \
-    float3 world : TEXCOORD0;                                                    \
-    nointerpolation float4 positionRadius : TEXCOORD1;                           \
-    nointerpolation float4 colorFalloff : TEXCOORD2;                             \
-    nointerpolation float4 directionType : TEXCOORD3;                            \
-    nointerpolation float4 spotCos : TEXCOORD4;                                  \
-    nointerpolation float4 profile : TEXCOORD5;                                  \
-    nointerpolation float4 maskN : TEXCOORD6;                                    \
-    nointerpolation float4 maskU : TEXCOORD7;                                    \
-    nointerpolation float4 maskV : TEXCOORD8;                                    \
-    float2 mask : TEXCOORD9; /* the pixel's position in occlusion mask texels */ \
-    nointerpolation float4 shadow : TEXCOORD10;
-#elif defined(CHI_POINT_LIGHTS)
-#define CHI_LIGHT_VARYINGS                                                       \
-    float3 world : TEXCOORD0;                                                    \
-    nointerpolation float4 positionRadius : TEXCOORD1;                           \
-    nointerpolation float4 colorFalloff : TEXCOORD2;                             \
-    nointerpolation float4 directionType : TEXCOORD3;                            \
-    nointerpolation float4 spotCos : TEXCOORD4;                                  \
-    nointerpolation float4 profile : TEXCOORD5;                                  \
-    float2 mask : TEXCOORD6; /* the pixel's position in occlusion mask texels */ \
-    nointerpolation float4 shadow : TEXCOORD7;
-#else
-#define CHI_LIGHT_VARYINGS                                                       \
-    float3 world : TEXCOORD0;                                                    \
-    nointerpolation float4 positionRadius : TEXCOORD1;                           \
-    nointerpolation float4 colorFalloff : TEXCOORD2;                             \
-    nointerpolation float4 directionType : TEXCOORD3;                            \
-    nointerpolation float4 spotCos : TEXCOORD4;                                  \
-    nointerpolation float4 profile : TEXCOORD5;                                  \
-    nointerpolation float4 area : TEXCOORD6;                                     \
-    float2 mask : TEXCOORD7; /* the pixel's position in occlusion mask texels */ \
-    nointerpolation float4 shadow : TEXCOORD8;                                   \
-    nointerpolation float4 areaMask : TEXCOORD9;
-#endif
-
-struct LightVaryings
-{
-    CHI_LIGHT_VARYINGS
-};
-
-// The per-light values the light model reads, from either set of varyings (LightVaryings, SurfaceLightVaryings).
+// The per-light values the light model reads, from the varyings (SurfaceLightVaryings) or a GpuLight.
 struct LightParams
 {
     float4 positionRadius;
@@ -99,29 +48,14 @@ struct LightParams
 // The area light fields of varyings i; zero under CHI_POINT_LIGHTS.
 #ifdef CHI_POINT_LIGHTS
 #define CHI_AREA(i) float4(0.0, 0.0, 0.0, 0.0)
-#define CHI_AREA_MASK(i) float4(0.0, 0.0, 0.0, 0.0)
 #else
 #define CHI_AREA(i) i.area
-#define CHI_AREA_MASK(i) i.areaMask
 #endif
 
 #ifdef CHI_LIGHT_MASK
 // The mask factor of varyings i toward toPixel (light_mask.hlsli); t the share of the way to a window.
 #define CHI_LIGHT_MASK_TINT(i, toPixel, t) LightMaskTint(toPixel, i.maskN, i.maskU, i.maskV, t)
 
-// Window masks (t > 0): the shadow ray ends at the ray's point in the window, t of the way from the light to the
-// receiver at `start` (mask texels, height startZ). target: xy mask texels, z height of the light.
-float3 MaskShadowTarget(float3 target, float2 start, float startZ, float t)
-{
-    return t > 0.0 ? float3(lerp(target.xy, start, t), lerp(target.z, startZ, t)) : target;
-}
-
-// A window's shadow ray stops this many mask texels before the window (kAreaShadowStop, E33): the window sits flush
-// in an obstacle's face. 0 for a projector.
-float MaskShadowStop(float t)
-{
-    return t > 0.0 ? 1.5 : 0.0;
-}
 #endif
 
 #define CHI_LIGHT_PARAMS(i) \
@@ -241,39 +175,11 @@ float LightReachAt(float3 world, LightParams l, out float3 toLight, out float3 n
     return PointReach(world, l, toLight);
 }
 
-float LightReach(float3 world, LightParams l, out float3 toLight)
-{
-    float3 nearest;
-    float2 ts;
-    return LightReachAt(world, l, toLight, nearest, ts);
-}
-
-// Irradiance of light l at world point p without occlusion and without the receiver's Lambert term: colour times
-// window, cone and profile (point and spot lights) or window and emitter cosine of the nearest emitter point (line
-// and rect lights). Animation and flicker are already in colorFalloff (CollectLights). The ground of the plain light
-// program and the scattering in the medium (medium_light.frag) both take it.
-float3 LightIrradianceOf(LightParams l, float3 p)
-{
-    float3 toLight;
-    return l.colorFalloff.rgb * LightReach(p, l, toLight);
-}
-
-float3 LightIrradiance(GpuLight l, float3 p)
-{
-    return LightIrradianceOf(
-        MakeLightParams(l.positionRadius, l.colorFalloff, l.directionType, l.spotCos, l.profile, l.area), p);
-}
-
-// Light arriving at the ground point (z = 0) under the pixel, without occlusion.
-float3 LightContribution(LightVaryings i)
-{
-    return LightIrradianceOf(CHI_LIGHT_PARAMS(i), i.world);
-}
-
 // Line and rect lights stop their shadow rays this many mask texels before the nearest point: an emitter usually sits
 // on an obstacle's face (window, billboard, tube on a wall), and the texels right at it would shadow the light itself.
 // The face can lie up to a texel beyond the emitter after rasterization, and a sample closer than half a texel to an
-// obstacle is a hit, hence 1.5.
+// obstacle is a hit, hence 1.5. Unused since Chiaro's shadow programs are gone; kept because without it DXC orders
+// the SPIR-V constants of the programs that include this file differently (their blobs are checked byte for byte).
 static const float kAreaShadowStop = 1.5;
 
 // Soft near field (CHI_LightDesc::soft_near_field, point and spot lights): the light is a sphere of source_radius.
@@ -286,22 +192,6 @@ float NearFieldRadius(LightParams l)
     return IsAreaLight(l) ? 0.0 : frac(l.directionType.w) / kNearFieldShare * l.positionRadius.w;
 }
 
-// How far before its target a shadow ray of light l stops, in mask texels (0 for point and spot lights).
-float ShadowStop(LightParams l)
-{
-    return IsAreaLight(l) ? kAreaShadowStop : 0.0;
-}
-
-// Where the shadow ray of a pixel ends: xy ground position in mask texels, z height. Point and spot lights: the light
-// (shadow.zw, shadow.y); line and rect lights: their nearest point, shadow.zw + t U + s V in the mask.
-float3 ShadowTarget(float4 shadow, float4 areaMask, LightParams l, float2 ts, float3 nearest)
-{
-    if (IsAreaLight(l)) {
-        return float3(shadow.zw + ts.x * areaMask.xy + ts.y * areaMask.zw, nearest.z);
-    }
-    return float3(shadow.zw, shadow.y);
-}
-
 // Opacity of the mask texel under maskPos (E25), 0 outside the mask domain.
 float MaskOpacityAt(Texture2D<float4> mask, SamplerState nearestSampler, float2 maskPos, float2 maskSize)
 {
@@ -310,17 +200,6 @@ float MaskOpacityAt(Texture2D<float4> mask, SamplerState nearestSampler, float2 
         return 0.0;
     }
     return FetchTexel(mask, nearestSampler, texel, 1.0 / maskSize).r;
-}
-
-// Highest opacity of the 2x2 mask texels whose centres surround maskPos: the texels a linear field sample at
-// maskPos blends, so one of them is the obstacle texel behind a field value below half a texel.
-float MaskOpacityAround(Texture2D<float4> mask, SamplerState nearestSampler, float2 maskPos, float2 maskSize)
-{
-    float2 corner = floor(maskPos - 0.5) + 0.5;
-    float o = MaskOpacityAt(mask, nearestSampler, corner, maskSize);
-    o = max(o, MaskOpacityAt(mask, nearestSampler, corner + float2(1.0, 0.0), maskSize));
-    o = max(o, MaskOpacityAt(mask, nearestSampler, corner + float2(0.0, 1.0), maskSize));
-    return max(o, MaskOpacityAt(mask, nearestSampler, corner + float2(1.0, 1.0), maskSize));
 }
 
 // Receiver rule: obstacles cast shadows but do not receive them. A pixel whose
@@ -383,46 +262,6 @@ float ExemptVisibility(Texture2D<float4> mask, SamplerState nearestSampler, floa
     float2 d = target - maskPos;
     float len = length(d);
     return FootprintVisibility(mask, nearestSampler, maskPos, len > 1e-3 ? d / len : float2(0.0, 0.0), maskSize);
-}
-
-// CHI_LIGHT_INSIDE_OBSTACLE (E147): a marked light carries its source radius R in shadow.x as -1 - R, so the shadow
-// programs need no variant and no new data; an unmarked light (R >= 0) takes one comparison.
-bool InsideObstacleLight(float4 shadow)
-{
-    return shadow.x < 0.0;
-}
-
-// The source radius in mask texels, for both encodings.
-float LightSourceRadius(float4 shadow)
-{
-    return shadow.x < 0.0 ? -1.0 - shadow.x : shadow.x;
-}
-
-// A marked light's rays ignore at most this many mask texels around it.
-static const int kInsideSteps = 64;
-
-// The piece of a marked light's shadow ray that lies in the obstacle around the light: from `light` (mask texels)
-// toward the receiver at `start`, one texel per step, the distance of the first sample the tracer would not count as
-// a hit (field >= 0.5, or outside the mask). 0 for a light that stands free (one field sample); the whole ray if it
-// ends in the obstacle; -1 if the obstacle goes on for more than kInsideSteps texels (no light gets out). Flat mode:
-// every obstacle texel blocks (light_sdf.frag; with heights InsideRunHeight in shadow_trace.hlsli).
-float InsideRun(Texture2D<float4> field, SamplerState fieldSampler, float2 light, float2 start, float2 maskSize)
-{
-    float2 d = start - light;
-    float len = length(d);
-    float2 dir = len > 1e-3 ? d / len : float2(0.0, 0.0);
-    float2 invSize = 1.0 / maskSize;
-    [loop] for (int k = 0; k <= kInsideSteps; ++k) {
-        float t = min(float(k), len);
-        float2 p = light + dir * t;
-        if (any(p < 0.0) || any(p > maskSize) || field.SampleLevel(fieldSampler, p * invSize, 0.0).r >= 0.5) {
-            return t;
-        }
-        if (t >= len) {
-            return len;
-        }
-    }
-    return -1.0;
 }
 
 #endif

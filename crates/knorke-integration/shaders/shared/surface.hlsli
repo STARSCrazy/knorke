@@ -1,5 +1,6 @@
-// Origin: chiaro @ 9bc5b9b, shaders/src/surface.hlsli, copied unchanged below this notice for the light row
-// programs (lightrow_*, ADR 0019), so they light exactly as Chiaro's light programs do.
+// Origin: chiaro @ 9bc5b9b, shaders/src/surface.hlsli, copied below this notice; altered: code that no program here
+// reaches is removed. Shared by Chiaro's programs (../chiaro/src, whose blobs are Chiaro's shadercross output of
+// that revision) and the light row programs (../src, ADR 0019), so these light exactly as Chiaro's did.
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any express or
 // implied warranty; the origin must not be misrepresented; altered source versions must be plainly marked as
 // such and this notice may not be removed or altered from any source distribution. Full text:
@@ -16,8 +17,8 @@
 #include "normal_codec.hlsli"
 #include "profile.hlsli"
 
-// Varyings of light_surface.vert, read by the surface light fragment shaders. CHI_POINT_LIGHTS: without the area light
-// fields (light_common.hlsli).
+// Varyings of light_surface.vert, read by the surface light fragment shaders. The `_mask` programs (CHI_POINT_LIGHTS):
+// without the area light fields (light_common.hlsli).
 #if defined(CHI_LIGHT_MASK) && defined(CHI_POINT_LIGHTS)
 // The `_mask` programs: the three mask vectors (light_mask.hlsli) before shadow.
 #define CHI_SURFACE_LIGHT_VARYINGS                         \
@@ -31,15 +32,6 @@
     nointerpolation float4 maskU : TEXCOORD7;              \
     nointerpolation float4 maskV : TEXCOORD8;              \
     nointerpolation float4 shadow : TEXCOORD9; /* last: the unshadowed programs do not read it (D3D12 wants a prefix) */
-#elif defined(CHI_POINT_LIGHTS)
-#define CHI_SURFACE_LIGHT_VARYINGS                         \
-    float2 scene : TEXCOORD0;                              \
-    nointerpolation float4 positionRadius : TEXCOORD1;     \
-    nointerpolation float4 colorFalloff : TEXCOORD2;       \
-    nointerpolation float4 directionType : TEXCOORD3;      \
-    nointerpolation float4 spotCos : TEXCOORD4;            \
-    nointerpolation float4 profile : TEXCOORD5;            \
-    nointerpolation float4 shadow : TEXCOORD6; /* last: the unshadowed programs do not read it (D3D12 wants a prefix) */
 #else
 #define CHI_SURFACE_LIGHT_VARYINGS                         \
     float2 scene : TEXCOORD0;                              \

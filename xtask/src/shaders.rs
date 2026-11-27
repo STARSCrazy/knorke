@@ -9,17 +9,19 @@
 //! format is left out of that format's pack (only Chiaro's shadercross blobs have MSL).
 //!
 //! The source checksum in the pack header is taken over the shader sources (every file of
-//! `--sources`, default `<src>/../src` of each `--src` that has one, sorted by name); without
-//! sources it is taken over the inputs themselves.
+//! `--sources`, default `<src>/../src` and `<src>/../shared` of each `--src` that has them,
+//! sorted by name); without sources it is taken over the inputs themselves.
 //!
 //! `--compile <dir>` compiles every `<dir>/src/<name>.<vert|frag>.hlsl` into
 //! `<dir>/compiled/<name>.<stage>.spv` and `.dxil` with DXC (`--dxc <exe>`, else the
 //! environment variable `KNORKE_DXC`, else `dxc` on the PATH; it must be a build with SPIR-V
-//! support, the one of the Windows SDK has none). The reflection JSON (four counts) is written
-//! by hand next to the blobs and checked by the tests of the crate that owns the shaders;
-//! `compiled/sources.sum` records the checksum of the sources the blobs were built from; the
-//! pack is built afterwards as above. An `.msl` blob of a recompiled program is deleted: DXC
-//! cannot renew it, and a stale one would go into the MSL pack.
+//! support, the one of the Windows SDK has none), with `<dir>/shared` (the includes shared with
+//! Chiaro's programs in `<dir>/chiaro/src`) on the include path. The reflection JSON (four
+//! counts) is written by hand next to the blobs and checked by the tests of the crate that owns
+//! the shaders; `compiled/sources.sum` records the checksum of the sources the blobs were built
+//! from (`src` and `shared`); the pack is built afterwards as above. An `.msl` blob of a
+//! recompiled program is deleted: DXC cannot renew it, and a stale one would go into the MSL
+//! pack.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -202,7 +204,9 @@ fn build(args: &Args) -> Result<(), String> {
         None => args
             .src
             .iter()
-            .filter_map(|d| d.parent().map(|p| p.join("src")).filter(|p| p.is_dir()))
+            .filter_map(|d| d.parent())
+            .flat_map(|p| [p.join("src"), p.join("shared")])
+            .filter(|p| p.is_dir())
             .collect(),
     };
     let checksum = if sources.is_empty() {
@@ -258,6 +262,12 @@ fn compile(dir: &Path, dxc: Option<&Path>) -> Result<(), String> {
         .unwrap_or_else(|| PathBuf::from("dxc"));
     let out = dir.join("compiled");
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let shared = dir.join("shared");
+    let mut sources = sorted_files(&dir.join("src"))?;
+    if shared.is_dir() {
+        sources.extend(sorted_files(&shared)?);
+        sources.sort_by_key(|p| file_name(p));
+    }
     let mut compiled = 0;
     for path in sorted_files(&dir.join("src"))? {
         let fname = file_name(&path);
@@ -279,6 +289,8 @@ fn compile(dir: &Path, dxc: Option<&Path>) -> Result<(), String> {
             let status = std::process::Command::new(&dxc)
                 .args(["-T", profile, "-E", "main"])
                 .args(extra)
+                .arg("-I")
+                .arg(&shared)
                 .arg(&path)
                 .arg("-Fo")
                 .arg(&target)
@@ -296,7 +308,7 @@ fn compile(dir: &Path, dxc: Option<&Path>) -> Result<(), String> {
         compiled += 1;
     }
     // What the blobs were built from, for the owning crate's test that they are up to date.
-    let sum = checksum_of(&sorted_files(&dir.join("src"))?)?;
+    let sum = checksum_of(&sources)?;
     let sum_file = out.join("sources.sum");
     std::fs::write(&sum_file, format!("{sum:016x}\n"))
         .map_err(|e| format!("{}: {e}", sum_file.display()))?;

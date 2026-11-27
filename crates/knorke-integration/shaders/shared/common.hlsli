@@ -1,5 +1,6 @@
-// Origin: chiaro @ 9bc5b9b, shaders/src/common.hlsli, copied unchanged below this notice for the light row
-// programs (lightrow_*, ADR 0019), so they light exactly as Chiaro's light programs do.
+// Origin: chiaro @ 9bc5b9b, shaders/src/common.hlsli, copied unchanged below this notice.
+// Shared by Chiaro's programs (../chiaro/src, whose blobs are Chiaro's shadercross output of that revision) and
+// the light row programs (../src, ADR 0019), so these light exactly as Chiaro's did.
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any express or
 // implied warranty; the origin must not be misrepresented; altered source versions must be plainly marked as
 // such and this notice may not be removed or altered from any source distribution. Full text:

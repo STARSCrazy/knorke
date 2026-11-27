@@ -40,7 +40,7 @@ cbuffer LookupParams : register(b1, space3)
 #endif
 
 // A point of a line or rect light's emitter at emitter coordinates ts (t along U, s along V): its ground point in
-// mask texels and its height. Chiaro's ray ends at the nearest such point (ShadowTarget in light_common.hlsli).
+// mask texels and its height. Chiaro's ray ends at the nearest such point (ShadowTarget in Chiaro's light_common).
 #ifndef CHI_POINT_LIGHTS
 void EmitterPoint(SurfaceLightVaryings l, float2 ts, out float2 ground, out float zl)
 {
@@ -57,7 +57,7 @@ float Sight(SurfaceLightVaryings i, float2 start, float z, float r, float from);
 
 // maskT: the share of the way from the lamp at which the ray passes a window mask, 0 without one (a projector
 // mask, no mask). Chiaro's ray then ends there and stops 1.5 texels before it (MaskShadowStop in
-// light_common.hlsli); the receiver rule looks toward the window.
+// Chiaro's light_common.hlsli); the receiver rule looks toward the window.
 float Visibility(SurfaceLightVaryings i, Surface s, float maskT)
 {
     if (ROW_SLOT(i) < 0.0) {
