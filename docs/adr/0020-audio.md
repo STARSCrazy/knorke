@@ -24,3 +24,4 @@ Die Engine soll alte Spielsounds (Wizardry 7, Syndicate: 8-Bit-Mono-PCM, AdLib/O
 - Lineare Interpolation beim Umrechnen der Rate: billig und für alte 8-Bit-Quellen ausreichend; bessere Filter erst nach Hörvergleich.
 - Hall aus Raumgröße, Beugung um Ecken, HRTF: spätere Stufen, nur mit Messung.
 - Abhängigkeitsregel in `xtask/src/deps.rs`: `knorke-audio` darf nur `knorke-math` (und dessen Liste) nutzen; Fachmodule ohne Darstellung kennen `knorke-audio` nicht.
+- Host-Seite für SDL3: `knorke-audio-sdl` (2026-11-27). Rückruf mit `try_lock` auf einen festen Befehls-Eingang statt eigener Lock-free-Queue – ohne weitere Abhängigkeit; kommt das Spiel gerade dazwischen, wirken die Befehle einen Rückruf später (wenige ms). Darf außer SDL3 nur `knorke-audio`, `knorke-math`, `knorke-types` nutzen (`xtask/src/deps.rs`).

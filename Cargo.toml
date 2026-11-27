@@ -20,6 +20,7 @@ members = [
     "crates/knorke-integration",
     "crates/knorke-post",
     "crates/knorke-audio",
+    "crates/knorke-audio-sdl",
     "tests/contracts",
     "xtask",
 ]

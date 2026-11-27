@@ -157,6 +157,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "knorke-audio-sdl"
+version = "0.0.1"
+dependencies = [
+ "knorke-audio",
+ "knorke-math",
+ "sdl3-sys",
+]
+
+[[package]]
 name = "knorke-contract-tests"
 version = "0.0.1"
 dependencies = [
