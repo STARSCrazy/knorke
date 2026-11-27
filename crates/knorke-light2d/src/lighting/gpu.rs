@@ -532,8 +532,8 @@ impl<'d> LightingStage<'d> {
                 programs[slot(p)] = Some(program);
             }
         }
-        // The suns with a map have their own programs (`RowLights::record_sun`).
-        if draws.directional > self.rows.frame().suns {
+        // The suns with a map or without shadow have their own programs (`RowLights::record_sun`).
+        if draws.directional > self.rows.frame().suns + self.rows.frame().plain_suns {
             let program = program_for(LightPass::Directional, false, &modes);
             pipelines.prepare(shaders, program, LIGHT_FORMAT)?;
             programs[DIRECTIONAL] = Some(program);
@@ -627,7 +627,8 @@ impl<'d> LightingStage<'d> {
                     .is_some()
             })
         };
-        let chiaro_suns = self.draws.directional > self.rows.frame().suns;
+        let rows = self.rows.frame();
+        let chiaro_suns = self.draws.directional > rows.suns + rows.plain_suns;
         (self.draws.draws().iter()).any(|d| d.count > 0 && reads(self.programs[slot(d.program)]))
             || (chiaro_suns && reads(self.programs[DIRECTIONAL]))
     }
@@ -731,7 +732,7 @@ impl<'d> LightingStage<'d> {
         let linear = samplers.sampler(Filter::Linear);
         let surface_texture = frame.surface.or(frame.material);
         // The flat row light reads the projection from it too (lightrow_surface.hlsli).
-        let surface_params = if normal_mode || rows.lights + rows.suns > 0 {
+        let surface_params = if normal_mode || rows.lights + rows.suns + rows.plain_suns > 0 {
             SurfaceParams::new(p, w, h, frame.settings, &domain, frame.surface.is_some())
         } else {
             SurfaceParams::default()

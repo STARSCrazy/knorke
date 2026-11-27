@@ -32,6 +32,7 @@ cbuffer LookupParams : register(b1, space3)
                           // (Chiaro: 1), w tolerance below a top (Chiaro's HeightParams.y)
     float4 Domain;        // xy mask size in texels, w lightrow_truth.frag: lamp points per axis
     float4 WorldFromMask; // world = (dot(xy, m), dot(zw, m)) for a vector m in mask texels
+    float4 HeightCode;    // how the rows store heights (PackRun in lightrow.hlsli)
 };
 
 #ifdef CHI_MEDIUM // the *_medium programs: the including program defines the map's slots

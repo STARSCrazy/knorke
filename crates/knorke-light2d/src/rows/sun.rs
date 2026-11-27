@@ -50,12 +50,12 @@ pub const MAX_SUN_MAP: u32 = 8192;
 const SUN_RECEIVER_GAP: f32 = 1.0;
 
 /// Whether a directional light of [`LightList::directional`](crate::light_culling::LightList)
-/// can take its shadow from a map, in a frame [`super::frame_suits`] accepts: it casts shadows
-/// from every caster (E53), does not stand overhead
-/// and does not shine from below the horizon. All others stay with Chiaro's programs.
-pub fn sun_suits(g: &GpuDirectional, casters: Casters) -> bool {
-    let [x, y, slope, _] = g.dir_slope;
-    g.color[3] > 0.5 && casters == Casters::All && (x != 0.0 || y != 0.0) && slope > 0.0
+/// needs no map: it casts no shadow, or stands straight overhead (Chiaro's directional programs
+/// see everything then). The sun programs draw it without one in a frame
+/// [`super::frame_suits`] accepts, every other with a map: with a caster filter (E53) from its
+/// class's heights, from the horizon or below it too, where its rays do not rise.
+pub fn sun_plain(g: &GpuDirectional) -> bool {
+    g.color[3] < 0.5 || (g.dir_slope[0] == 0.0 && g.dir_slope[1] == 0.0)
 }
 
 /// How a sun's map lies over the mask. Lattice texel (I, J)'s middle is at
@@ -181,12 +181,13 @@ impl SunParams {
             origin: [g.origin[0], g.origin[1], g.size[0] as f32, g.size[1] as f32],
             inverse: g.inverse(),
             // A ground receiver reads a texel whose middle lies up to half a texel farther from
-            // the sun, so its height there is down to half a texel's rise below the ground.
-            // A soft sun's lowest ray rises slower and meets obstacles farther away; near the
-            // horizon the disc's lower half is cut at half the slope.
+            // (below the horizon: nearer to) the sun, so its height there is down to half a
+            // texel's rise below the ground. A soft sun's lowest ray rises slower and meets
+            // obstacles farther away; near the horizon the disc's lower half is cut at half the
+            // slope. A ray that does not rise walks until it leaves the mask.
             build: [
                 SUN_RECEIVER_GAP,
-                -slope * SUN_ALONG - 0.1,
+                -slope.abs() * SUN_ALONG - 0.1,
                 rise,
                 det::max(slope - rise, 0.5 * slope),
             ],
@@ -213,9 +214,16 @@ impl SunParams {
     }
 
     /// Mask texels a ray from a map texel walks at most toward the sun: until it rises above the
-    /// highest finite top from the lowest receiver.
+    /// highest finite top from the lowest receiver, or (a ray that does not rise) out of the
+    /// mask.
     fn reach(&self) -> f64 {
-        (f64::from(self.domain[3]) - f64::from(self.build[1])) / f64::from(self.build[3])
+        let rise = f64::from(self.build[3]);
+        let across = f64::from(self.domain[0]) + f64::from(self.domain[1]);
+        if rise > 0.0 {
+            (f64::from(self.domain[3]) - f64::from(self.build[1])) / rise
+        } else {
+            across
+        }
     }
 }
 
@@ -235,6 +243,8 @@ pub struct SunSource {
     /// the build reads pattern ids may change while the map holds: a texel that named an
     /// obstacle now gone was rebuilt with the mask change that took it out.)
     partial: f32,
+    /// Whose heights (E53): another class builds the map anew.
+    casters: Casters,
 }
 
 impl SunSource {
@@ -247,7 +257,13 @@ impl SunSource {
             snapped: mask.snapped,
             heights: [params.domain[2], params.domain[3]],
             partial: params.partial[0],
+            casters: Casters::All,
         }
+    }
+
+    /// The source of a map built from the heights of `casters`' class (E53).
+    pub fn with_casters(self, casters: Casters) -> Self {
+        Self { casters, ..self }
     }
 }
 
@@ -257,7 +273,7 @@ impl Source for SunSource {
     /// update it.
     fn refresh(&self, now: &Self, change: MaskChange<'_>) -> Refresh<Self> {
         let same = self.aim == now.aim && self.size == now.size && self.heights == now.heights;
-        if !same || self.partial != now.partial {
+        if !same || self.partial != now.partial || self.casters != now.casters {
             return Refresh::Build;
         }
         match change {
@@ -499,26 +515,26 @@ mod tests {
     }
 
     #[test]
-    fn suits_names_what_a_map_cannot_do() {
+    fn plain_names_the_suns_without_a_map() {
         let hard = sun(1.0, 2.0, 0.5);
-        assert!(sun_suits(&hard, Casters::All));
-        assert!(!sun_suits(&hard, Casters::Static), "caster filter");
+        assert!(!sun_plain(&hard));
         let soft = GpuDirectional {
             dir_slope: [hard.dir_slope[0], hard.dir_slope[1], 0.5, 0.01],
             ..hard
         };
-        assert!(sun_suits(&soft, Casters::All), "source radius");
+        assert!(!sun_plain(&soft), "source radius");
         let unshadowed = GpuDirectional {
             color: [1.0, 1.0, 1.0, 0.0],
             ..hard
         };
-        assert!(!sun_suits(&unshadowed, Casters::All), "no shadows");
+        assert!(sun_plain(&unshadowed), "no shadows");
         let overhead = GpuDirectional {
             dir_slope: [0.0; 4],
             ..hard
         };
-        assert!(!sun_suits(&overhead, Casters::All), "overhead");
-        assert!(!sun_suits(&sun(1.0, 0.0, -0.1), Casters::All), "from below");
+        assert!(sun_plain(&overhead), "overhead");
+        assert!(!sun_plain(&sun(1.0, 0.0, -0.1)), "from below");
+        assert!(!sun_plain(&sun(1.0, 0.0, 0.0)), "on the horizon");
     }
 
     #[test]

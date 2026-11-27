@@ -274,13 +274,13 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
         float2 middle = float2(0.5, 0.5);
         if (away.x > 0.0) {
             float2 angles = float2(-kFar, (1.0 - away.x - f) * angle);
-            float3 part = Part(Clip(UnpackRun(second.xy), from), angles, middle, zl, size, wide, z, r);
+            float3 part = Part(Clip(UnpackRun(second.xy, HeightCode), from), angles, middle, zl, size, wide, z, r);
             begin.x = -part.y;
             other.x = part.z;
         }
         if (away.y > 0.0) {
             float2 angles = float2((away.y - f) * angle, kFar);
-            float3 part = Part(Clip(UnpackRun(second.zw), from), angles, middle, zl, size, wide, z, r);
+            float3 part = Part(Clip(UnpackRun(second.zw, HeightCode), from), angles, middle, zl, size, wide, z, r);
             begin.y = part.x;
             other.y = part.z;
         }

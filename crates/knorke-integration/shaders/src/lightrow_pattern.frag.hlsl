@@ -25,6 +25,7 @@ cbuffer LookupParams : register(b0, space3)
     float4 RowSize; // x angles, y rows of the atlas
     float4 Domain;  // xy mask size in texels
     float4 WorldFromMask;
+    float4 HeightCode; // how the rows store heights (PackRun in lightrow.hlsli)
 };
 
 // `PatternParams` of knorke-light2d (Chiaro's pattern.hlsli).

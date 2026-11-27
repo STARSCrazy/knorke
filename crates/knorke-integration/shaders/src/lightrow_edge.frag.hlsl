@@ -20,6 +20,7 @@ cbuffer EdgeParams : register(b0, space3)
     float4 RowSize; // x angles, y lamps, z most angles walked to each side (below kEdgeFar)
     float4 Near;    // x lamp size (world) per angle of penumbra behind an obstacle one texel away, y the distance
                     // in texels from which on a penumbra is whole: nearer obstacles get theirs cut
+    float4 HeightCode; // how the row stores heights (PackRun in lightrow.hlsli)
 };
 
 #include "lightrow_runs.hlsli"
@@ -113,6 +114,6 @@ EdgeOutput main(SurfaceLightVaryings i)
     o.first = float4(same[0][0] + 64.0 * same[1][0] + 4096.0 * (same[0][1] + 64.0 * same[1][1]),
                      same[0][2] + 64.0 * same[1][2] + 4096.0 * (same[0][3] + 64.0 * same[1][3]),
                      away[0] + 64.0 * away[1], where);
-    o.second = float4(PackRun(strange[0]), PackRun(strange[1]));
+    o.second = float4(PackRun(strange[0], HeightCode), PackRun(strange[1], HeightCode));
     return o;
 }

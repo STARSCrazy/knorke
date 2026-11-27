@@ -1,5 +1,5 @@
 // Light rows (ADR 0019): reading a lamp's row. The including program declares RowFirst, RowSecond
-// with their samplers and RowSize (x angles, y lamps) before.
+// with their samplers, RowSize (x angles, y lamps) and HeightCode (lightrow.hlsli) before.
 #ifndef KNORKE_LIGHTROW_RUNS_HLSLI
 #define KNORKE_LIGHTROW_RUNS_HLSLI
 
@@ -13,10 +13,10 @@ void Runs(float a, float row, out float4 runs[kRuns], out float4 pass)
     float4 second = RowSecond.SampleLevel(RowSecondSampler, uv, 0.0);
     bool partial = first.x < 0.0;
     first.x = partial ? -1.0 - first.x : first.x;
-    runs[0] = UnpackRun(first.xy);
-    runs[1] = UnpackRun(first.zw);
-    runs[2] = UnpackRun(second.xy);
-    runs[3] = partial ? float4(0.0, 0.0, 0.0, 0.0) : UnpackRun(second.zw);
+    runs[0] = UnpackRun(first.xy, HeightCode);
+    runs[1] = UnpackRun(first.zw, HeightCode);
+    runs[2] = UnpackRun(second.xy, HeightCode);
+    runs[3] = partial ? float4(0.0, 0.0, 0.0, 0.0) : UnpackRun(second.zw, HeightCode);
     float b = second.z;
     pass = partial ? float4(fmod(b, 256.0), fmod(floor(b / 256.0), 256.0), floor(b / 65536.0), 0.0) / 255.0
                    : float4(0.0, 0.0, 0.0, 0.0);

@@ -21,6 +21,7 @@ cbuffer RowParams : register(b0, space3)
 {
     float4 WorldFromMask; // world = (dot(xy, m), dot(zw, m)) for a vector m in mask texels
     float4 Domain;        // xy mask size in texels, z march step in texels, w 1 if an obstacle is partly transparent
+    float4 HeightCode;    // how the row stores heights (PackRun in lightrow.hlsli)
 };
 
 struct RowOutput
@@ -230,8 +231,8 @@ RowOutput main(SurfaceLightVaryings i)
         pass[2] *= pass[3];
     }
     RowOutput o;
-    o.first = float4(PackRun(runs[0]), PackRun(runs[1]));
-    o.second = float4(PackRun(runs[2]), partial ? PackPasses(pass[0], pass[1], pass[2]) : PackRun(runs[3]));
+    o.first = float4(PackRun(runs[0], HeightCode), PackRun(runs[1], HeightCode));
+    o.second = float4(PackRun(runs[2], HeightCode), partial ? PackPasses(pass[0], pass[1], pass[2]) : PackRun(runs[3], HeightCode));
     o.first.x = partial ? -1.0 - o.first.x : o.first.x;
     return o;
 }

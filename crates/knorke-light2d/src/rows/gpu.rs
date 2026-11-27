@@ -11,16 +11,17 @@ use knorke_gpu::sys::gpu::{
 use knorke_gpu::{
     Bindings, Blend, ColorTarget, CommandBuffer, CopyPass, Filter, Gpu, Load, PipelineCache,
     ProgramDesc, RenderPass, RenderTarget, SamplerBinding, Samplers, SecondTarget, ShaderLibrary,
-    StageBindings, UploadBuffer,
+    StageBindings, TextureRef, UploadBuffer,
 };
 use knorke_math::bytemuck;
 use knorke_types::{Diagnostic, DiagnosticCode};
 
 use super::{
-    MAX_ROWS, MAX_SUN_BANDS, MAX_SUN_MAP, MAX_SUNS, ROW_ANGLES, Refresh, RowBuildParams, RowCache,
+    MAX_SUN_BANDS, MAX_SUN_MAP, MAX_SUNS, ROW_ANGLES, Refresh, RowBuildParams, RowCache,
     RowEdgeParams, RowLamp, RowLight, RowLookupParams, RowMask, RowSpace, SUPPORTS, SunBands,
-    SunCache, SunGrid, SunParams, SunSource, frame_suits, sun_bands, sun_suits,
+    SunCache, SunGrid, SunParams, SunSource, height_code, sun_bands, sun_plain,
 };
+use crate::light_culling::Casters;
 use crate::light_pipelines::MATERIAL_TARGET_FORMAT;
 use crate::lighting::{
     DetailMode, LIGHT_FORMAT, LightSurfacePassParams, LightingFrame, ShadowMaps, height_tolerance,
@@ -252,6 +253,8 @@ pub struct RowsRecord {
     pub edges: u32,
     /// Directional lights drawn with a sun map.
     pub suns: u32,
+    /// Directional lights drawn by the sun programs without a map ([`sun_plain`]).
+    pub plain_suns: u32,
     /// Sun maps built whole.
     pub suns_built: u32,
     /// Sun maps updated in part (a pan, redrawn rectangles).
@@ -281,6 +284,8 @@ struct FrameSun {
     map: u32,
     work: MapWork,
     params: SunParams,
+    /// Whose heights its map is built from (E53).
+    casters: Casters,
 }
 
 impl FrameSun {
@@ -317,12 +322,17 @@ pub struct RowLights<'d> {
     /// Rows built this frame: index into the frame's row lights times [`SUPPORTS`] plus the
     /// support point; kept for its storage.
     dirty: Vec<u32>,
+    /// The row of each of the frame's row lights, [`SUPPORTS`] places each (-1: none); kept for its
+    /// storage.
+    slots: Vec<f32>,
     frame: RowsRecord,
     detail: DetailMode,
     /// The frame has neither surface nor material buffer.
     flat: bool,
     /// The frame has a medium world map: the `_medium` programs.
     medium: bool,
+    /// How the rows hold heights ([`height_code`]); another code rebuilds them all.
+    heights: [f32; 4],
     /// The sun maps (`lightrow_sun_build.frag`).
     maps: [RenderTarget<'d>; MAX_SUNS],
     /// Their second targets, a soft sun's or a map's with partly transparent runs.
@@ -354,11 +364,13 @@ impl<'d> RowLights<'d> {
             ),
             pipelines: None,
             cache: RowCache::default(),
-            dirty: Vec::with_capacity(MAX_ROWS as usize),
+            dirty: Vec::new(),
+            slots: Vec::new(),
             frame: RowsRecord::default(),
             detail: DetailMode::None,
             flat: false,
             medium: false,
+            heights: height_code(0.0),
             maps: core::array::from_fn(|_| RenderTarget::new(gpu)),
             reaches: core::array::from_fn(|_| RenderTarget::new(gpu)),
             partials: core::array::from_fn(|_| [RenderTarget::new(gpu), RenderTarget::new(gpu)]),
@@ -445,7 +457,7 @@ impl<'d> RowLights<'d> {
         let allocations = self.prepare_suns(frame)? + self.prepare_rows(frame)?;
 
         let f = self.frame;
-        if f.lights + f.suns == 0 {
+        if f.lights + f.suns + f.plain_suns == 0 {
             return Ok(allocations);
         }
         let pipelines = match &mut self.pipelines {
@@ -468,7 +480,11 @@ impl<'d> RowLights<'d> {
             (f.built > 0, BUILD, ROW_FORMAT),
             (f.edges > 0, EDGE, ROW_FORMAT),
             (f.built > 0 && patterns, PATTERN, ROW_FORMAT),
-            (f.suns > 0, sun_program(detail, flat, medium), LIGHT_FORMAT),
+            (
+                f.suns + f.plain_suns > 0,
+                sun_program(detail, flat, medium),
+                LIGHT_FORMAT,
+            ),
         ];
         for (needed, program, format) in programs {
             if needed {
@@ -483,8 +499,8 @@ impl<'d> RowLights<'d> {
         Ok(allocations)
     }
 
-    /// The frame's suns with a map ([`sun_suits`], in a frame [`frame_suits`] accepts with
-    /// active shadows; at most [`MAX_SUNS`]) and
+    /// The frame's suns with a map (not [`sun_plain`], in a row frame with active shadows; at
+    /// most [`MAX_SUNS`]) and
     /// their maps. A map no sun uses this frame is released: the cache builds it anew when a sun
     /// takes it again. Returns the maps (re)allocated.
     fn prepare_suns(&mut self, frame: &LightingFrame<'_>) -> Result<u32, Diagnostic> {
@@ -492,18 +508,17 @@ impl<'d> RowLights<'d> {
         let mut n = 0;
         if let Some(s) = frame.shadows.filter(|s| s.height_mode) {
             let mask = row_mask(s);
-            let suits = SunGrid::size_of(mask.size)[1] <= MAX_SUN_MAP
-                && frame_suits(frame.settings, s.scene_max_top);
+            let suits = SunGrid::size_of(mask.size)[1] <= MAX_SUN_MAP && frame.settings.light_rows;
             let tolerance = height_tolerance(frame.settings);
             let candidates = (list.directional.iter().zip(&list.directional_casters))
                 .zip(&list.directional_rise)
                 .enumerate()
-                .filter(|(_, ((g, c), _))| suits && sun_suits(g, **c));
-            for (i, ((g, _), &rise)) in candidates {
+                .filter(|(_, ((g, _), _))| suits && !sun_plain(g));
+            for (i, ((g, &casters), &rise)) in candidates {
                 let (top, snapped) = (s.scene_max_top, mask.snapped);
                 let params = SunParams::new(g, rise, mask.size, snapped, tolerance, top)
                     .with_partial(s.any_partial, s.patterns.is_some());
-                let source = SunSource::new(&params, &mask);
+                let source = SunSource::new(&params, &mask).with_casters(casters);
                 let Some((map, refresh)) = self.sun_cache.assign(i as u64, source, mask.change)
                 else {
                     break; // all maps taken
@@ -524,6 +539,7 @@ impl<'d> RowLights<'d> {
                     map,
                     work,
                     params,
+                    casters,
                 };
                 n += 1;
             }
@@ -561,12 +577,19 @@ impl<'d> RowLights<'d> {
                 f.work = MapWork::Build;
             }
         }
-        if n > 0 {
+        // In a row frame the sun programs draw every directional light without shadow too.
+        let plain = if frame.settings.light_rows {
+            list.directional.iter().filter(|g| sun_plain(g)).count()
+        } else {
+            0
+        };
+        if n + plain > 0 {
             // The stand-in for the pattern records of a frame without them.
             let bytes = MAX_SUNS * MAX_SUN_BANDS * SUN_BAND_SIZE;
             self.band_buffer.reserve(bytes as u64)?;
         }
         self.frame.suns = n as u32;
+        self.frame.plain_suns = plain as u32;
         for (f, bands) in self.suns[..n].iter().zip(&self.bands) {
             let texels = match f.work {
                 MapWork::Keep => 0,
@@ -603,6 +626,12 @@ impl<'d> RowLights<'d> {
         // Without the occlusion stage nothing casts a shadow this frame. (Not `height`: the
         // stage creates its textures when it records its first frame.)
         let shadows = frame.shadows.filter(|s| s.height_mode);
+        if let Some(code) = shadows.map(|s| height_code(s.scene_max_top))
+            && code != self.heights
+        {
+            self.heights = code;
+            self.cache.invalidate();
+        }
         // A row sees nothing beyond the mask's rim, so an empty strip a pan exposed or pushed
         // out changes nothing in it.
         let mask = shadows.map(|s| RowMask {
@@ -614,10 +643,16 @@ impl<'d> RowLights<'d> {
         // Twice at most: growing the atlas loses its rows, so every lamp is assigned anew.
         for _ in 0..2 {
             self.dirty.clear();
+            self.slots.clear();
+            self.slots.resize(lights.len() * SUPPORTS as usize, -1.0);
             for (i, light) in lights.iter().enumerate() {
                 for k in 0..light.rows() {
-                    if let Some((_, true)) = self.assign(&light.support(k), mask.as_ref()) {
-                        self.dirty.push(i as u32 * SUPPORTS + k);
+                    let at = i as u32 * SUPPORTS + k;
+                    if let Some((row, build)) = self.assign(&light.support(k), mask.as_ref()) {
+                        self.slots[at as usize] = row as f32;
+                        if build {
+                            self.dirty.push(at);
+                        }
                     }
                 }
             }
@@ -629,9 +664,11 @@ impl<'d> RowLights<'d> {
             }
             self.cache.invalidate();
         }
-        // The lamps with an edge row first.
-        self.dirty
-            .sort_unstable_by_key(|&i| built(lights, i).size <= 0.0);
+        // The lamps with an edge row first, each part by caster class (one build draw a class).
+        self.dirty.sort_unstable_by_key(|&i| {
+            let lamp = built(lights, i);
+            (lamp.size <= 0.0, class(lamp.casters))
+        });
         let edges = self
             .dirty
             .iter()
@@ -654,36 +691,23 @@ impl<'d> RowLights<'d> {
         let mut mapped = self.lamps.map()?;
         let bytes = mapped.bytes();
         let mut at = 0;
-        let order = lights
-            .iter()
-            .filter(|l| l.mask.is_none())
-            .chain(lights.iter().filter(|l| l.mask.is_some()))
-            .copied()
-            .chain(self.dirty.iter().map(|&i| built(lights, i)));
-        // Assigned above: asking again in the same frame returns the same row. Without the mask
-        // no lamp has one.
-        let slot = |key| {
-            self.cache
-                .row_of(key)
-                .filter(|_| mask.is_some())
-                .map_or(-1.0, |r| r as f32)
-        };
-        for (n, light) in order.enumerate() {
-            let row = if light.shadowed {
-                slot(light.key)
-            } else {
-                -1.0
-            };
+        // Each lamp with the place of its first row in `slots` (-1 without; a line or rect
+        // light's support points follow it), the lights in the order of their draws.
+        let order = LIGHT_DRAWS
+            .into_iter()
+            .flat_map(|draw| (0..lights.len()).filter(move |&i| in_draw(&lights[i], draw)))
+            .map(|i| (i * SUPPORTS as usize, lights[i]))
+            .chain((self.dirty.iter()).map(|&i| (i as usize, built(lights, i))));
+        for (n, (slot, light)) in order.enumerate() {
             let mut lamp = RowLamp {
                 light: light.light,
-                row: [row, light.size, 0.0, 0.0],
+                row: [self.slots[slot], light.size, 0.0, 0.0],
                 mask: light.mask.unwrap_or_default(),
                 window: light.window[0],
                 window_v: light.window[1],
             };
             if n < lights.len() && light.is_area() && light.shadowed {
-                // Support point k's key is the light's plus k (`RowLight::support`).
-                lamp.light.profile = [0, 1, 2, 3].map(|k| slot(light.key + k));
+                lamp.light.profile = [0, 1, 2, 3].map(|k| self.slots[slot + k]);
             }
             bytes[at..at + RowLamp::SIZE].copy_from_slice(&lamp.to_bytes());
             at += RowLamp::SIZE;
@@ -817,6 +841,7 @@ impl<'d> RowLights<'d> {
             }
             let mut pass = cmd.render_pass(&targets[..used])?;
             let update = sun.work == MapWork::Update;
+            let (class_mask, class_heights) = class_maps(shadows, sun.casters)?;
             let vertex = match (update, buffer) {
                 (true, Some(buffer)) => StageBindings {
                     storage_buffers: &[buffer],
@@ -834,8 +859,8 @@ impl<'d> RowLights<'d> {
                         // The partial program reads mask and ids too (the ids only with
                         // pattern obstacles).
                         samplers: &[
-                            heights,
-                            shadows.mask,
+                            class_heights,
+                            class_mask,
                             shadows.patterns.as_ref().map_or(heights, |p| p.ids),
                         ]
                         .map(|t| SamplerBinding::new(t, nearest))
@@ -865,59 +890,61 @@ impl<'d> RowLights<'d> {
             .ok_or_else(|| missing("the lamp buffer"))?];
         let vertex = Self::pass_params(frame, self.frame.lights, rows);
         let vertex_uniforms: [&[u8]; 1] = [&vertex];
-        let passes: [(usize, u32, _, &[SamplerBinding<'_>], [u8; 32]); 2] = [
-            (
-                BUILD,
-                self.frame.built,
-                [first, second],
-                &[
-                    SamplerBinding::new(heights, nearest),
-                    SamplerBinding::new(shadows.mask, nearest),
-                ],
-                RowBuildParams::new(&space, mask, shadows.any_partial).to_bytes(),
-            ),
-            (
-                EDGE,
-                self.frame.edges,
-                if self.frame.edges > 0 {
-                    self.atlas(&self.edges)?
-                } else {
-                    [first, second]
-                },
-                &[
-                    SamplerBinding::new(first, nearest),
-                    SamplerBinding::new(second, nearest),
-                ],
-                RowEdgeParams::new(&space, rows).to_bytes(),
-            ),
-        ];
-        for (program, count, targets, textures, params) in passes {
-            if count == 0 {
-                continue;
-            }
-            let targets = targets.map(|t| ColorTarget::new(t, Load::Load));
-            let mut pass = cmd.render_pass(&targets)?;
-            let fragment_uniforms: [&[u8]; 1] = [&params];
+        let bind = |pass: &mut RenderPass<'_>,
+                    program,
+                    vertex: &[u8],
+                    textures: &[SamplerBinding<'_>],
+                    params: &[u8]| {
             pass.bind_program(
                 self.pipeline(program, ROW_FORMAT)?,
                 &Bindings {
                     vertex: StageBindings {
                         storage_buffers: &lamps,
-                        uniforms: &vertex_uniforms,
+                        uniforms: &[vertex],
                         ..Default::default()
                     },
                     fragment: StageBindings {
                         samplers: textures,
-                        uniforms: &fragment_uniforms,
+                        uniforms: &[params],
                         ..Default::default()
                     },
                 },
-            )?;
-            pass.draw_instanced(6, count)?;
+            )
+        };
+        // One draw per caster class of the built lamps (`dirty` is ordered so), from the class's
+        // heights and mask.
+        let lights = &frame.lights.rows[..];
+        let params = RowBuildParams::new(&space, mask, shadows.any_partial, self.heights);
+        let params = params.to_bytes();
+        let mut pass =
+            cmd.render_pass(&[first, second].map(|t| ColorTarget::new(t, Load::Load)))?;
+        let mut at = 0;
+        while at < self.dirty.len() {
+            let casters = built(lights, self.dirty[at]).casters;
+            let n = (self.dirty[at..].iter())
+                .take_while(|&&i| built(lights, i).casters == casters)
+                .count();
+            let (class_mask, class_heights) = class_maps(shadows, casters)?;
+            let vertex = Self::pass_params(frame, self.frame.lights + at as u32, rows);
+            let textures = [class_heights, class_mask].map(|t| SamplerBinding::new(t, nearest));
+            bind(&mut pass, BUILD, &vertex, &textures, &params)?;
+            pass.draw_instanced(6, n as u32)?;
+            at += n;
+        }
+        drop(pass);
+        if self.frame.edges > 0 {
+            let targets = self
+                .atlas(&self.edges)?
+                .map(|t| ColorTarget::new(t, Load::Load));
+            let mut pass = cmd.render_pass(&targets)?;
+            let textures = [first, second].map(|t| SamplerBinding::new(t, nearest));
+            let params = RowEdgeParams::new(&space, rows, self.heights).to_bytes();
+            bind(&mut pass, EDGE, &vertex, &textures, &params)?;
+            pass.draw_instanced(6, self.frame.edges)?;
         }
         if let Some(p) = &shadows.patterns {
             // After the build: it reads the runs.
-            let lookup = RowLookupParams::new(&space, mask, rows, 0.0).to_bytes();
+            let lookup = RowLookupParams::new(&space, mask, rows, 0.0, self.heights).to_bytes();
             let target =
                 (self.crossings.texture_ref()).ok_or_else(|| missing("the crossing atlas"))?;
             let mut pass = cmd.render_pass(&[ColorTarget::new(target, Load::Load)])?;
@@ -1009,6 +1036,7 @@ impl<'d> RowLights<'d> {
                 [s.domain.width, s.domain.height],
                 row0.height(),
                 height_tolerance(frame.settings),
+                self.heights,
             ),
             None => RowLookupParams::default(),
         }
@@ -1018,16 +1046,27 @@ impl<'d> RowLights<'d> {
             fragment_uniforms[3] = m.params;
         }
         let uniforms = 3 + usize::from(medium.is_some());
-        let plain = self.frame.lights - self.frame.masked;
-        for (masked, first, count) in [(false, 0, plain), (true, plain, self.frame.masked)] {
+        let mut first = 0;
+        for draw in LIGHT_DRAWS {
+            let (masked, casters) = draw;
+            let count = (frame.lights.rows.iter())
+                .filter(|l| in_draw(l, draw))
+                .count() as u32;
             if count == 0 {
                 continue;
             }
             let vertex = Self::pass_params(frame, first, 0);
+            first += count;
             let vertex_uniforms: [&[u8]; 1] = [&vertex];
             let mut samplers = usize::from(exact) + usize::from(masked) + 10;
-            // A copy: the unmasked lamps' medium map takes the masked ones' mask atlas place.
+            // A copy: the unmasked lamps' medium map takes the masked ones' mask atlas place;
+            // the receiver rule reads the class's mask and heights.
             let mut textures = textures;
+            if let Some(s) = &shadows {
+                let (class_mask, class_heights) = class_maps(s, casters)?;
+                textures[1].texture = class_mask;
+                textures[2].texture = class_heights;
+            }
             if let Some(m) = &medium {
                 textures[samplers] = SamplerBinding::new(m.map, nearest);
                 samplers += 1;
@@ -1057,8 +1096,9 @@ impl<'d> RowLights<'d> {
     }
 
     /// The directional light `light` (index into `LightList::directional`) into the open light
-    /// pass if the prepared frame gave it a sun map, one fullscreen draw; `false` if not (it is
-    /// Chiaro's then). `surface_params` is the pass's `SurfaceParams` block.
+    /// pass if the prepared frame gave it a sun map or it needs none ([`sun_plain`], in a row
+    /// frame), one fullscreen draw; `false` if not (it is Chiaro's then). `surface_params` is
+    /// the pass's `SurfaceParams` block.
     ///
     /// # Errors
     /// Not prepared, or a binding failed.
@@ -1071,27 +1111,46 @@ impl<'d> RowLights<'d> {
         light: usize,
     ) -> Result<bool, Diagnostic> {
         let suns = &self.suns[..self.frame.suns as usize];
-        let Some(sun) = suns.iter().find(|s| s.light as usize == light) else {
-            return Ok(false);
-        };
-        let shadows = frame.shadows.ok_or_else(|| missing("the occlusion mask"))?;
-        let map = self.maps[sun.map as usize]
-            .texture_ref()
-            .ok_or_else(|| missing("a sun map"))?;
+        let sun = suns.iter().find(|s| s.light as usize == light);
+        let plain = (frame.lights.directional.get(light))
+            .filter(|g| self.frame.plain_suns > 0 && sun_plain(g));
         // Neither surface nor material buffer: the flat program does not read the first; a hard
         // sun does not read the second map, a map without partly transparent runs not the next
-        // two, a frame without pattern obstacles not the atlas and the records.
+        // two, a frame without pattern obstacles not the atlas and the records; a sun without
+        // map reads none of the shadow textures.
         let stand_in = frame.scene;
-        let [p0, p1] = &self.partials[sun.map as usize];
-        let patterns = shadows.patterns.as_ref();
+        let (params, shadows, [map, reach, p0, p1]) = match (sun, plain) {
+            (Some(sun), _) => {
+                let shadows = frame.shadows.ok_or_else(|| missing("the occlusion mask"))?;
+                let k = sun.map as usize;
+                let map = (self.maps[k].texture_ref()).ok_or_else(|| missing("a sun map"))?;
+                let [p0, p1] = &self.partials[k];
+                let more = [&self.reaches[k], p0, p1].map(|t| t.texture_ref().unwrap_or(map));
+                (sun.params, Some(shadows), [map, more[0], more[1], more[2]])
+            }
+            (None, Some(g)) => {
+                let mut params = SunParams {
+                    light: *g,
+                    ..SunParams::default()
+                };
+                params.light.color[3] = 0.0; // visibility 1 (lightrow_sun_surface.hlsli)
+                (params, None, [stand_in; 4])
+            }
+            (None, None) => return Ok(false),
+        };
+        let patterns = shadows.and_then(|s| s.patterns.as_ref());
+        let (mask, height) = match (shadows, sun) {
+            (Some(s), Some(sun)) => class_maps(s, sun.casters)?,
+            _ => (stand_in, stand_in),
+        };
         let mut textures = [
             frame.surface.or(frame.material).unwrap_or(stand_in),
-            shadows.mask,
-            shadows.height.ok_or_else(|| missing("the height map"))?,
+            mask,
+            height,
             map,
-            self.reaches[sun.map as usize].texture_ref().unwrap_or(map),
-            p0.texture_ref().unwrap_or(map),
-            p1.texture_ref().unwrap_or(map),
+            reach,
+            p0,
+            p1,
             patterns.map_or(map, |p| p.atlas),
             frame.material.unwrap_or(stand_in),
             map, // the medium map's place (below)
@@ -1113,7 +1172,7 @@ impl<'d> RowLights<'d> {
             (self.band_buffer.buffer_ref()).ok_or_else(|| missing("the sun band buffer"))?;
         let records = patterns.map_or([stand_in; 3], |p| [p.obstacles, p.records, p.data]);
         let pattern_params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
-        let params = sun.params.to_bytes();
+        let params = params.to_bytes();
         let uniforms: [&[u8]; 4] = [
             surface_params,
             &params,
@@ -1164,6 +1223,38 @@ impl<'d> RowLights<'d> {
 /// The lamp of a `dirty` entry.
 fn built(lights: &[RowLight], i: u32) -> RowLight {
     lights[(i / SUPPORTS) as usize].support(i % SUPPORTS)
+}
+
+/// The draws of the row lights in lamp buffer order: the unmasked ones, then the masked ones
+/// (their own programs), each by caster class (the class's mask and heights).
+const LIGHT_DRAWS: [(bool, Casters); 6] = [
+    (false, Casters::All),
+    (false, Casters::Static),
+    (false, Casters::Dynamic),
+    (true, Casters::All),
+    (true, Casters::Static),
+    (true, Casters::Dynamic),
+];
+
+fn in_draw(light: &RowLight, (masked, casters): (bool, Casters)) -> bool {
+    light.mask.is_some() == masked && light.casters == casters
+}
+
+/// The order of the caster classes in the draws.
+fn class(casters: Casters) -> usize {
+    casters.filter_index().map_or(0, |i| i + 1)
+}
+
+/// The mask and heights of `casters`' class.
+fn class_maps<'s>(
+    s: &'s ShadowMaps<'_>,
+    casters: Casters,
+) -> Result<(TextureRef<'s>, TextureRef<'s>), Diagnostic> {
+    let maps = s.maps(casters)?;
+    Ok((
+        maps.mask,
+        (maps.height).ok_or_else(|| missing("the height map"))?,
+    ))
 }
 
 fn row_mask<'a>(s: &'a ShadowMaps<'a>) -> RowMask<'a> {

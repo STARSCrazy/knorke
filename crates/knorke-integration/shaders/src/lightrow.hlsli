@@ -33,21 +33,22 @@ static const float kEdgeFar = 63.0;        // lightrow_edge.frag: the outline li
 static const float kInfiniteTop = 60000.0; // tops from here on are infinitely tall (the mask writes 65504)
 
 // A row texel holds two runs as four floats, each two 12-bit numbers (exact in a 32-bit float): distances in quarter
-// texels (up to 1023.75), heights in hundredths; top 4095 is infinitely tall. A finite top of 40.9 (MAX_TOP of
-// `knorke_light2d::rows`) or more would read as infinite, so such a frame draws no row lights.
-float2 PackRun(float4 run) // rn, rf, base, top
+// texels (up to 1023.75), heights in the frame's unit; top 4095 is infinitely tall. `code` is `height_code` of
+// `knorke_light2d::rows`: x 1 / unit, y the unit (hundredths, coarser with tops from 40.9 on), z the top from which
+// on an obstacle is infinitely tall, above every finite top of the frame.
+float2 PackRun(float4 run, float4 code) // rn, rf, base, top
 {
     float2 d = round(clamp(run.xy, 0.0, 1023.75) * 4.0);
-    float b = round(clamp(run.z, 0.0, 40.9) * 100.0);
-    float t = run.w >= 40.9 ? 4095.0 : round(max(run.w, 0.0) * 100.0);
+    float b = round(clamp(run.z, 0.0, code.z) * code.x);
+    float t = run.w >= code.z ? 4095.0 : round(max(run.w, 0.0) * code.x);
     return float2(d.x + 4096.0 * d.y, b + 4096.0 * t);
 }
 
-float4 UnpackRun(float2 packed)
+float4 UnpackRun(float2 packed, float4 code)
 {
     float2 hi = floor(packed / 4096.0);
     float2 lo = packed - hi * 4096.0;
-    return float4(lo.x * 0.25, hi.x * 0.25, lo.y * 0.01, hi.y >= 4095.0 ? 65504.0 : hi.y * 0.01);
+    return float4(lo.x * 0.25, hi.x * 0.25, lo.y * code.y, hi.y >= 4095.0 ? 65504.0 : hi.y * code.y);
 }
 
 // An angle with a partly transparent run: the first float is -1 - its value (all 24 bits are taken, and -0 would not

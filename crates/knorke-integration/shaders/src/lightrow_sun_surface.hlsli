@@ -45,10 +45,13 @@ cbuffer SunParams : register(b1, space3)
 // Share of the sun the place `start` (mask texels) at height z sees.
 float SunSight(float2 start, float z);
 
-// Visibility of the sun from surface pixel `scene` (base surface s). The sun casts shadows and does not stand
-// overhead (the light stage draws only such suns with these programs).
+// Visibility of the sun from surface pixel `scene` (base surface s). A sun without shadows (Color.w 0) or straight
+// overhead sees everything, as in Chiaro's directional programs; it binds no map, and stand-ins for the textures.
 float Visibility(float2 scene, Surface s)
 {
+    if (Color.w < 0.5 || all(DirSlope.xy == 0.0)) {
+        return 1.0;
+    }
     float2 start;
     float z;
     SurfaceRayStart(scene, s, OriginZAxis, MaskMap, MaskRemainder, XYAxes, SceneStep.z, start, z);

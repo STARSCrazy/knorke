@@ -175,7 +175,9 @@ pub struct MaskRecord {
     pub draws: u32,
     /// Field texels the distance passes wrote (the caster fields included).
     pub field_texels: u64,
-    /// Caster class fields built (E53): 0, 1 or 2.
+    /// Caster class masks drawn (E53): 0, 1 or 2.
+    pub caster_masks: u32,
+    /// Caster class fields built: as many as masks while Chiaro's programs read a field.
     pub caster_fields: u32,
 }
 
@@ -590,9 +592,14 @@ impl<'d> OcclusionMask<'d> {
             };
             out.draws +=
                 self.record_mask(cmd, pipelines, nearest, &sources, mask, height, false)?;
-            let field = view(&t.field, "caster field")?;
-            out.field_texels += self.record_field(cmd, pipelines, nearest, mask, field, false)?;
-            out.caster_fields += 1;
+            out.caster_masks += 1;
+            // Only Chiaro's programs read a field; the rows and sun maps of a class its mask.
+            if self.field_needed {
+                let field = view(&t.field, "caster field")?;
+                out.field_texels +=
+                    self.record_field(cmd, pipelines, nearest, mask, field, false)?;
+                out.caster_fields += 1;
+            }
         }
         Ok(())
     }

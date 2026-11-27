@@ -97,9 +97,10 @@ impl core::fmt::Debug for LightModes<'_> {
 }
 
 /// Which obstacles cast a light's shadow (E53).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Casters {
     /// Every caster.
+    #[default]
     All,
     /// Only static shapes, tile grids and the occlusion layer.
     Static,
@@ -717,6 +718,11 @@ pub fn collect_lights(
                 window = [[cx, cy, ux, uy], [vx, vy, 0.0, 0.0]];
             }
         }
+        let casters = if d.cast_shadows {
+            casters_of(d)
+        } else {
+            Casters::All
+        };
         if modes.rows {
             let row = RowLight {
                 light: g,
@@ -726,20 +732,17 @@ pub fn collect_lights(
                 size: d.source_radius,
                 mask: gpu_mask,
                 window,
+                casters,
             };
             // Beyond the atlas's rows a shadowed light stays with Chiaro's programs.
             let blocked = d.cast_shadows && out.row_shadows + row.rows() > MAX_ROWS;
             if light_suits(d, row.reach) && !blocked {
                 out.row_shadows += row.rows();
                 out.rows.push(row);
+                out.caster_classes |= casters.class_bit();
                 continue;
             }
         }
-        let casters = if d.cast_shadows {
-            casters_of(d)
-        } else {
-            Casters::All
-        };
         if let Some(mask) = gpu_mask {
             out.masked_ordered.push(g, mask);
             if let Some(i) = casters.filter_index() {

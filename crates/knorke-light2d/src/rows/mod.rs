@@ -15,14 +15,14 @@
 //!
 //! This is the transition of plan 17.13: with [`LightSettings::light_rows`] the pass plan draws
 //! every light [`light_suits`] accepts in a frame [`frame_suits`] accepts with the row
-//! programs, and every directional light [`sun_suits`] accepts with a sun map if the frame's
-//! obstacles are all opaque without pattern; all others stay with Chiaro's programs in the same
-//! pass and targets.
+//! programs, and every directional light with the sun programs: from a map, or without one if
+//! [`sun_plain`]; the lights beyond the rows' limits ([`MAX_REACH`], [`MAX_ROWS`], [`MAX_SUNS`])
+//! stay with Chiaro's programs in the same pass and targets.
 //!
 //! | Part | Content |
 //! |---|---|
 //! | here | which lights are row lights, the lamp record and uniform blocks, the slot caches |
-//! | `sun` | which suns have a map, its grid and uniform block |
+//! | `sun` | which suns need no map, its grid and uniform block |
 //! | `gpu` (feature `gpu`) | `RowLights`: row, edge and sun atlases, programs, recording |
 //!
 //! The shaders (`lightrow_*` in `knorke-integration/shaders`) share the constants below. The row
@@ -36,7 +36,7 @@ mod sun;
 pub use gpu::{ROWS_INPUT_MISSING, RowLights, RowsRecord};
 pub use sun::{
     MAX_SUN_BANDS, MAX_SUN_MAP, MAX_SUNS, SUN_ACROSS, SUN_ALONG, SunBands, SunGrid, SunParams,
-    SunSource, mask_offset, sun_bands, sun_suits,
+    SunSource, mask_offset, sun_bands, sun_plain,
 };
 
 use knorke_math::uniform_block;
@@ -45,7 +45,8 @@ use knorke_math::{Vec3, det};
 
 use crate::area_light::rect_across;
 use crate::gpu_light::{GpuLight, GpuMask};
-use crate::light::{LightDesc, LightRef, LightType, ShadowFilter};
+use crate::light::{LightDesc, LightRef, LightType};
+use crate::light_culling::Casters;
 use crate::projection::Projection;
 use crate::settings::LightSettings;
 use crate::shadow::{DirtyRectList, OcclusionDomain};
@@ -57,11 +58,13 @@ pub const MARCH_STEP: f32 = 0.5;
 /// Longest reach of a row lamp in mask texels: the build marches at most 1200 steps
 /// (`kMaxSteps` in `lightrow_build.frag`), and a row stores distances up to 1023.75.
 pub const MAX_REACH: f32 = 600.0;
-/// Most rows of the atlas, so most shadow-casting row lights of a frame; further ones stay with
-/// Chiaro's programs.
-pub const MAX_ROWS: u32 = 256;
-/// Obstacle tops from here on (world units) are infinitely tall to a row: it stores heights in
-/// hundredths as 12-bit numbers (`PackRun` in `lightrow.hlsli`).
+/// Most rows of the atlas (its height: the longest texture side D3D12 guarantees), so most
+/// shadow-casting row lights of a frame (line and rect lights take [`SUPPORTS`]); further ones
+/// stay with Chiaro's programs. The atlas grows to the rows a frame needs.
+pub const MAX_ROWS: u32 = 16384;
+/// Obstacle tops from here on (world units) are infinitely tall to a row whose heights are in
+/// hundredths, 12-bit numbers (`PackRun` in `lightrow.hlsli`); taller frames take a coarser
+/// unit ([`height_code`]).
 pub const MAX_TOP: f32 = 40.9;
 /// Texels before the receiver that do not count as occluders (Chiaro's trace: 1).
 pub const RECEIVER_GAP: f32 = 1.0;
@@ -74,8 +77,7 @@ pub const EDGE_NEAR: f32 = 16.0;
 /// noise of a camera pan, far below the quarter texel a row resolves.
 pub const GROUND_TOLERANCE: f32 = 1e-3;
 
-/// Whether a frame can draw row lights at all: not with a finite obstacle top (`max_top`, the
-/// highest) of [`MAX_TOP`] or more.
+/// Whether a frame can draw row lights at all ([`LightSettings::light_rows`]).
 ///
 /// Partly transparent obstacles, pattern obstacles (tile grids too) and the application's sprite
 /// mask (its heights are in the height texture) are runs of the row. The sprite mask may change anywhere
@@ -85,8 +87,21 @@ pub const GROUND_TOLERANCE: f32 = 1e-3;
 /// A frame without surface buffer lights its pixels as ground, with the material buffer as
 /// Chiaro's surface programs, without one as Chiaro's flat programs (no Lambert term). With a
 /// medium world map the row programs dim the light through it as Chiaro's `*_medium` programs.
-pub fn frame_suits(settings: &LightSettings, max_top: f32) -> bool {
-    settings.light_rows && max_top < MAX_TOP
+pub fn frame_suits(settings: &LightSettings) -> bool {
+    settings.light_rows
+}
+
+/// How the rows of a frame whose highest finite obstacle top is `max_top` store heights
+/// (`PackRun` in `lightrow.hlsli`): x 1 / unit, y the unit, z the top from which on an obstacle
+/// is infinitely tall. Hundredths below [`MAX_TOP`]; above, the unit doubles until the tops fit,
+/// so it stays finer than the half floats of the height texture (1/32 from 32 on, 1/16 from 64).
+/// Doubling keeps the unit for most changes of `max_top` (a new unit rebuilds every row).
+pub fn height_code(max_top: f32) -> [f32; 4] {
+    let mut k = 1.0;
+    while max_top >= MAX_TOP * k && k < 65536.0 {
+        k *= 2.0;
+    }
+    [100.0 / k, 0.01 * k, MAX_TOP * k, 0.0]
 }
 
 /// The circle of `reach` around `ground` (mask texels) overlaps a rectangle of `list`, or the
@@ -112,15 +127,15 @@ const SUPPORT_TS: [[[f32; 2]; 4]; 2] = [
 ];
 
 /// Whether a light can be a row light in a frame [`frame_suits`] accepts: a point, spot, line or
-/// rect light (masks only point and spot lights have); if it casts shadows also without a caster
-/// filter (E53: a row is built from the mask of all casters), not marked `inside_obstacle`
-/// (E147: the row skips only the obstacle a lamp's height lies in) and with a reach
+/// rect light (masks only point and spot lights have); if it casts shadows with a reach
 /// ([`RowLight::reach`]) of at most [`MAX_REACH`] mask texels.
-/// Animation, flicker, a turning cone, a profile and a mask change nothing a row holds.
+/// Animation, flicker, a turning cone, a profile and a mask change nothing a row holds. A caster
+/// filter (E53) builds the row from its class's mask, which changes only where the mask of all
+/// casters does. A lamp in an obstacle (E147, `inside_obstacle`) is one too: every row skips the
+/// obstacle a lamp's height lies in, as far as it reaches (Chiaro's marked light at most 64
+/// texels).
 pub fn light_suits(d: &LightDesc, reach: f32) -> bool {
-    d.kind != LightType::Directional
-        && (!d.cast_shadows
-            || (d.shadow_filter == ShadowFilter::All && !d.inside_obstacle && reach <= MAX_REACH))
+    d.kind != LightType::Directional && (!d.cast_shadows || reach <= MAX_REACH)
 }
 
 /// The ground plane as the rows see it: mask texels to world units.
@@ -184,6 +199,8 @@ pub struct RowLight {
     /// without. The row is built from where a ray enters it on: what lies nearer never counts,
     /// and an infinitely tall wall there must not end the march.
     pub window: [[f32; 4]; 2],
+    /// The obstacles that cast its shadow (E53): its row is built from their class's mask.
+    pub casters: Casters,
 }
 
 /// The key of a light's row: its slot index in the light store, transient lights counted down
@@ -275,31 +292,35 @@ uniform_block! {
 uniform_block! {
     /// `cbuffer RowParams` of `lightrow_build.frag`.
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    pub struct RowBuildParams[32] {
+    pub struct RowBuildParams[48] {
         /// [`RowSpace::world_from_mask`].
         pub world_from_mask: [f32; 4],
         /// xy mask size in texels, z [`MARCH_STEP`], w 1 if an obstacle is partly transparent
         /// (the build reads the mask's opacity then).
         pub domain: [f32; 4],
+        /// [`height_code`].
+        pub heights: [f32; 4],
     }
 }
 
 uniform_block! {
     /// `cbuffer EdgeParams` of `lightrow_edge.frag`.
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    pub struct RowEdgeParams[32] {
+    pub struct RowEdgeParams[48] {
         /// x [`ROW_ANGLES`], y rows of the atlas, z [`EDGE_WIDTH`].
         pub row_size: [f32; 4],
         /// x world units one angle spans one texel from the lamp (a lamp of that source radius
         /// has a penumbra one angle wide behind an obstacle there), y [`EDGE_NEAR`].
         pub near: [f32; 4],
+        /// [`height_code`].
+        pub heights: [f32; 4],
     }
 }
 
 uniform_block! {
     /// `cbuffer LookupParams` of `lightrow_surface.hlsli`.
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    pub struct RowLookupParams[48] {
+    pub struct RowLookupParams[64] {
         /// x [`ROW_ANGLES`], y rows of the atlas, z [`RECEIVER_GAP`], w tolerance below a top
         /// (`height_tolerance`).
         pub row_size: [f32; 4],
@@ -307,12 +328,15 @@ uniform_block! {
         pub domain: [f32; 4],
         /// [`RowSpace::world_from_mask`].
         pub world_from_mask: [f32; 4],
+        /// [`height_code`].
+        pub heights: [f32; 4],
     }
 }
 
 impl RowBuildParams {
-    /// The block of a frame; `partial`: an active obstacle is partly transparent.
-    pub fn new(space: &RowSpace, mask: [u32; 2], partial: bool) -> Self {
+    /// The block of a frame; `partial`: an active obstacle is partly transparent; `heights`:
+    /// [`height_code`].
+    pub fn new(space: &RowSpace, mask: [u32; 2], partial: bool, heights: [f32; 4]) -> Self {
         Self {
             world_from_mask: space.world_from_mask,
             domain: [
@@ -321,13 +345,15 @@ impl RowBuildParams {
                 MARCH_STEP,
                 f32::from(u8::from(partial)),
             ],
+            heights,
         }
     }
 }
 
 impl RowEdgeParams {
-    /// The block of a frame with an atlas of `rows` rows.
-    pub fn new(space: &RowSpace, rows: u32) -> Self {
+    /// The block of a frame with an atlas of `rows` rows whose heights are `heights`
+    /// ([`height_code`]).
+    pub fn new(space: &RowSpace, rows: u32, heights: [f32; 4]) -> Self {
         Self {
             row_size: [ROW_ANGLES as f32, rows as f32, EDGE_WIDTH, 0.0],
             near: [
@@ -336,17 +362,26 @@ impl RowEdgeParams {
                 0.0,
                 0.0,
             ],
+            heights,
         }
     }
 }
 
 impl RowLookupParams {
-    /// The block of a frame with an atlas of `rows` rows.
-    pub fn new(space: &RowSpace, mask: [u32; 2], rows: u32, tolerance: f32) -> Self {
+    /// The block of a frame with an atlas of `rows` rows whose heights are `heights`
+    /// ([`height_code`]).
+    pub fn new(
+        space: &RowSpace,
+        mask: [u32; 2],
+        rows: u32,
+        tolerance: f32,
+        heights: [f32; 4],
+    ) -> Self {
         Self {
             row_size: [ROW_ANGLES as f32, rows as f32, RECEIVER_GAP, tolerance],
             domain: [mask[0] as f32, mask[1] as f32, 0.0, 0.0],
             world_from_mask: space.world_from_mask,
+            heights,
         }
     }
 }
@@ -405,6 +440,8 @@ pub struct RowSource {
     reach: f32,
     /// The mask anchor then.
     snapped: [i32; 2],
+    /// [`RowLight::casters`]: whose mask.
+    casters: Casters,
 }
 
 impl RowSource {
@@ -416,6 +453,7 @@ impl RowSource {
             window: light.window,
             reach: light.reach,
             snapped: mask.snapped,
+            casters: light.casters,
         }
     }
 }
@@ -428,6 +466,7 @@ impl Source for RowSource {
     fn refresh(&self, now: &Self, change: MaskChange<'_>) -> Refresh<Self> {
         let shift = [0, 1].map(|i| i64::from(now.snapped[i]) - i64::from(self.snapped[i]));
         let holds = self.lamp == now.lamp
+            && self.casters == now.casters
             && self.window == now.window
             && (0..2).all(|i| {
                 (now.ground[i] - self.ground[i] - shift[i] as f32).abs() <= GROUND_TOLERANCE
@@ -465,6 +504,9 @@ pub struct SlotCache<S> {
     capacity: usize,
     frame: u64,
     committed: bool,
+    /// Where the next owner's slot likely is: owners come in the same order every frame, so
+    /// finding a slot takes one look instead of a search.
+    next: usize,
 }
 
 /// Which lamp has which row of the atlas (at most [`MAX_ROWS`]).
@@ -473,13 +515,15 @@ pub type RowCache = SlotCache<RowSource>;
 pub type SunCache = SlotCache<SunSource>;
 
 impl<S> SlotCache<S> {
-    /// Room for `capacity` slots; all the storage it ever needs: steady frames do not allocate.
+    /// At most `capacity` slots. The storage grows to the most slots a frame used, so steady
+    /// frames do not allocate.
     fn new(capacity: usize) -> Self {
         Self {
-            slots: Vec::with_capacity(capacity),
+            slots: Vec::with_capacity(capacity.min(256)),
             capacity,
             frame: 0,
             committed: true,
+            next: 0,
         }
     }
 }
@@ -502,6 +546,7 @@ impl<S: Source> SlotCache<S> {
         for s in &mut self.slots {
             s.built = None;
         }
+        self.next = 0;
     }
 
     /// Slots in use so far (the atlas needs at least this many rows).
@@ -516,6 +561,17 @@ impl<S: Source> SlotCache<S> {
         }
         self.committed = false;
         self.frame += 1;
+        self.next = 0;
+    }
+
+    /// The slot owner `key` had last.
+    fn find(&self, key: u64) -> Option<usize> {
+        let hit = self.slots.get(self.next).is_some_and(|s| s.key == key);
+        if hit {
+            Some(self.next)
+        } else {
+            self.slots.iter().position(|s| s.key == key)
+        }
     }
 
     /// The slot of owner `key` this frame and what it needs to hold `now`. An owner keeps its
@@ -524,7 +580,7 @@ impl<S: Source> SlotCache<S> {
     /// longest. `None` if all slots are taken by owners of this frame.
     fn take(&mut self, key: u64, now: S, change: MaskChange<'_>) -> Option<(u32, Refresh<S>)> {
         let frame = self.frame;
-        let at = match self.slots.iter().position(|s| s.key == key) {
+        let at = match self.find(key) {
             Some(at) => at,
             None if self.slots.len() < self.capacity => {
                 self.slots.push(Slot {
@@ -553,13 +609,8 @@ impl<S: Source> SlotCache<S> {
         slot.built = Some(now);
         slot.key = key;
         slot.used = frame;
+        self.next = at + 1;
         Some((at as u32, refresh))
-    }
-
-    /// The slot `assign` gave the owner `key` this frame.
-    pub fn row_of(&self, key: u64) -> Option<u32> {
-        let at = self.slots.iter().position(|s| s.key == key)?;
-        (self.slots[at].used == self.frame).then_some(at as u32)
     }
 
     /// The frame's builds were recorded.
@@ -610,6 +661,7 @@ mod tests {
             size: 0.0,
             mask: None,
             window: [[0.0; 4]; 2],
+            casters: Casters::All,
         }
     }
 
@@ -628,9 +680,16 @@ mod tests {
             light_rows: false,
             ..on
         };
-        assert!(frame_suits(&on, 3.0));
-        assert!(!frame_suits(&off, 3.0));
-        assert!(!frame_suits(&on, MAX_TOP), "tall obstacle");
+        assert!(frame_suits(&on));
+        assert!(!frame_suits(&off));
+        // Tall obstacles: a coarser unit, so the highest finite top stays finite.
+        assert_eq!(height_code(3.0), [100.0, 0.01, MAX_TOP, 0.0]);
+        for top in [MAX_TOP, 50.0, 100.0, 1000.0] {
+            let [scale, unit, limit, _] = height_code(top);
+            assert!(top < limit && (top * scale).round() < 4095.0);
+            assert!((unit * scale - 1.0).abs() < 1e-6);
+        }
+        assert_eq!(height_code(50.0), height_code(80.0), "the unit holds");
 
         let point = LightDesc::new(LightType::Point);
         assert!(light_suits(&point, 100.0));
@@ -663,20 +722,18 @@ mod tests {
         assert!(light_suits(&kind(LightType::Rect), 1.0));
         assert!(!light_suits(&kind(LightType::Directional), 1.0));
         let filtered = LightDesc {
-            shadow_filter: ShadowFilter::StaticOnly,
+            shadow_filter: crate::light::ShadowFilter::StaticOnly,
             ..point.clone()
         };
-        assert!(!light_suits(&filtered, 1.0), "caster filter");
+        assert!(light_suits(&filtered, 1.0), "caster filter");
         let inside = LightDesc {
             inside_obstacle: true,
             ..point.clone()
         };
-        assert!(!light_suits(&inside, 1.0), "inside_obstacle");
-        // Without shadows nothing of the row matters.
+        assert!(light_suits(&inside, 1.0), "inside_obstacle");
+        // Without shadows the reach does not matter.
         let unshadowed = LightDesc {
             cast_shadows: false,
-            inside_obstacle: true,
-            shadow_filter: ShadowFilter::StaticOnly,
             ..point
         };
         assert!(light_suits(&unshadowed, MAX_REACH + 1.0));
@@ -699,8 +756,6 @@ mod tests {
         // not its contents.
         assert_eq!(frame(&mut cache, &[b], &still), [(1, false)]);
         assert_eq!(frame(&mut cache, &[b, a], &still), [(1, false), (0, true)]);
-        assert_eq!(cache.row_of(7), Some(0));
-        assert_eq!(cache.row_of(8), None);
         // A moved lamp, a changed height.
         let moved = light(7, [50.5, 50.0]);
         assert_eq!(
@@ -712,6 +767,19 @@ mod tests {
         assert_eq!(
             frame(&mut cache, &[moved, raised], &still),
             [(0, false), (1, true)]
+        );
+        // Another caster class (E53): another mask.
+        let filtered = RowLight {
+            casters: Casters::Static,
+            ..moved
+        };
+        assert_eq!(
+            frame(&mut cache, &[filtered, raised], &still),
+            [(0, true), (1, false)]
+        );
+        assert_eq!(
+            frame(&mut cache, &[moved, raised], &still),
+            [(0, true), (1, false)]
         );
         // Colour is not in the row; a window it begins at is.
         let mut red = raised;
@@ -811,7 +879,7 @@ mod tests {
                 Some((key, true))
             );
         }
-        assert_eq!(cache.assign(&light(1000, [50.0, 50.0]), &still), None);
+        assert_eq!(cache.assign(&light(MAX_ROWS, [50.0, 50.0]), &still), None);
         cache.commit();
         cache.begin();
         for key in 1..MAX_ROWS {
@@ -819,7 +887,7 @@ mod tests {
         }
         // Row 0 was not used this frame.
         assert_eq!(
-            cache.assign(&light(1000, [50.0, 50.0]), &still),
+            cache.assign(&light(MAX_ROWS, [50.0, 50.0]), &still),
             Some((0, true))
         );
         cache.commit();

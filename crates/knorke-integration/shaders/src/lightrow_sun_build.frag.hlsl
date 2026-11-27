@@ -4,7 +4,8 @@
 // toward the sun; it walks the mask (world texel + anchor) texel by texel (DDA)
 // from q = MapBuild.x until it leaves the mask or rises (by MapBuild.w per texel, the lowest ray of a soft sun's disc)
 // above the highest finite top from the lowest receiver (MapBuild.y). A texel crossed over [q0, q1] with a finite obstacle (base, top) shadows the receiver heights
-// [base - s q1, top - tolerance - s q0) at c (s = DirSlope.z): the ray from there sweeps the heights z + s q0 to
+// [base - s q1, top - tolerance - s q0) at c (s = DirSlope.z > 0; a sun below the horizon, s <= 0, q0 and q1 swapped and no
+// rise to end the march): the ray from there sweeps the heights z + s q0 to
 // z + s q1 over it, and Chiaro blocks where they meet the interval (WithinInterval). The map keeps the union of these
 // as two sorted intervals (lo, hi); more are hulled where the gap is smallest. SV_Target1 (a soft sun's second target;
 // a hard sun's pipeline has none) holds how far along the ray each interval's ends lie, (q of hi, q of lo), so the
@@ -149,10 +150,13 @@ MapOutput main(float2 uv : TEXCOORD0)
             break;
         }
         float leave = min(next.x, next.y);
+        // Where over the texel the ray sweeps the lowest and the highest receiver heights: a sun below the horizon
+        // (s <= 0) has them the other way round.
+        float2 ends = s > 0.0 ? float2(leave, q) : float2(q, leave);
         float2 i = FiniteInterval(Heights, HeightSampler, texel, Domain.xy);
-        float hi = i.y - Domain.z - s * q;
+        float hi = i.y - Domain.z - s * ends.y;
         bool blocks = i.y > i.x && hi > zMin;
-        float lo = i.x - s * leave;
+        float lo = i.x - s * ends.x;
 #ifdef SUN_PARTIAL
         float o = blocks ? FetchTexel(Mask, MaskSampler, texel, 1.0 / Domain.xy).r : 1.0;
         bool through = o < kOpaqueOpacity;
@@ -177,7 +181,7 @@ MapOutput main(float2 uv : TEXCOORD0)
         }
 #endif
         if (blocks) {
-            Insert(iv, at, n, float2(max(lo, zMin), hi), float2(q, lo < zMin ? 0.0 : leave));
+            Insert(iv, at, n, float2(max(lo, zMin), hi), float2(ends.y, lo < zMin ? 0.0 : ends.x));
         }
         q = leave;
         if (next.x < next.y) {
