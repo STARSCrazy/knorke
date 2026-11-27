@@ -1,6 +1,6 @@
 # ADR 0021: 3D-Engine aus pixelraum – eine Szene, zwei Renderwege, Einsatzprofile
 
-Status: vorgeschlagen · Datum: 2026-11-27 · Bezug: ADR 0001, 0002, 0011, 0013, 0014, Plan 17.14
+Status: angenommen 2026-11-27 · Datum: 2026-11-27 · Bezug: ADR 0001, 0002, 0011, 0013, 0014, Plan 17.14
 
 ## Kontext
 
@@ -14,7 +14,7 @@ Heute:
 
 Ein Shooter ist mit CPU-Rastern in kleiner Auflösung nicht zu machen. Ein Dungeon im Pixel-Look braucht dagegen keine GPU und läuft auch headless.
 
-## Entscheidung (vorgeschlagen)
+## Entscheidung
 
 1. **Eine Szene, zwei Renderwege.** Ein gemeinsames 3D-Szenenmodell enthält Kamera, Gitter-Karten und freie Meshes als zwei gleichberechtigte Geometriequellen, Sprites, Materialien und Lichter. Es zeichnen zwei Wege:
    - **CPU** (`knorke-render`): Pixel-Look, ohne Grafikkarte, headless, Prüfreferenz.

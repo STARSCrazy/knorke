@@ -510,7 +510,7 @@ knorke/
 9. **Einheitlichen Rust-Workspace für die Zielmodule aufbauen:** keine Vollruntime; zuerst standalone Crates und kombinierte Beispiele.
 10. **CI-Kriterien festlegen:** Standalone-Builds, Dependency-Graph, GPU-/Headless-Regression, Daten-/Versionsschemavalidierung.
 
-**Explizit noch nicht beginnen:** Großes generisches ECS, 3D-Renderer (Ausbau zur 3D-Engine vorgeschlagen in ADR 0021, Plan 17.14), kompletter GUI-Editor, Multiplayer, viele MCP-Tools, automatische Codegenerierung ohne Prüfsystem, Portierung aller Chiaro-Spezialeffekte auf einmal.
+**Explizit noch nicht beginnen:** Großes generisches ECS, ~~3D-Renderer~~ (seit ADR 0021 Ausbau zur 3D-Engine beschlossen, Plan 17.14), kompletter GUI-Editor, Multiplayer, viele MCP-Tools, automatische Codegenerierung ohne Prüfsystem, Portierung aller Chiaro-Spezialeffekte auf einmal.
 
 ## 14. Definition of Done – Knorke 0.1
 
@@ -1037,11 +1037,11 @@ Auftrag: `docs/prompts/licht-neu-denken.md`. Ergebnis: **ADR 0019 (vorgeschlagen
 
 ### 17.14 3D-Engine aus pixelraum (Entwurf 2026-11-27)
 
-Ziel (Manuel, 2026-11-27): pixelraum (`knorke-render` + `knorke-lighting`) wird Schritt für Schritt eine vollwertige 3D-Engine für verschiedene Spiele: zuerst Wizardry 7 (Gitter-Dungeon, Pixel-Look), später ein Ego-Shooter. Vorschlag in **ADR 0021** (vorgeschlagen): eine gemeinsame Szene, zwei Renderwege (CPU für Pixel-Look und als Referenz, GPU als Hauptweg), Schatten über Schattenkarten, `knorke-post` für beide, Einsatzprofile in `knorke-integration`.
+Ziel (Manuel, 2026-11-27): pixelraum (`knorke-render` + `knorke-lighting`) wird Schritt für Schritt eine vollwertige 3D-Engine für verschiedene Spiele: zuerst Wizardry 7 (Gitter-Dungeon, Pixel-Look), später ein Ego-Shooter. Beschlossen in **ADR 0021** (angenommen 2026-11-27): eine gemeinsame Szene, zwei Renderwege (CPU für Pixel-Look und als Referenz, GPU als Hauptweg), Schatten über Schattenkarten, `knorke-post` für beide, Einsatzprofile in `knorke-integration`.
 
 | Schritt | Inhalt | Status |
 |---|---|---|
-| 3D-1 | `knorke-post` an die CPU-Ausgabe anschließen | offen |
+| 3D-1 | `knorke-post` an die CPU-Ausgabe anschließen | läuft |
 | 3D-2 | Szenenmodell aus `knorke-render` herauslösen, Meshes gleichberechtigt | offen |
 | 3D-3 | GPU-Raster derselben Szene ohne Licht, Vergleich gegen CPU-Goldens | offen |
 | 3D-4 | GPU-Licht mit Schattenkarten, Materialien, Nebel | offen |

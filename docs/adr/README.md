@@ -24,4 +24,4 @@ Bindend für alle Änderungen (`CLAUDE.md`). Neue Grundsatzentscheidung → neue
 | [0018](0018-szene-und-agenten-cli.md) | Szene als Text, Profil `stealth`, Agenten-Kommandozeile | angenommen; Stufe 1 umgesetzt |
 | [0019](0019-lichtzeilen-2d-licht.md) | 2D-Licht neu: eine Lichtzeile pro Lampe statt Strahl-Marsch pro Pixel | angenommen 2026-11-27 (umgesetzt, Plan 17.13 L1–L7) |
 | [0020](0020-audio.md) | Audio: `knorke-audio` als Mischpult ohne Gerät, Steuerung über Commands, Raumklang Stufe 1 | angenommen (Stufe 1 umgesetzt) |
-| [0021](0021-3d-engine-aus-pixelraum.md) | 3D-Engine aus pixelraum: eine Szene, zwei Renderwege (CPU/GPU), Einsatzprofile Dungeon und Shooter | vorgeschlagen |
+| [0021](0021-3d-engine-aus-pixelraum.md) | 3D-Engine aus pixelraum: eine Szene, zwei Renderwege (CPU/GPU), Einsatzprofile Dungeon und Shooter | angenommen 2026-11-27 |
