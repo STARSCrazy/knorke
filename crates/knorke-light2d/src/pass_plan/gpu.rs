@@ -277,6 +277,7 @@ pub struct PassPlan<'d> {
     last_size: (u32, u32),
     last_shadow_scale: f32,
     thin_obstacles: u32,
+    destroyed_pattern_users: u32,
     stats: PassStats,
 }
 
@@ -452,6 +453,7 @@ impl<'d> PassPlan<'d> {
             last_size: (0, 0),
             last_shadow_scale: 1.0,
             thin_obstacles: 0,
+            destroyed_pattern_users: 0,
             stats: PassStats::default(),
         })
     }
@@ -561,6 +563,14 @@ impl<'d> PassPlan<'d> {
                 self.zones.height_spans = 0;
             }
         }
+
+        // Debug check: obstacles that still name a destroyed pattern; no scan with the check off.
+        self.destroyed_pattern_users = match stores.patterns {
+            Some(p) if self.checks.contains(DebugChecks::OBSTACLES) => {
+                obstacles.count_destroyed_pattern_users(&|id| p.mean_opacity(id), false)
+            }
+            _ => 0,
+        };
 
         let mut prepared = PassPrepared {
             stages: PassStages::COMPOSITE,
@@ -876,6 +886,7 @@ impl<'d> PassPlan<'d> {
             unreachable_lights: self.lights.unreachable_lights,
             facing_away_lights: self.lights.facing_away_lights,
             thin_obstacles: self.thin_obstacles,
+            destroyed_pattern_users: self.destroyed_pattern_users,
             unshadowed_lights: self.lights.shadowless_rows,
             zone_height_spans: if frame.surface.is_some() {
                 0
@@ -914,7 +925,7 @@ impl<'d> PassPlan<'d> {
         self.stats
     }
 
-    /// Findings the host made between frames (stale layers); the next
+    /// Findings the host made between frames (stale layers, a pattern sheet without alpha); the next
     /// [`record`](Self::record) reports them under their debug check.
     pub fn add_pending_warnings(&mut self, warnings: WarningSet) {
         self.warnings.add_pending(warnings);

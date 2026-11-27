@@ -18,8 +18,11 @@
 //! - Off costs nothing (ADR 0011): [`DebugChecks::NONE`] is the default, and then
 //!   [`FrameWarnings::update`] only clears its state.
 //! - Findings of the GPU check arrive as a [`WarningSet`] in [`FrameFindings::gpu_findings`]
-//!   (or through [`FrameWarnings::add_pending`] for findings made between frames); the callback
-//!   `destroyedPatternUsers` and the two pattern warnings come with the pattern store (P15).
+//!   (or through [`FrameWarnings::add_pending`] for findings made between frames).
+//! - Patterns: the host passes [`Warning::PatternNoAlpha`] as pending when
+//!   `PatternStore::create` reports a sheet without alpha. Instead of Chiaro's callback
+//!   `destroyedPatternUsers` and its scan flag, [`FrameFindings::destroyed_pattern_users`] is the
+//!   count the plan takes every frame while [`DebugChecks::OBSTACLES`] is on (off: no scan).
 //!
 //! Nothing here allocates except [`FrameWarnings::diagnostics`], which writes into a vector of
 //! the host.
@@ -37,7 +40,7 @@ impl DebugChecks {
     pub const LAYERS: Self = Self(1);
     /// Flat, unreachable and away-facing lights, ambient zone height spans.
     pub const LIGHTS: Self = Self(2);
-    /// Thin obstacles.
+    /// Thin obstacles, obstacles naming a destroyed pattern, pattern sheets without alpha.
     pub const OBSTACLES: Self = Self(4);
     /// Every check, also those added later.
     pub const ALL: Self = Self(!0);
@@ -82,6 +85,10 @@ pub enum Warning {
     AmbientZoneHeights,
     /// Circle obstacles thinner than one occlusion mask texel.
     ThinObstacles,
+    /// Active obstacles still name a destroyed pattern and act as if they had none.
+    PatternDestroyed,
+    /// Patterns were cut from a sheet without alpha, so they are fully opaque.
+    PatternNoAlpha,
     /// Shadow-casting lights drawn without shadow: reaching farther than a light row
     /// (`rows::WIDE_REACH`) or beyond the row atlas's slots (`rows::MAX_ROWS`). Reported
     /// whatever the debug checks.
@@ -90,7 +97,7 @@ pub enum Warning {
 
 impl Warning {
     /// Every kind, in the order of [`WarningSet::iter`].
-    pub const ALL: [Warning; 10] = [
+    pub const ALL: [Warning; 12] = [
         Self::StaleLayers,
         Self::HalfAlpha,
         Self::BlownOutHighlights,
@@ -100,6 +107,8 @@ impl Warning {
         Self::FacingAwayLights,
         Self::AmbientZoneHeights,
         Self::ThinObstacles,
+        Self::PatternDestroyed,
+        Self::PatternNoAlpha,
         Self::UnshadowedLights,
     ];
 
@@ -119,6 +128,8 @@ impl Warning {
             Self::FacingAwayLights => "knorke.light2d.warning.facing_away_lights",
             Self::AmbientZoneHeights => "knorke.light2d.warning.ambient_zone_heights",
             Self::ThinObstacles => "knorke.light2d.warning.thin_obstacles",
+            Self::PatternDestroyed => "knorke.light2d.warning.pattern_destroyed",
+            Self::PatternNoAlpha => "knorke.light2d.warning.pattern_no_alpha",
             Self::UnshadowedLights => "knorke.light2d.warning.unshadowed_lights",
         })
     }
@@ -133,7 +144,9 @@ impl Warning {
             | Self::UnreachableLights
             | Self::FacingAwayLights
             | Self::AmbientZoneHeights => DebugChecks::LIGHTS,
-            Self::ThinObstacles => DebugChecks::OBSTACLES,
+            Self::ThinObstacles | Self::PatternDestroyed | Self::PatternNoAlpha => {
+                DebugChecks::OBSTACLES
+            }
             Self::UnshadowedLights => DebugChecks::NONE,
         }
     }
@@ -184,6 +197,12 @@ impl Warning {
             Self::ThinObstacles => {
                 "circle obstacles thinner than one occlusion mask texel were widened to one \
                  texel; make poles at least 1 / shadow_resolution scene pixels thick"
+            }
+            Self::PatternDestroyed => {
+                "active obstacles are still assigned a pattern that was destroyed and act as if                  they had none; assign another pattern or none before destroying it"
+            }
+            Self::PatternNoAlpha => {
+                "patterns were cut from a sheet without an alpha channel, so they are fully                  opaque; use a sheet format with alpha"
             }
         }
     }
@@ -264,6 +283,8 @@ pub struct FrameFindings {
     pub facing_away_lights: u32,
     /// Obstacles thinner than one mask texel.
     pub thin_obstacles: u32,
+    /// Active obstacles that name a destroyed pattern.
+    pub destroyed_pattern_users: u32,
     /// Visible ambient zones with a height span in a frame without a surface buffer.
     pub zone_height_spans: u32,
     /// Shadow-casting lights drawn without shadow (`LightList::shadowless_rows`).
@@ -350,8 +371,19 @@ impl FrameWarnings {
                     }
                 }
             }
-            if f.checks.contains(DebugChecks::OBSTACLES) && f.thin_obstacles > 0 {
-                w.insert(Warning::ThinObstacles);
+            if f.checks.contains(DebugChecks::OBSTACLES) {
+                for (k, found) in [
+                    (Warning::ThinObstacles, f.thin_obstacles > 0),
+                    (Warning::PatternDestroyed, f.destroyed_pattern_users > 0),
+                    (
+                        Warning::PatternNoAlpha,
+                        self.pending.contains(Warning::PatternNoAlpha),
+                    ),
+                ] {
+                    if found {
+                        w.insert(k);
+                    }
+                }
             }
         }
         if f.unshadowed_lights > 0 {
@@ -383,6 +415,7 @@ mod tests {
             facing_away_lights: n,
             zone_height_spans: n,
             thin_obstacles: n,
+            destroyed_pattern_users: n,
             ..FrameFindings::default()
         }
     }
@@ -408,7 +441,7 @@ mod tests {
         for (checks, expect) in [
             (DebugChecks::LAYERS, &Warning::ALL[..4]),
             (DebugChecks::LIGHTS, &Warning::ALL[4..8]),
-            (DebugChecks::OBSTACLES, &Warning::ALL[8..9]),
+            (DebugChecks::OBSTACLES, &Warning::ALL[8..10]),
         ] {
             f.checks = checks;
             f.gpu_findings = Warning::ALL[..4].iter().copied().collect();
@@ -418,7 +451,18 @@ mod tests {
         }
         f.checks = DebugChecks::LAYERS | DebugChecks::OBSTACLES;
         f.gpu_findings = WarningSet::of(Warning::StaleLayers);
-        assert_eq!(w.update(&f).len(), 2);
+        assert_eq!(w.update(&f).len(), 3);
+        // A sheet without alpha shows once, with the obstacle checks only.
+        f = FrameFindings {
+            checks: DebugChecks::LAYERS,
+            ..FrameFindings::default()
+        };
+        w.add_pending(WarningSet::of(Warning::PatternNoAlpha));
+        assert!(w.update(&f).is_empty());
+        f.checks = DebugChecks::OBSTACLES;
+        w.add_pending(WarningSet::of(Warning::PatternNoAlpha));
+        assert_eq!(w.update(&f), WarningSet::of(Warning::PatternNoAlpha));
+        assert!(w.update(&f).is_empty(), "consumed");
     }
 
     #[test]
@@ -454,11 +498,11 @@ mod tests {
         let mut w = FrameWarnings::new();
         let f = lights(1);
         w.update(&f);
-        assert_eq!(w.newly_reported().len(), 5);
+        assert_eq!(w.newly_reported().len(), 6);
         w.update(&f);
         assert!(w.newly_reported().is_empty());
-        assert_eq!(w.warnings().len(), 5);
-        assert_eq!(w.reported().len(), 5);
+        assert_eq!(w.warnings().len(), 6);
+        assert_eq!(w.reported().len(), 6);
         // A kind that went away and comes back is not new.
         w.update(&lights(0));
         assert!(w.warnings().is_empty());
@@ -485,7 +529,7 @@ mod tests {
         w.update(&lights(1));
         let mut out = Vec::new();
         w.diagnostics(&mut out);
-        assert_eq!(out.len(), 5);
+        assert_eq!(out.len(), 6);
         assert!(out.iter().all(|d| d.severity == Severity::Warning));
         assert_eq!(out[0].code.as_str(), "knorke.light2d.warning.flat_lights");
         let mut codes: Vec<_> = Warning::ALL.iter().map(|w| w.code()).collect();

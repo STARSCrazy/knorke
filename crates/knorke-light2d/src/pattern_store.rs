@@ -523,7 +523,10 @@ impl PatternStore {
     /// Cuts `descs.len()` regions out of `sheet` (only alpha is kept) and appends their handles to
     /// `out`. All or nothing: on error nothing is created and `out` is unchanged. Returns `true`
     /// if the sheet has no alpha channel, so every texel is opaque (Chiaro's
-    /// `CHI_WARN_PATTERN_NO_ALPHA`; the host may warn).
+    /// `CHI_WARN_PATTERN_NO_ALPHA`): then pass [`Warning::PatternNoAlpha`] to the plan's
+    /// `add_pending_warnings` for the debug check.
+    ///
+    /// [`Warning::PatternNoAlpha`]: crate::frame_warnings::Warning::PatternNoAlpha
     ///
     /// # Errors
     /// A bad sheet or desc, [`MAX_PATTERNS`] exceeded, a full atlas, or

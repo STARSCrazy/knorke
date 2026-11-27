@@ -1,6 +1,7 @@
 //! The GPU debug check (P32) through the pass plan and on its own stage: port of the E83 cases
 //! of Chiaro's `tests/gpu/DebugCheckTests.cpp` (half-alpha material and surface texels, blown-out
-//! highlights, flat medium, findings a few frames late, the image never changes).
+//! highlights, flat medium, findings a few frames late, the image never changes) and of the two
+//! pattern cases (a destroyed pattern still named, a sheet without alpha).
 //!
 //! Needs a Vulkan device and the shader pack of `cargo xtask shaders`; skips without them (a
 //! failure with `KNORKE_REQUIRE_GPU=1`).
@@ -13,9 +14,12 @@ use knorke_gpu::{CommandBuffer, Gpu, Samplers, ShaderLibrary, Texture};
 use knorke_light2d::codec::{Material, material_pixel};
 use knorke_light2d::debug_check::{DebugCheckFrame, DebugCheckStage, SLOTS};
 use knorke_light2d::frame_warnings::{DebugChecks, Warning, WarningSet};
+use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassFrame, PassPlan, PassStages, SceneStores};
+use knorke_light2d::pattern_store::{PatternDesc, Sheet, SheetFormat, raw_id};
 use knorke_light2d::settings::LightSettings;
-use knorke_light2d::{LightStore, ObstacleStore, Projection};
+use knorke_light2d::{LightStore, ObstacleStore, PatternStore, Projection};
+use knorke_math::{At, Vec2};
 
 const W: u32 = 32;
 const H: u32 = 24;
@@ -44,6 +48,7 @@ struct Fx<'d> {
     surface: Option<Texture<'d>>,
     lights: LightStore,
     obstacles: ObstacleStore,
+    patterns: PatternStore,
     projection: Projection,
     settings: LightSettings,
     /// Stages and HDR bytes of the last frame.
@@ -62,6 +67,7 @@ impl<'d> Fx<'d> {
             surface: surface.then(|| sampled_rgba8(gpu, W, H, &empty)),
             lights: LightStore::new(),
             obstacles: ObstacleStore::new(),
+            patterns: PatternStore::new(),
             projection: Projection::default(),
             settings: LightSettings::default(),
             stages: PassStages::NONE,
@@ -78,7 +84,10 @@ impl<'d> Fx<'d> {
                 surface: self.surface.as_ref().map(Texture::texture_ref),
                 ..PassFrame::new(self.scene.texture_ref(), &self.projection)
             };
-            let stores = SceneStores::new(&self.lights, &self.obstacles);
+            let stores = SceneStores {
+                patterns: Some(&self.patterns),
+                ..SceneStores::new(&self.lights, &self.obstacles)
+            };
             let prepared = self.plan.prepare(&frame, &stores, &self.settings).unwrap();
             let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
             warnings = self
@@ -221,5 +230,80 @@ fn medium_pixels_with_density_but_no_height_span_warn() {
         assert!(after(checks, 128, 5, 0, SETTLED).is_empty());
         checks = DebugChecks::NONE;
         assert!(after(checks, 128, 0, 0, SETTLED).is_empty());
+    });
+}
+
+#[test]
+fn a_destroyed_pattern_still_named_and_a_sheet_without_alpha_warn() {
+    with_chiaro_pack(|gpu, pack| {
+        let mut fx = Fx::new(gpu, pack, false);
+        fx.plan.set_debug_checks(DebugChecks::OBSTACLES);
+        let rgba = [0u8, 0, 0, 0, 0, 0, 0, 255];
+        let sheet = Sheet {
+            width: 2,
+            height: 1,
+            pitch: 8,
+            format: SheetFormat::Rgba8,
+            pixels: &rgba,
+        };
+        let descs = [PatternDesc::new(0, 0, 2, 1)];
+        let mut ids = Vec::new();
+        assert!(!fx.patterns.create(&sheet, &descs, &mut ids).unwrap()); // with alpha
+        let common = ObstacleCommon {
+            position: At::new(Vec2::new(20.0, 12.0)),
+            height: 4.0,
+            ..Default::default()
+        };
+        let shape = Shape::Box {
+            width: 2.0,
+            depth: 2.0,
+        };
+        let id = fx
+            .obstacles
+            .create_shape(&ShapeDesc { common, shape })
+            .unwrap();
+        let pattern = raw_id(ids[0]);
+        fx.obstacles.set_pattern(id, pattern, &fx.patterns).unwrap();
+        assert!(fx.render(1).is_empty()); // alive: fine
+
+        let destroyed = WarningSet::of(Warning::PatternDestroyed);
+        fx.patterns.destroy(&ids).unwrap();
+        fx.obstacles.on_patterns_destroyed(&[pattern]);
+        assert_eq!(fx.render(1), destroyed);
+        assert_eq!(fx.render(1), destroyed); // as long as the assignment stays
+        // Checks off: no warning. A disabled obstacle: no warning.
+        fx.plan.set_debug_checks(DebugChecks::NONE);
+        assert!(fx.render(1).is_empty());
+        fx.plan.set_debug_checks(DebugChecks::OBSTACLES);
+        let off = ObstacleCommon {
+            enabled: false,
+            ..common
+        };
+        fx.obstacles
+            .set_shape(id, &ShapeDesc { common: off, shape })
+            .unwrap();
+        assert!(fx.render(1).is_empty());
+        fx.obstacles
+            .set_shape(id, &ShapeDesc { common, shape })
+            .unwrap();
+        assert_eq!(fx.render(1), destroyed);
+        // Assignment removed: no warning.
+        fx.obstacles.set_pattern(id, 0, &fx.patterns).unwrap();
+        assert!(fx.render(1).is_empty());
+
+        // A sheet without alpha: the host passes the finding on, the next frame reports it once.
+        let rgb = [0u8; 6];
+        let sheet = Sheet {
+            width: 2,
+            height: 1,
+            pitch: 6,
+            format: SheetFormat::Rgb8,
+            pixels: &rgb,
+        };
+        assert!(fx.patterns.create(&sheet, &descs, &mut ids).unwrap());
+        fx.plan
+            .add_pending_warnings(WarningSet::of(Warning::PatternNoAlpha));
+        assert_eq!(fx.render(1), WarningSet::of(Warning::PatternNoAlpha));
+        assert!(fx.render(1).is_empty());
     });
 }
