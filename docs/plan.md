@@ -510,7 +510,7 @@ knorke/
 9. **Einheitlichen Rust-Workspace für die Zielmodule aufbauen:** keine Vollruntime; zuerst standalone Crates und kombinierte Beispiele.
 10. **CI-Kriterien festlegen:** Standalone-Builds, Dependency-Graph, GPU-/Headless-Regression, Daten-/Versionsschemavalidierung.
 
-**Explizit noch nicht beginnen:** Großes generisches ECS, 3D-Renderer, kompletter GUI-Editor, Multiplayer, viele MCP-Tools, automatische Codegenerierung ohne Prüfsystem, Portierung aller Chiaro-Spezialeffekte auf einmal.
+**Explizit noch nicht beginnen:** Großes generisches ECS, 3D-Renderer (Ausbau zur 3D-Engine vorgeschlagen in ADR 0021, Plan 17.14), kompletter GUI-Editor, Multiplayer, viele MCP-Tools, automatische Codegenerierung ohne Prüfsystem, Portierung aller Chiaro-Spezialeffekte auf einmal.
 
 ## 14. Definition of Done – Knorke 0.1
 
@@ -1034,3 +1034,17 @@ Auftrag: `docs/prompts/licht-neu-denken.md`. Ergebnis: **ADR 0019 (vorgeschlagen
 - **Lichtpuffer unbewegter Lampen in Bodenkoordinaten zwischenspeichern** (Kosten pro Frame nur für bewegte Lampen) – **offen**; Wandflächen bräuchten eine zweite Höhenschicht.
 - **Höhen in Kaskaden** („obere Hülle des Höhenprofils pro Strahlabschnitt“) – **verworfen** für jetzt: Forschungsprojekt ohne Vorarbeit.
 - **Aufräumen, weitere Kandidaten** (2026-11-27) – **offen**, nur bei Gelegenheit: Masken-Pfad ohne Höhen (`height_mode == false`) in `occlusion`/`occluder_raster` (Tests und Shader hängen dran); `GpuLight::shadow[0]` (Quellradius aus dem alten Strahlengang, von den Zeilen-Shadern vermutlich nicht gelesen, erst prüfen); doppelte Kleinigkeiten (`DEG_TO_RAD` 5×, `smoothstep` 2×, projiziertes Hüllrechteck 3×); doppelte Test-Helfer (`with_vulkan` ~5×, Bildvergleich-Helfer der Integrationstests); nur von Tests genutzte API (`StoredZone::hull`, `LightList::auto_height_lights` u. a.). Bewusst behalten: CPU-Modelle der Shader-Mathematik als Test-Orakel, allgemeine `knorke-gpu`-Hüllen, Typ-Kopien zwischen `knorke-light2d` und `knorke-post` (Abhängigkeitsregel, ADR 0014).
+
+### 17.14 3D-Engine aus pixelraum (Entwurf 2026-11-27)
+
+Ziel (Manuel, 2026-11-27): pixelraum (`knorke-render` + `knorke-lighting`) wird Schritt für Schritt eine vollwertige 3D-Engine für verschiedene Spiele: zuerst Wizardry 7 (Gitter-Dungeon, Pixel-Look), später ein Ego-Shooter. Vorschlag in **ADR 0021** (vorgeschlagen): eine gemeinsame Szene, zwei Renderwege (CPU für Pixel-Look und als Referenz, GPU als Hauptweg), Schatten über Schattenkarten, `knorke-post` für beide, Einsatzprofile in `knorke-integration`.
+
+| Schritt | Inhalt | Status |
+|---|---|---|
+| 3D-1 | `knorke-post` an die CPU-Ausgabe anschließen | offen |
+| 3D-2 | Szenenmodell aus `knorke-render` herauslösen, Meshes gleichberechtigt | offen |
+| 3D-3 | GPU-Raster derselben Szene ohne Licht, Vergleich gegen CPU-Goldens | offen |
+| 3D-4 | GPU-Licht mit Schattenkarten, Materialien, Nebel | offen |
+| 3D-5 | Wizardry 7 auf Knorke (C-ABI `knorke-abi`, 17.1) | offen |
+| 3D-6 | Shooter-Grundlagen (Kollision 17.8, Sichtbarkeit, Animation 17.4, Maus), Demo | offen |
+| – | Lichtzeilen (ADR 0019) als Sonderweg für reine Gitter-Welten | offen – nur nach Messung |
