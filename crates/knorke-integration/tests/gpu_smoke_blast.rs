@@ -43,6 +43,8 @@ fn settings(_: &Scene) -> Light2dSettings {
         light: LightSettings {
             ambient: Vec3::new(0.07, 0.08, 0.12),
             surface_height_step: HEIGHT_STEP,
+            // Chiaro's light: the scene is compared with Chiaro's picture.
+            light_rows: false,
             ..LightSettings::default()
         },
         post: PostSettings::default(),
