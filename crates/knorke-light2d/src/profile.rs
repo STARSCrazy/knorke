@@ -29,7 +29,7 @@ pub const PROFILE_AZIMUTH_STEP: f32 = 360.0 / PROFILE_AZIMUTH as f32;
 pub const PROFILE_VALUES: usize = PROFILE_POLAR * PROFILE_AZIMUTH;
 
 const PI: f32 = core::f32::consts::PI;
-const DEG_TO_RAD: f32 = PI / 180.0;
+use crate::light_math::{DEG_TO_RAD, smoothstep};
 const RAD_TO_DEG: f32 = 180.0 / PI;
 
 /// Atlas blocks for profiles up to block `block_count - 1`: a power of two, at least 4, at most
@@ -370,12 +370,6 @@ impl core::fmt::Display for ProfileError {
 }
 
 impl std::error::Error for ProfileError {}
-
-/// Smoothstep of `x` between `e0` and `e1`.
-fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
-    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
 
 /// Shape value before normalization at polar `g` and azimuth `c` (degrees).
 fn shape_value(s: &ProfileShape, g: f32, c: f32) -> f32 {

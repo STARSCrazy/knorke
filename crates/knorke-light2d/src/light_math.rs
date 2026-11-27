@@ -13,6 +13,15 @@
 use crate::Projection;
 use knorke_math::{At, Screen, Vec2, Vec3, World2, det};
 
+/// Degrees to radians: angles are multiplied by it, one rounding, as Chiaro converts them.
+pub(crate) const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
+
+/// HLSL `smoothstep`: 0 up to `e0`, 1 from `e1` on, the cubic between.
+pub(crate) fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// `saturate(1 - (d/r)^2)^falloff`: 1 at the light, smooth, exactly 0 from `d = r`.
 pub fn attenuation(distance: f32, radius: f32, falloff: f32) -> f32 {
     if radius <= 0.0 {
@@ -117,5 +126,29 @@ pub fn quad_intersects_scene(quad: &SceneQuad, scene_w: u32, scene_h: u32) -> bo
         min = min.min(c.raw());
         max = max.max(c.raw());
     }
-    max.x > 0.0 && min.x < scene_w as f32 && max.y > 0.0 && min.y < scene_h as f32
+    rect_intersects_scene([min.x, min.y, max.x, max.y], scene_w, scene_h)
+}
+
+/// Whether the scene rectangle `[x0, y0, x1, y1]` overlaps the scene.
+pub(crate) fn rect_intersects_scene(r: [f32; 4], scene_w: u32, scene_h: u32) -> bool {
+    r[2] > 0.0 && r[0] < scene_w as f32 && r[3] > 0.0 && r[1] < scene_h as f32
+}
+
+/// Scene bounding rectangle `[x0, y0, x1, y1]` of the world box from `lo` to `hi` (x, y, height):
+/// the extremes of its eight projected corners.
+pub(crate) fn box_bounds(p: &Projection, lo: [f32; 3], hi: [f32; 3]) -> [f32; 4] {
+    let mut r = [1e30f32, 1e30, -1e30, -1e30];
+    for k in 0..8u32 {
+        let pick = |bit: u32, i: usize| if k & bit != 0 { hi[i] } else { lo[i] };
+        let c = p
+            .project(At::new(Vec2::new(pick(1, 0), pick(2, 1))), pick(4, 2))
+            .raw();
+        r = [
+            det::min(r[0], c.x),
+            det::min(r[1], c.y),
+            det::max(r[2], c.x),
+            det::max(r[3], c.y),
+        ];
+    }
+    r
 }

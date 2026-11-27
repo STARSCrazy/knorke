@@ -34,7 +34,8 @@ use crate::light::{
 };
 use crate::light_mask::{make_gpu_mask, make_mask_placement};
 use crate::light_math::{
-    NEAR_FIELD_SHARE, SceneQuad, flicker_noise, ground_radius, light_quad, quad_intersects_scene,
+    NEAR_FIELD_SHARE, box_bounds, flicker_noise, ground_radius, light_quad, quad_intersects_scene,
+    rect_intersects_scene,
 };
 use crate::mask::mask_atlas_blocks;
 use crate::mask_store::MaskStore;
@@ -42,10 +43,10 @@ use crate::rows::{MAX_ROWS, RowLight, RowSpace, light_suits, row_key, row_span};
 use crate::settings::LightSettings;
 use crate::shadow::{MaskAnchor, OcclusionDomain};
 use crate::{LightStore, Projection};
-use knorke_math::{At, Screen, Vec2, Vec3, det};
+use knorke_math::{Vec3, det};
 use std::borrow::Cow;
 
-const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
+use crate::light_math::DEG_TO_RAD;
 
 /// `Height::Auto` with normals (surface or material buffer): this factor on the radius (E39).
 pub const AUTO_HEIGHT_SCALE: f32 = 0.4;
@@ -599,32 +600,22 @@ pub fn collect_lights(
         if area {
             ground += det::max(extent_x, extent_y);
         }
-        let quad = light_quad(projection, d.position, ground);
-        let mut visible = quad_intersects_scene(&quad, scene_w, scene_h);
-        if modes.normal_mode {
-            // Bounding box of the ground quad and the quad raised by max_height.
-            let (mut min_x, mut min_y, mut max_x, mut max_y) =
-                (1e30f32, 1e30f32, -1e30f32, -1e30f32);
-            for c in &quad.corner {
-                let c = c.raw();
-                for h in [0.0, modes.max_height] {
-                    min_x = det::min(min_x, c.x + h * projection.z_axis.x);
-                    max_x = det::max(max_x, c.x + h * projection.z_axis.x);
-                    min_y = det::min(min_y, c.y + h * projection.z_axis.y);
-                    max_y = det::max(max_y, c.y + h * projection.z_axis.y);
-                }
-            }
-            let corner = |x: f32, y: f32| At::<Screen, Vec2>::new(Vec2::new(x, y));
-            let hull = SceneQuad {
-                corner: [
-                    corner(min_x, min_y),
-                    corner(max_x, min_y),
-                    corner(min_x, max_y),
-                    corner(max_x, max_y),
-                ],
-            };
-            visible = quad_intersects_scene(&hull, scene_w, scene_h);
-        }
+        let visible = if modes.normal_mode {
+            // The ground quad and the quad raised by max_height.
+            let c = d.position.raw();
+            let hull = box_bounds(
+                projection,
+                [c.x - ground, c.y - ground, 0.0],
+                [c.x + ground, c.y + ground, modes.max_height],
+            );
+            rect_intersects_scene(hull, scene_w, scene_h)
+        } else {
+            quad_intersects_scene(
+                &light_quad(projection, d.position, ground),
+                scene_w,
+                scene_h,
+            )
+        };
         if !visible {
             continue;
         }

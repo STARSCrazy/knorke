@@ -100,9 +100,9 @@ impl<'d> RingLightPass<'d> {
             .as_ref()
             .and_then(|c| c.pipeline(0, LIGHT_FORMAT))
             .ok_or_else(|| {
-                Diagnostic::error(
+                crate::missing_after_prepare(
                     crate::lighting::LIGHTING_INPUT_MISSING,
-                    "the ring light pipeline is missing after prepare",
+                    "the ring light pipeline",
                 )
             })?;
         let target = if load {

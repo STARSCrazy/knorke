@@ -135,10 +135,7 @@ pub struct MediumMapStage<'d> {
 }
 
 fn missing(what: &str) -> Diagnostic {
-    Diagnostic::error(
-        MEDIUM_NOT_PREPARED,
-        format!("{what} is missing after prepare"),
-    )
+    crate::missing_after_prepare(MEDIUM_NOT_PREPARED, what)
 }
 
 impl<'d> MediumMapStage<'d> {

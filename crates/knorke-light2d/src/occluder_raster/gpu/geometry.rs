@@ -88,9 +88,8 @@ impl<'d> TriangleBuffer<'d> {
     }
 
     fn buffer(&self) -> Result<BufferRef<'_>, Diagnostic> {
-        self.upload.buffer_ref().ok_or_else(|| {
-            Diagnostic::error(NOT_PREPARED, "a triangle buffer is missing after prepare")
-        })
+        (self.upload.buffer_ref())
+            .ok_or_else(|| crate::missing_after_prepare(NOT_PREPARED, "a triangle buffer"))
     }
 }
 
@@ -258,12 +257,7 @@ impl<'d> OccluderGeometry<'d> {
         }
         let pipeline = pipelines
             .pipeline(self.programs.occluder, MASK_FORMAT)
-            .ok_or_else(|| {
-                Diagnostic::error(
-                    NOT_PREPARED,
-                    "the occluder pipeline is missing after prepare",
-                )
-            })?;
+            .ok_or_else(|| crate::missing_after_prepare(NOT_PREPARED, "the occluder pipeline"))?;
         let sets = [
             (&self.statics, &self.static_intervals, static_set),
             (&self.dynamics, &self.dynamic_intervals, dynamic_set),

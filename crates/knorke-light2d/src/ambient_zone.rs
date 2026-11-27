@@ -17,6 +17,7 @@
 //! uses [`knorke_math::det`] (ADR 0011). Nothing here panics on bad input.
 
 use crate::ambient_zone_store::AmbientZoneStore;
+use crate::light_math::{DEG_TO_RAD, box_bounds};
 use crate::projection::Projection;
 use crate::triangulate::Triangulator;
 use knorke_math::{Vec2, Vec3, det};
@@ -306,7 +307,7 @@ impl StoredZone {
 /// The errors of [`validate_zone`].
 pub fn make_stored_zone(p: &AmbientZoneParams) -> Result<StoredZone, ZoneError> {
     validate_zone(p)?;
-    let rad = p.rotation * (core::f32::consts::PI / 180.0);
+    let rad = p.rotation * DEG_TO_RAD;
     let (sin_r, cos_r) = det::sin_cos(rad);
     let mut params = p.clone();
     params.vertices = Vec::new();
@@ -511,20 +512,9 @@ pub fn zone_scene_rect(
         };
         z_hi = det::max(z_hi, z_lo);
     }
-    let q = projection;
-    let origin = q.origin.raw();
-    let (mut x0, mut y0, mut x1, mut y1) = (3.0e38f32, 3.0e38f32, -3.0e38f32, -3.0e38f32);
-    for k in 0..8 {
-        let wx = if k & 1 != 0 { z.hull[2] } else { z.hull[0] };
-        let wy = if k & 2 != 0 { z.hull[3] } else { z.hull[1] };
-        let wz = if k & 4 != 0 { z_hi } else { z_lo };
-        let sx = origin.x + wx * q.x_axis.x + wy * q.y_axis.x + wz * q.z_axis.x;
-        let sy = origin.y + wx * q.x_axis.y + wy * q.y_axis.y + wz * q.z_axis.y;
-        x0 = det::min(x0, sx);
-        y0 = det::min(y0, sy);
-        x1 = det::max(x1, sx);
-        y1 = det::max(y1, sy);
-    }
+    let h = z.hull;
+    let [mut x0, mut y0, mut x1, mut y1] =
+        box_bounds(projection, [h[0], h[1], z_lo], [h[2], h[3], z_hi]);
     x0 = det::max(x0 - 1.0, 0.0);
     y0 = det::max(y0 - 1.0, 0.0);
     x1 = det::min(x1 + 1.0, scene_w as f32);

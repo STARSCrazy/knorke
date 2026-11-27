@@ -211,9 +211,7 @@ impl<'d> TileOccluders<'d> {
         }
         let pipeline = pipelines
             .pipeline(self.programs.tiles, MASK_FORMAT)
-            .ok_or_else(|| {
-                Diagnostic::error(NOT_PREPARED, "the tile pipeline is missing after prepare")
-            })?;
+            .ok_or_else(|| crate::missing_after_prepare(NOT_PREPARED, "the tile pipeline"))?;
         let mut draws = 0;
         for slot in self.tiles.slots() {
             let Some(texture) = slot.texture.as_ref() else {

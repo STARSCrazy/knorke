@@ -338,12 +338,7 @@ fn clear_pending(set: &mut TileSet<Made>) {
 }
 
 fn all(columns: u32, rows: u32) -> Option<CellRect> {
-    Some(CellRect {
-        x0: 0,
-        y0: 0,
-        x1: columns,
-        y1: rows,
-    })
+    Some(CellRect::new(0, 0, columns, rows))
 }
 
 #[test]

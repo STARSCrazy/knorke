@@ -105,6 +105,15 @@ pub use projection::{Projection, ProjectionError};
 pub use resources::StoreResources;
 pub use triangulate::{TriangulateError, Triangulator, circle_triangles};
 
+/// The error of a GPU stage whose `record` lacks something its `prepare` makes.
+#[cfg(feature = "gpu")]
+pub(crate) fn missing_after_prepare(
+    code: knorke_types::DiagnosticCode,
+    what: &str,
+) -> knorke_types::Diagnostic {
+    knorke_types::Diagnostic::error(code, format!("{what} is missing after prepare"))
+}
+
 /// `Snapshot::restore` of a section that reads only its current `VERSION`.
 pub(crate) fn check_version<S: knorke_types::Snapshot>(
     version: u16,

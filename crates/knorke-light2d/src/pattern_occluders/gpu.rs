@@ -408,8 +408,7 @@ impl<'d> PatternOccluders<'d> {
             return Ok(());
         }
         self.redraw_ids = false;
-        let missing =
-            || Diagnostic::error(NOT_PREPARED, "a pattern resource is missing after prepare");
+        let missing = || crate::missing_after_prepare(NOT_PREPARED, "a pattern resource");
         let target = self.ids.texture_ref().ok_or_else(missing)?;
         let mut pass =
             cmd.render_pass(&[ColorTarget::new(target, Load::Clear([0.0; 4])).cycled(true)])?;

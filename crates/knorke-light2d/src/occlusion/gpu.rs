@@ -184,12 +184,8 @@ fn pipeline<'a>(
     program: ProgramIndex,
     format: SDL_GPUTextureFormat,
 ) -> Result<PipelineRef<'a>, Diagnostic> {
-    pipelines.pipeline(program, format).ok_or_else(|| {
-        Diagnostic::error(
-            NOT_PREPARED,
-            "an occlusion pipeline is missing after prepare",
-        )
-    })
+    (pipelines.pipeline(program, format))
+        .ok_or_else(|| crate::missing_after_prepare(NOT_PREPARED, "an occlusion pipeline"))
 }
 
 /// The occlusion mask (R the obstacle opacity, G footprint, E25) and the height intervals

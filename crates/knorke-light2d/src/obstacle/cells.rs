@@ -51,6 +51,16 @@ impl CellRect {
         self.width() as usize * self.height() as usize
     }
 
+    /// The bounding box of both.
+    pub fn union(&self, b: &Self) -> Self {
+        Self {
+            x0: self.x0.min(b.x0),
+            y0: self.y0.min(b.y0),
+            x1: self.x1.max(b.x1),
+            y1: self.y1.max(b.y1),
+        }
+    }
+
     /// The grid index of the `i`-th cell (row-major) of the rectangle.
     pub(super) fn cell_index(&self, columns: u32, i: usize) -> usize {
         let w = self.width() as usize;
@@ -442,12 +452,6 @@ pub(super) fn changed_cell_rects(
         x1: 0,
         y1: 0,
     };
-    let grow = |r: CellRect, q: CellRect| CellRect {
-        x0: r.x0.min(q.x0),
-        y0: r.y0.min(q.y0),
-        x1: r.x1.max(q.x1),
-        y1: r.y1.max(q.y1),
-    };
     let mut count = 0;
     let mut all = none;
     let mut overflow = false;
@@ -469,15 +473,7 @@ pub(super) fn changed_cell_rects(
             for x in 0..g.columns {
                 if cell_differs(start + x as usize) {
                     let b = (x / B) as usize;
-                    row[b] = grow(
-                        row[b],
-                        CellRect {
-                            x0: x,
-                            y0: y,
-                            x1: x + 1,
-                            y1: y + 1,
-                        },
-                    );
+                    row[b] = row[b].union(&CellRect::new(x, y, 1, 1));
                 }
             }
         }
@@ -486,7 +482,7 @@ pub(super) fn changed_cell_rects(
                 if block.x1 == 0 {
                     continue; // unchanged block
                 }
-                all = grow(all, block);
+                all = all.union(&block);
                 overflow |= count == MAX_COMPARE_RECTS;
                 if !overflow {
                     rects[count] = block;

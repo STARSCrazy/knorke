@@ -11,6 +11,7 @@
 //! (a GPU texture in [`TileOccluders`](super::TileOccluders), `()` in tests).
 
 use super::params::{DomainParams, TileParams, obstacle_interval};
+use crate::light_math::DEG_TO_RAD;
 use crate::obstacle::{ObstacleId, ObstacleStore, PatternSource, StoredObstacle};
 use crate::shadow::CellRect;
 use knorke_math::det;
@@ -20,16 +21,6 @@ use knorke_math::uniform::write_f32s;
 /// solid), g the bottom level, b the cell opacity times the obstacle's, a the edge bits (255
 /// for a whole cell).
 pub const CELL_BYTES: usize = 4;
-
-/// The bounding box of two cell rectangles.
-pub fn union_cells(a: &CellRect, b: &CellRect) -> CellRect {
-    CellRect {
-        x0: a.x0.min(b.x0),
-        y0: a.y0.min(b.y0),
-        x1: a.x1.max(b.x1),
-        y1: a.y1.max(b.y1),
-    }
-}
 
 /// What the draw of one grid pushes: the vertex block placing the quad and the fragment block
 /// of `tile.frag`.
@@ -62,12 +53,7 @@ impl TileUniforms {
         };
         let finite = if o.has_finite_height() { 1.0 } else { 0.0 };
         Self {
-            placement: [
-                p.x,
-                p.y,
-                o.common.rotation * (core::f32::consts::PI / 180.0),
-                0.0,
-            ],
+            placement: [p.x, p.y, o.common.rotation * DEG_TO_RAD, 0.0],
             grid_size: [
                 g.cell_size.x,
                 g.cell_size.y,
@@ -131,7 +117,7 @@ pub struct TileSlot<T> {
 
 impl<T> TileSlot<T> {
     fn add_pending(&mut self, r: CellRect) {
-        self.pending = Some(self.pending.map_or(r, |p| union_cells(&p, &r)));
+        self.pending = Some(self.pending.map_or(r, |p| p.union(&r)));
     }
 }
 
@@ -234,12 +220,7 @@ impl<T> TileSet<T> {
                 slot.rows = o.grid.rows;
                 slot.revision = 0; // forces the upload below
             }
-            let all = CellRect {
-                x0: 0,
-                y0: 0,
-                x1: o.grid.columns,
-                y1: o.grid.rows,
-            };
+            let all = CellRect::new(0, 0, o.grid.columns, o.grid.rows);
             if slot.revision != o.revision {
                 slot.add_pending(all);
                 slot.revision = o.revision;
@@ -248,7 +229,7 @@ impl<T> TileSet<T> {
                 let mut changed = None::<CellRect>;
                 let known = store.cell_log().for_each(slot.cell_version, |c| {
                     if c.grid == handle {
-                        changed = Some(changed.map_or(c.cells, |p| union_cells(&p, &c.cells)));
+                        changed = Some(changed.map_or(c.cells, |p| p.union(&c.cells)));
                     }
                 });
                 if !known {

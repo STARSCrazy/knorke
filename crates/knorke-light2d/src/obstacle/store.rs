@@ -54,6 +54,7 @@ use super::error::ObstacleError;
 use super::patterns::{MAX_PATTERN_TABLE, MAX_PATTERN_VERTICES, check_fits_shape};
 use super::store_edit::EditState;
 use super::stored::{ObstacleKind, Span, StoredObstacle, outline_of, prepare_shape};
+use crate::light_math::DEG_TO_RAD;
 use crate::triangulate::Triangulator;
 use knorke_math::{At, Vec2, World2, det};
 use knorke_types::{
@@ -531,7 +532,7 @@ impl ObstacleStore {
             return;
         };
         let local = self.triangles.slice(s.triangles);
-        let rad = s.common.rotation * (core::f32::consts::PI / 180.0);
+        let rad = s.common.rotation * DEG_TO_RAD;
         let (sin, cos) = det::sin_cos(rad);
         let p = s.common.position.raw();
         out.reserve(local.len());

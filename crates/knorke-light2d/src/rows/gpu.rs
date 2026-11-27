@@ -1402,8 +1402,5 @@ fn row_mask<'a>(s: &'a ShadowMaps<'a>) -> RowMask<'a> {
 }
 
 fn missing(what: &str) -> Diagnostic {
-    Diagnostic::error(
-        ROWS_INPUT_MISSING,
-        format!("{what} is missing after prepare"),
-    )
+    crate::missing_after_prepare(ROWS_INPUT_MISSING, what)
 }

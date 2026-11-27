@@ -33,7 +33,7 @@ use knorke_types::{
 };
 
 const TWO_PI: f32 = core::f32::consts::TAU;
-const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
+use crate::light_math::DEG_TO_RAD;
 
 /// Handle of a light animation in an [`AnimationStore`].
 pub type AnimationId = Handle<AnimationDesc>;

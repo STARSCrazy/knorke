@@ -592,10 +592,7 @@ fn atlas_missing(what: &str) -> Diagnostic {
 }
 
 fn input_missing(what: &str) -> Diagnostic {
-    Diagnostic::error(
-        LIGHTING_INPUT_MISSING,
-        format!("{what} is missing after prepare"),
-    )
+    crate::missing_after_prepare(LIGHTING_INPUT_MISSING, what)
 }
 
 /// Everything the medium programs can read, by name (Chiaro `ProgramResources`); each draw

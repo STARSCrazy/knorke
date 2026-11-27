@@ -47,7 +47,7 @@ pub use params::{
     DomainParams, INFINITE_TOP, TileParams, interval_channels, obstacle_interval,
     thin_circle_radius,
 };
-pub use tile_cells::{CELL_BYTES, TileSet, TileSlot, TileUniforms, union_cells, write_cell_texels};
+pub use tile_cells::{CELL_BYTES, TileSet, TileSlot, TileUniforms, write_cell_texels};
 pub use triangles::{
     NoPatterns, TriangleSet, triangle_buffer_floats, widen_circle, write_triangle_buffer,
 };

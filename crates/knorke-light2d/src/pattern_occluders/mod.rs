@@ -47,6 +47,7 @@ pub use gpu::{
     PATTERN_ID_FORMAT, PATTERN_PROGRAMS, PatternMaps, PatternOccluders, PatternPrograms,
 };
 
+use crate::light_math::DEG_TO_RAD;
 use crate::obstacle::{ObstacleId, ObstacleKind, StoredObstacle};
 use crate::occluder_raster::widen_circle;
 use crate::pattern_store::{ATLAS_SIZE, MAX_REGION, MEANS_PER_ROW, PatternStore};
@@ -204,7 +205,7 @@ pub fn in_domain(
 
 /// `(sin, cos)` of the obstacle's rotation, as the obstacle triangles use it.
 fn rotation(o: &StoredObstacle) -> (f32, f32) {
-    det::sin_cos(o.common.rotation * (core::f32::consts::PI / 180.0))
+    det::sin_cos(o.common.rotation * DEG_TO_RAD)
 }
 
 /// The [`PatternParams`] of a frame: the inverse of [`world_to_mask`] and the atlas size.

@@ -17,7 +17,7 @@ use crate::light::{LightDesc, LightType, MaskMode, StoredLight};
 use crate::mask::sample_mask_texels;
 use knorke_math::{Vec3, det};
 
-const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
+use crate::light_math::DEG_TO_RAD;
 /// Projector: a point light's default half angle.
 const POINT_MASK_ANGLE: f32 = 45.0;
 

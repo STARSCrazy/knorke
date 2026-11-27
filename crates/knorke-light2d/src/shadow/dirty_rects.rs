@@ -10,6 +10,7 @@
 
 use super::domain::OcclusionDomain;
 use crate::Projection;
+use crate::light_math::DEG_TO_RAD;
 use crate::obstacle::{ObstacleId, ObstacleStore, StoredObstacle};
 use knorke_math::{At, Vec2, World2, det};
 
@@ -420,7 +421,7 @@ fn append_cell_corners(grid: &StoredObstacle, cells: &CellRect, out: &mut Vec<At
     let size = grid.grid.cell_size;
     let (x0, x1) = (size.x * cells.x0 as f32, size.x * cells.x1 as f32);
     let (y0, y1) = (size.y * cells.y0 as f32, size.y * cells.y1 as f32);
-    let (s, c) = det::sin_cos(grid.common.rotation * (core::f32::consts::PI / 180.0));
+    let (s, c) = det::sin_cos(grid.common.rotation * DEG_TO_RAD);
     let p = grid.common.position.raw();
     for (x, y) in [(x0, y0), (x1, y0), (x0, y1), (x1, y1)] {
         out.push(At::new(Vec2::new(c * x - s * y + p.x, s * x + c * y + p.y)));
@@ -445,12 +446,7 @@ pub fn obstacle_grid_rect(
         return DirtyRect::EMPTY;
     };
     if obstacle.is_tile_grid() {
-        let all = CellRect {
-            x0: 0,
-            y0: 0,
-            x1: obstacle.grid.columns,
-            y1: obstacle.grid.rows,
-        };
+        let all = CellRect::new(0, 0, obstacle.grid.columns, obstacle.grid.rows);
         append_cell_corners(obstacle, &all, scratch);
     } else {
         store.append_world_triangles(id, scratch);

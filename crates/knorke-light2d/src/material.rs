@@ -13,6 +13,7 @@
 //! same bits on every platform.
 
 use crate::Projection;
+use crate::light_math::smoothstep;
 use knorke_math::{Vec3, det};
 
 /// An orthonormal frame: tangent (maps to screen-right), bitangent (maps to screen-up), normal.
@@ -129,11 +130,6 @@ fn wet_hash(px: f32, py: f32) -> f32 {
         *v += d;
     }
     fract((q[0] + q[1]) * q[2])
-}
-
-fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
-    let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 /// Wet ground value noise in `[0, 1]` (`WetNoise` in `shaders/src/surface.hlsli`).

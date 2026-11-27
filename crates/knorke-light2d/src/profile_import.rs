@@ -67,6 +67,11 @@ impl ImportError {
         }
     }
 
+    /// An error without a line: the message is `"{format}: {detail}"`.
+    fn err(format: &'static str, kind: ImportErrorKind, detail: impl core::fmt::Display) -> Self {
+        Self::new(format, kind, None, format!("{format}: {detail}"))
+    }
+
     /// The failure kind.
     pub fn kind(&self) -> ImportErrorKind {
         self.kind
@@ -263,22 +268,17 @@ fn check_angles(
 ) -> Result<(), ImportError> {
     for (i, &v) in a.iter().enumerate() {
         if v < lo - 1e-3 || v > hi + 1e-3 {
-            return Err(ImportError::new(
+            return Err(ImportError::err(
                 format,
                 ImportErrorKind::OutOfRange,
-                None,
-                format!("{format}: {what} angle {v} is outside [{lo}, {hi}]"),
+                format!("{what} angle {v} is outside [{lo}, {hi}]"),
             ));
         }
         if i > 0 && !(v > a[i - 1]) {
-            return Err(ImportError::new(
+            return Err(ImportError::err(
                 format,
                 ImportErrorKind::OutOfRange,
-                None,
-                format!(
-                    "{format}: {what} angles must increase ({v} after {})",
-                    a[i - 1]
-                ),
+                format!("{what} angles must increase ({v} after {})", a[i - 1]),
             ));
         }
     }
@@ -314,11 +314,10 @@ fn assemble(
             continue;
         }
         let values = sources.get(source).ok_or_else(|| {
-            ImportError::new(
+            ImportError::err(
                 "measured data",
                 ImportErrorKind::Syntax,
-                None,
-                "measured data: plane index out of range".to_owned(),
+                "plane index out of range",
             )
         })?;
         m.angles.push(angle);
@@ -423,11 +422,10 @@ impl<'a> IesTokens<'a> {
     }
 
     fn ends(&self, what: &str) -> ImportError {
-        ImportError::new(
+        ImportError::err(
             IES,
             ImportErrorKind::Truncated,
-            None,
-            format!("IES: the file ends before {what}"),
+            format!("the file ends before {what}"),
         )
     }
 
@@ -456,11 +454,10 @@ impl<'a> IesTokens<'a> {
         let mut out = Vec::with_capacity(count);
         for i in 0..count {
             let Some(token) = self.next_token() else {
-                return Err(ImportError::new(
+                return Err(ImportError::err(
                     IES,
                     ImportErrorKind::Truncated,
-                    None,
-                    format!("IES: the file ends after {i} of {count} {what}"),
+                    format!("the file ends after {i} of {count} {what}"),
                 ));
             };
             let v = parse_number(token, false).ok_or_else(|| self.syntax(what, token))?;
@@ -483,12 +480,7 @@ fn starts_with_no_case(s: &[u8], prefix: &[u8]) -> bool {
 /// An [`ImportError`] naming the format, line and field for any malformed or unsupported input.
 pub fn import_ies(data: &[u8]) -> Result<Vec<f32>, ImportError> {
     if data.is_empty() {
-        return Err(ImportError::new(
-            IES,
-            ImportErrorKind::NoData,
-            None,
-            "IES: no data".to_owned(),
-        ));
+        return Err(ImportError::err(IES, ImportErrorKind::NoData, "no data"));
     }
     let mut lines = Lines::new(data);
     let mut tilt: Option<&[u8]> = None;
@@ -511,11 +503,10 @@ pub fn import_ies(data: &[u8]) -> Result<Vec<f32>, ImportError> {
         }
     }
     let Some(tilt) = tilt else {
-        return Err(ImportError::new(
+        return Err(ImportError::err(
             IES,
             ImportErrorKind::Syntax,
-            None,
-            "IES: no TILT= line (not an IES LM-63 file?)".to_owned(),
+            "no TILT= line (not an IES LM-63 file?)",
         ));
     };
     let mut tokens = IesTokens {
@@ -527,22 +518,20 @@ pub fn import_ies(data: &[u8]) -> Result<Vec<f32>, ImportError> {
         let _geometry = tokens.whole("the lamp-to-luminaire geometry of TILT=INCLUDE")?;
         let pairs = tokens.whole("the number of tilt angles")?;
         if pairs < 0 || pairs as usize > MAX_ANGLES {
-            return Err(ImportError::new(
+            return Err(ImportError::err(
                 IES,
                 ImportErrorKind::OutOfRange,
-                None,
-                format!("IES: {pairs} tilt angles (expected 0 to {MAX_ANGLES})"),
+                format!("{pairs} tilt angles (expected 0 to {MAX_ANGLES})"),
             ));
         }
         tokens.numbers("tilt angles", pairs as usize)?;
         tokens.numbers("tilt multipliers", pairs as usize)?;
     } else if !starts_with_no_case(tilt, b"NONE") {
-        return Err(ImportError::new(
+        return Err(ImportError::err(
             IES,
             ImportErrorKind::Unsupported,
-            None,
             format!(
-                "IES: TILT={} refers to a separate tilt file, which is not supported",
+                "TILT={} refers to a separate tilt file, which is not supported",
                 quote(tilt)
             ),
         ));
@@ -565,31 +554,26 @@ pub fn import_ies(data: &[u8]) -> Result<Vec<f32>, ImportError> {
         tokens.number(what)?;
     }
     if ptype != 1 {
-        return Err(ImportError::new(
+        return Err(ImportError::err(
             IES,
             ImportErrorKind::Unsupported,
-            None,
-            format!("IES: photometric type {ptype} is not supported, only type C (1)"),
+            format!("photometric type {ptype} is not supported, only type C (1)"),
         ));
     }
     let nv_ok = nv >= 1 && nv as usize <= MAX_ANGLES;
     let nh_ok = nh >= 1 && nh as usize <= MAX_ANGLES;
     if !nv_ok || !nh_ok || (nv as usize) * (nh as usize) > MAX_VALUES {
-        return Err(ImportError::new(
+        return Err(ImportError::err(
             IES,
             ImportErrorKind::OutOfRange,
-            None,
-            format!(
-                "IES: {nv} vertical and {nh} horizontal angles (expected 1 to {MAX_ANGLES} each)"
-            ),
+            format!("{nv} vertical and {nh} horizontal angles (expected 1 to {MAX_ANGLES} each)"),
         ));
     }
     if multiplier < 0.0 {
-        return Err(ImportError::new(
+        return Err(ImportError::err(
             IES,
             ImportErrorKind::OutOfRange,
-            None,
-            format!("IES: the candela multiplier must be >= 0 (got {multiplier})"),
+            format!("the candela multiplier must be >= 0 (got {multiplier})"),
         ));
     }
     let (nv, nh) = (nv as usize, nh as usize);
@@ -602,22 +586,18 @@ pub fn import_ies(data: &[u8]) -> Result<Vec<f32>, ImportError> {
         let mut plane = tokens.numbers("candela values", nv)?;
         for c in &mut plane {
             if *c < 0.0 {
-                return Err(ImportError::new(
+                return Err(ImportError::err(
                     IES,
                     ImportErrorKind::OutOfRange,
-                    None,
-                    format!("IES: candela values must be >= 0 (got {c} in plane {plane_angle})"),
+                    format!("candela values must be >= 0 (got {c} in plane {plane_angle})"),
                 ));
             }
             let scaled = f64::from(*c) * multiplier;
             if scaled > f64::from(f32::MAX) {
-                return Err(ImportError::new(
+                return Err(ImportError::err(
                     IES,
                     ImportErrorKind::OutOfRange,
-                    None,
-                    format!(
-                        "IES: candela value {c} times the multiplier {multiplier} is too large"
-                    ),
+                    format!("candela value {c} times the multiplier {multiplier} is too large"),
                 ));
             }
             *c = scaled as f32;
@@ -647,12 +627,11 @@ pub fn import_ies(data: &[u8]) -> Result<Vec<f32>, ImportError> {
             planes.push((540.0 - a, k));
         }
     } else if !(near(first, 0.0) && near(last, 360.0)) {
-        return Err(ImportError::new(
+        return Err(ImportError::err(
             IES,
             ImportErrorKind::Unsupported,
-            None,
             format!(
-                "IES: horizontal angles from {first} to {last} are not a supported symmetry (one angle, 0-90, 0-180, 90-270 or 0-360)"
+                "horizontal angles from {first} to {last} are not a supported symmetry (one angle, 0-90, 0-180, 90-270 or 0-360)"
             ),
         ));
     }
@@ -671,12 +650,11 @@ struct Eulumdat<'a> {
 
 impl<'a> Eulumdat<'a> {
     fn ends(&self, what: &str) -> ImportError {
-        ImportError::new(
+        ImportError::err(
             LDT,
             ImportErrorKind::Truncated,
-            None,
             format!(
-                "EULUMDAT: the file ends before line {} ({what})",
+                "the file ends before line {} ({what})",
                 self.lines.line() + 1
             ),
         )
@@ -727,14 +705,10 @@ impl<'a> Eulumdat<'a> {
         while out.len() < count {
             if self.pending.is_empty() {
                 let Some(line) = self.lines.next_line() else {
-                    return Err(ImportError::new(
+                    return Err(ImportError::err(
                         LDT,
                         ImportErrorKind::Truncated,
-                        None,
-                        format!(
-                            "EULUMDAT: the file ends after {} of {count} {what}",
-                            out.len()
-                        ),
+                        format!("the file ends after {} of {count} {what}", out.len()),
                     ));
                 };
                 self.pending = trim(line);
@@ -778,12 +752,7 @@ impl<'a> Eulumdat<'a> {
 /// An [`ImportError`] naming the format, line and field for any malformed or unsupported input.
 pub fn import_eulumdat(data: &[u8]) -> Result<Vec<f32>, ImportError> {
     if data.is_empty() {
-        return Err(ImportError::new(
-            LDT,
-            ImportErrorKind::NoData,
-            None,
-            "EULUMDAT: no data".to_owned(),
-        ));
+        return Err(ImportError::err(LDT, ImportErrorKind::NoData, "no data"));
     }
     let mut f = Eulumdat {
         lines: Lines::new(data),
@@ -807,23 +776,19 @@ pub fn import_eulumdat(data: &[u8]) -> Result<Vec<f32>, ImportError> {
     }
     let max_angles = MAX_ANGLES as i32;
     if !(1..=max_angles).contains(&mc) || !(1..=max_angles).contains(&ng) {
-        return Err(ImportError::new(
+        return Err(ImportError::err(
             LDT,
             ImportErrorKind::OutOfRange,
-            None,
             format!(
-                "EULUMDAT: Mc = {mc} C-planes and Ng = {ng} intensities per plane (expected 1 to {MAX_ANGLES})"
+                "Mc = {mc} C-planes and Ng = {ng} intensities per plane (expected 1 to {MAX_ANGLES})"
             ),
         ));
     }
     if mc as usize * ng as usize > MAX_VALUES {
-        return Err(ImportError::new(
+        return Err(ImportError::err(
             LDT,
             ImportErrorKind::OutOfRange,
-            None,
-            format!(
-                "EULUMDAT: Mc x Ng = {mc} x {ng} intensities are too many (at most {MAX_VALUES})"
-            ),
+            format!("Mc x Ng = {mc} x {ng} intensities are too many (at most {MAX_VALUES})"),
         ));
     }
     let divisor = match isym {
@@ -832,11 +797,10 @@ pub fn import_eulumdat(data: &[u8]) -> Result<Vec<f32>, ImportError> {
         _ => 1,
     };
     if mc % divisor != 0 {
-        return Err(ImportError::new(
+        return Err(ImportError::err(
             LDT,
             ImportErrorKind::OutOfRange,
-            None,
-            format!("EULUMDAT: Isym {isym} needs Mc divisible by {divisor} (got {mc})"),
+            format!("Isym {isym} needs Mc divisible by {divisor} (got {mc})"),
         ));
     }
     for what in [
@@ -904,11 +868,10 @@ pub fn import_eulumdat(data: &[u8]) -> Result<Vec<f32>, ImportError> {
     for s in 0..stored {
         let plane = values[s * ng..(s + 1) * ng].to_vec();
         if let Some(&v) = plane.iter().find(|&&v| v < 0.0) {
-            return Err(ImportError::new(
+            return Err(ImportError::err(
                 LDT,
                 ImportErrorKind::OutOfRange,
-                None,
-                format!("EULUMDAT: luminous intensities must be >= 0 (got {v})"),
+                format!("luminous intensities must be >= 0 (got {v})"),
             ));
         }
         planes.push(plane);
@@ -948,11 +911,10 @@ pub fn import_eulumdat(data: &[u8]) -> Result<Vec<f32>, ImportError> {
         };
         let s = usize::try_from(s).unwrap_or(usize::MAX);
         if s >= stored {
-            return Err(ImportError::new(
+            return Err(ImportError::err(
                 LDT,
                 ImportErrorKind::OutOfRange,
-                None,
-                format!("EULUMDAT: C-plane {k} refers to a missing stored plane"),
+                format!("C-plane {k} refers to a missing stored plane"),
             ));
         }
         full.push((if isym == 1 { 0.0 } else { ck }, s));

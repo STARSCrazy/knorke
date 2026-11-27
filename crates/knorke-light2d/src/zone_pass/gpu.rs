@@ -244,12 +244,7 @@ impl<'d> AmbientZonePass<'d> {
         if self.count == 0 {
             return Ok(());
         }
-        let missing = |what: &str| {
-            Diagnostic::error(
-                ZONE_PASS_INPUT_MISSING,
-                format!("{what} is missing after prepare"),
-            )
-        };
+        let missing = |what| crate::missing_after_prepare(ZONE_PASS_INPUT_MISSING, what);
         let start = ambient_clear(ambient);
         let first = ColorTarget::new(light, Load::Clear(start)).cycled(true);
         let mut targets = [first, first];

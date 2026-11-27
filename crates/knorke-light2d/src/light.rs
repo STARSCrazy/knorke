@@ -36,7 +36,7 @@ pub const MAX_FRAME_LIGHTS: usize = 4096;
 
 /// Largest angular radius of a directional light's `source_radius`, in degrees.
 const MAX_DIRECTIONAL_ANGLE: f32 = 10.0;
-const DEG_TO_RAD: f32 = core::f32::consts::PI / 180.0;
+use crate::light_math::DEG_TO_RAD;
 
 /// Handle kind of a light profile (stored by a later package; the light only refers to it).
 #[derive(Clone, Copy, Debug)]

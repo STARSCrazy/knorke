@@ -34,11 +34,11 @@ use crate::light_culling::{
     make_gpu_light,
 };
 use crate::light_mask::{make_gpu_mask, make_mask_placement};
-use crate::light_math::{SceneQuad, ground_radius, quad_intersects_scene};
+use crate::light_math::{box_bounds, ground_radius, rect_intersects_scene};
 use crate::mask::mask_atlas_blocks;
 use crate::rows::row_key;
 use crate::{LightStore, Projection};
-use knorke_math::{At, Screen, Vec2, Vec3, det};
+use knorke_math::{Vec3, det};
 
 /// A light with light shafts: the medium stage traces its shadow ray through the media.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,31 +140,12 @@ pub fn collect_medium_lights(
         };
         let half = ground_radius(dz, d.radius) + det::max(extent.x, extent.y);
         let pos = d.position.raw();
-        let (mut min_x, mut min_y, mut max_x, mut max_y) = (1e30f32, 1e30f32, -1e30f32, -1e30f32);
-        for k in 0..8u32 {
-            let c = projection.project(
-                At::new(Vec2::new(
-                    pos.x + if k & 1 != 0 { half } else { -half },
-                    pos.y + if k & 2 != 0 { half } else { -half },
-                )),
-                if k & 4 != 0 { top } else { bottom },
-            );
-            let c = c.raw();
-            min_x = det::min(min_x, c.x);
-            max_x = det::max(max_x, c.x);
-            min_y = det::min(min_y, c.y);
-            max_y = det::max(max_y, c.y);
-        }
-        let corner = |x: f32, y: f32| At::<Screen, Vec2>::new(Vec2::new(x, y));
-        let hull = SceneQuad {
-            corner: [
-                corner(min_x, min_y),
-                corner(max_x, min_y),
-                corner(min_x, max_y),
-                corner(max_x, max_y),
-            ],
-        };
-        if !quad_intersects_scene(&hull, scene_w, scene_h) {
+        let hull = box_bounds(
+            projection,
+            [pos.x - half, pos.y - half, bottom],
+            [pos.x + half, pos.y + half, top],
+        );
+        if !rect_intersects_scene(hull, scene_w, scene_h) {
             continue;
         }
         // No area normalization (E51): it stands in for the receiver's Lambert term, which

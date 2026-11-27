@@ -194,10 +194,7 @@ struct Prepared {
 }
 
 fn missing(what: &str) -> Diagnostic {
-    Diagnostic::error(
-        MEDIUM_STAGE_NOT_PREPARED,
-        format!("{what} is missing after prepare"),
-    )
+    crate::missing_after_prepare(MEDIUM_STAGE_NOT_PREPARED, what)
 }
 
 fn viewport(x: f32, y: f32, w: f32, h: f32) -> SDL_GPUViewport {
