@@ -408,7 +408,9 @@ mod tests {
             ("outer", 0, Some(Tick(3)))
         );
         let stats = r.stats();
-        assert_eq!(stats[0].name, "outer");
+        // Sorted by total time. Not "outer first": with a coarse clock the outer span can
+        // measure no longer than its rounded-up inner spans.
+        assert!(stats.windows(2).all(|w| w[0].total_ns >= w[1].total_ns));
         let inner = stats.iter().find(|s| s.name == "inner").unwrap();
         assert_eq!(inner.count, 4);
         assert!(
