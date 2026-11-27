@@ -393,8 +393,8 @@ fn steady_state_light2d_paths_allocate_nothing() {
         mask_snap.save(&masks);
         restore(&mut Reader::new(mask_snap.bytes()), &mut masks).unwrap();
         // Obstacle raster: collect, lay out, sync the grids, write the changed cells.
-        static_set.collect(&obstacles, &NoPatterns, false, 0.5, true);
-        dynamic_set.collect(&obstacles, &NoPatterns, true, 0.5, true);
+        static_set.collect(&obstacles, &NoPatterns, false, 0.5);
+        dynamic_set.collect(&obstacles, &NoPatterns, true, 0.5);
         write_triangle_buffer(
             dynamic_set.vertices(),
             dynamic_set.opacities(),

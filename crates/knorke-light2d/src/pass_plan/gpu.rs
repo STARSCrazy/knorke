@@ -571,8 +571,8 @@ impl<'d> PassPlan<'d> {
         // Steps 1 and 2: occlusion (Chiaro OcclusionStage::Prepare).
         let active = obstacles.iter().any(|(_, o)| o.is_active());
         let shadows = if any_shadow_caster(&self.lights) && (active || sprite) {
-            // Rows are built from the height texture, so a frame with shadows always has one
-            // (`height_mode` true below); in a flat frame the obstacles' heights are all infinite.
+            // Rows are built from the height texture, so the mask always has one; in a flat
+            // frame the obstacles' heights are all infinite.
             let mut input = MaskPlanInput::new(
                 obstacles,
                 frame.projection,
@@ -586,9 +586,9 @@ impl<'d> PassPlan<'d> {
             // gone and an obstacle writes its scalar opacity.
             let source = |id| stores.patterns.and_then(|p| p.mean_opacity(id));
             let before = self.occlusion.allocations();
-            let update =
-                self.occlusion
-                    .prepare(&mut self.shaders, &mut self.pipelines, &input, true)?;
+            let update = self
+                .occlusion
+                .prepare(&mut self.shaders, &mut self.pipelines, &input)?;
             self.occlusion.prepare_casters(self.lights.caster_classes)?;
             let mask_drawn = update != MaskUpdate::Reused;
             let min_radius = thin_circle_radius(frame.projection, &input.domain);
@@ -598,16 +598,10 @@ impl<'d> PassPlan<'d> {
                     &mut self.pipelines,
                     obstacles,
                     &source,
-                    true,
                     min_radius,
                 )?;
-                self.tiles.prepare(
-                    &mut self.shaders,
-                    &mut self.pipelines,
-                    obstacles,
-                    &source,
-                    true,
-                )?;
+                self.tiles
+                    .prepare(&mut self.shaders, &mut self.pipelines, obstacles, &source)?;
             }
             prepared.allocations += self.occlusion.allocations() - before;
             prepared.allocations += self.patterns.prepare(

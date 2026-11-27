@@ -1,9 +1,8 @@
 // Origin: chiaro @ 9bc5b9b, src/rendering/OcclusionMask.hpp and OcclusionMask.cpp (Begin, Plan,
 // PreparePipelines, RecordMask, RecordShiftCopy, Commit), the caster classes of E53
 // (OcclusionMask.cpp PrepareCasters, RecordCasters, RecordCaster) and src/gpu/PipelineCache.cpp
-// (the program table entries MaskClearRects, MaskClearRectsHeight, OcclusionMask,
-// OcclusionMaskHeight); the sprite mask of OcclusionMask.cpp (PreparePipelines, DrawSources,
-// SpriteParams).
+// (the program table entries MaskClearRectsHeight, OcclusionMaskHeight); the sprite mask of
+// OcclusionMask.cpp (PreparePipelines, DrawSources, SpriteParams).
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any
 // express or implied warranty; the origin must not be misrepresented; altered source versions
 // must be plainly marked as such (this file is a Rust port) and this notice may not be removed or
@@ -46,21 +45,17 @@ const fn program(vertex: &'static str, fragment: &'static str) -> ProgramDesc {
 
 /// The programs of the stage, to be placed in the host's
 /// [`PipelineCache`](knorke_gpu::PipelineCache) table at [`MaskPrograms::at`], next to
-/// [`OCCLUDER_PROGRAMS`](crate::occluder_raster::OCCLUDER_PROGRAMS). The clear programs reset
-/// the rectangles of a local update without blending; the sprite programs (the application's
-/// occlusion buffer, E21) blend with MAX like the obstacles.
-pub const MASK_PROGRAMS: [ProgramDesc; 4] = [
-    program("rect.vert", "clear.frag"),
+/// [`OCCLUDER_PROGRAMS`](crate::occluder_raster::OCCLUDER_PROGRAMS), each with the height
+/// texture as second target. The clear program resets the rectangles of a local update without
+/// blending; the sprite program (the application's occlusion buffer, E21) blends with MAX like
+/// the obstacles.
+pub const MASK_PROGRAMS: [ProgramDesc; 2] = [
     ProgramDesc {
         second: Some(SecondTarget {
             format: HEIGHT_FORMAT,
             blend: Blend::Opaque,
         }),
         ..program("rect.vert", "clear_height.frag")
-    },
-    ProgramDesc {
-        blend: Blend::Max,
-        ..program("fullscreen.vert", "occlusion_mask.frag")
     },
     ProgramDesc {
         blend: Blend::Max,
@@ -72,7 +67,7 @@ pub const MASK_PROGRAMS: [ProgramDesc; 4] = [
     },
 ];
 
-/// Size of the sprite mask's uniform block (`cbuffer SpriteParams` of `occlusion_mask.frag`).
+/// Size of the sprite mask's uniform block (`cbuffer SpriteParams` of `occlusion_mask_height.frag`).
 const SPRITE_PARAMS_SIZE: usize = 32;
 
 /// The sprite mask's parameters (Chiaro `SpriteParams`): the scene rectangle in mask texels,
@@ -117,22 +112,22 @@ fn sprite_params(d: &OcclusionDomain, remainder: [f32; 2]) -> ([u8; SPRITE_PARAM
 /// Where [`MASK_PROGRAMS`] sit in a pipeline table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MaskPrograms {
-    /// The first of the four programs.
+    /// The first of the two programs.
     pub base: ProgramIndex,
 }
 
 impl MaskPrograms {
-    /// The four programs at `base..base + 4`, in the order of [`MASK_PROGRAMS`].
+    /// The two programs at `base..base + 2`, in the order of [`MASK_PROGRAMS`].
     pub const fn at(base: ProgramIndex) -> Self {
         Self { base }
     }
 
-    fn clear(&self, height_mode: bool) -> ProgramIndex {
-        self.base + usize::from(height_mode)
+    fn clear(&self) -> ProgramIndex {
+        self.base
     }
 
-    fn sprite(&self, height_mode: bool) -> ProgramIndex {
-        self.base + 2 + usize::from(height_mode)
+    fn sprite(&self) -> ProgramIndex {
+        self.base + 1
     }
 }
 
@@ -197,8 +192,8 @@ fn pipeline<'a>(
     })
 }
 
-/// The occlusion mask (R the obstacle opacity, G footprint, E25) and, in height mode, the height
-/// intervals (E22), each as a ping-pong pair kept across frames (E21).
+/// The occlusion mask (R the obstacle opacity, G footprint, E25) and the height intervals
+/// (E22), each as a ping-pong pair kept across frames (E21).
 /// The mask covers the scene plus a margin band ([`OcclusionDomain`]).
 ///
 /// [`MaskUpdatePlan`] decides per frame how they change:
@@ -230,8 +225,6 @@ pub struct OcclusionMask<'d> {
     prepared: Option<MaskUpdate>,
     recorded: bool,
     last_update: MaskUpdate,
-    height_mode: bool,
-    height_recorded: bool,
     domain: OcclusionDomain,
     params: DomainParams,
     /// The prepared frame draws the application's sprite mask (E21).
@@ -260,8 +253,6 @@ impl<'d> OcclusionMask<'d> {
             prepared: None,
             recorded: false,
             last_update: MaskUpdate::Full,
-            height_mode: false,
-            height_recorded: false,
             domain: OcclusionDomain::new(1, 1, 1.0),
             params: DomainParams::default(),
             sprite: false,
@@ -287,9 +278,9 @@ impl<'d> OcclusionMask<'d> {
     }
 
     /// Ensures the textures of `input.domain`, decides how this frame updates them and creates
-    /// the pipelines it draws with. `height_mode` adds the height pair (E22). Until
-    /// [`commit`](Self::commit) the textures count as not matching the plan, so a frame that is
-    /// prepared but not committed makes the next one rebuild fully.
+    /// the pipelines it draws with. Until [`commit`](Self::commit) the textures count as not
+    /// matching the plan, so a frame that is prepared but not committed makes the next one
+    /// rebuild fully.
     ///
     /// # Errors
     /// Creating a texture or a pipeline failed.
@@ -298,7 +289,6 @@ impl<'d> OcclusionMask<'d> {
         shaders: &mut ShaderLibrary<'d>,
         pipelines: &mut PipelineCache<'d>,
         input: &MaskPlanInput<'_>,
-        height_mode: bool,
     ) -> Result<MaskUpdate, Diagnostic> {
         let failed_before = self.failed;
         self.failed = true;
@@ -310,12 +300,10 @@ impl<'d> OcclusionMask<'d> {
         let mut reallocated = false;
         for i in 0..2 {
             reallocated |= self.mask[i].ensure(d.width, d.height, MASK_FORMAT)?;
-            if height_mode {
-                reallocated |= self.height[i].ensure(d.width, d.height, HEIGHT_FORMAT)?;
-            }
+            reallocated |= self.height[i].ensure(d.width, d.height, HEIGHT_FORMAT)?;
         }
         let mut input = *input;
-        input.force_full |= failed_before || reallocated || height_mode != self.height_recorded;
+        input.force_full |= failed_before || reallocated;
         let update = self.plan.decide(&input);
         // A shift copies into the other texture of each pair; everything else draws in place.
         self.target = if update == MaskUpdate::Incremental && self.plan.shift() != [0, 0] {
@@ -324,7 +312,6 @@ impl<'d> OcclusionMask<'d> {
             self.current
         };
         self.last_update = update;
-        self.height_mode = height_mode;
         self.domain = d;
         self.params = DomainParams::new(input.projection, &d, &input.anchor);
         self.sprite = input.sprite;
@@ -332,17 +319,17 @@ impl<'d> OcclusionMask<'d> {
 
         if update != MaskUpdate::Reused {
             // Every variant every time: the first camera pan must not create pipelines.
-            pipelines.get(shaders, self.programs.clear(height_mode), MASK_FORMAT)?;
+            pipelines.get(shaders, self.programs.clear(), MASK_FORMAT)?;
             if input.sprite {
-                pipelines.get(shaders, self.programs.sprite(height_mode), MASK_FORMAT)?;
+                pipelines.get(shaders, self.programs.sprite(), MASK_FORMAT)?;
             }
         }
         self.prepared = Some(update);
         Ok(update)
     }
 
-    /// Filtered shadows (E53), after [`prepare`](Self::prepare): ensures the mask and (in height
-    /// mode) height targets of every caster class in `classes`
+    /// Filtered shadows (E53), after [`prepare`](Self::prepare): ensures the mask and height
+    /// targets of every caster class in `classes`
     /// ([`LightList::caster_classes`](crate::light_culling::LightList::caster_classes): bit 0
     /// static, bit 1 dynamic) and releases the others, so a frame without filtered lights holds
     /// and draws nothing extra. The classes draw with the pipelines of the full mask.
@@ -363,11 +350,7 @@ impl<'d> OcclusionMask<'d> {
                 continue;
             }
             t.mask.ensure(d.width, d.height, MASK_FORMAT)?;
-            if self.height_mode {
-                t.height.ensure(d.width, d.height, HEIGHT_FORMAT)?;
-            } else {
-                t.height.release();
-            }
+            t.height.ensure(d.width, d.height, HEIGHT_FORMAT)?;
         }
         self.caster_classes = classes & 3;
         Ok(())
@@ -438,10 +421,7 @@ impl<'d> OcclusionMask<'d> {
             out.uploads += tiles.record_uploads(&mut copy)?;
             if let Some(c) = shift {
                 let (cur, tgt) = (self.current, self.target);
-                for (pair, used) in [(&self.mask, true), (&self.height, self.height_mode)] {
-                    if !used {
-                        continue; // a change of the height mode rebuilds fully
-                    }
+                for pair in [&self.mask, &self.height] {
                     // The copy and the redrawn strips together write every texel: may cycle.
                     copy.copy_texture_region(
                         view(&pair[cur], "source")?,
@@ -457,10 +437,7 @@ impl<'d> OcclusionMask<'d> {
 
         let t = self.target;
         let mask = view(&self.mask[t], "mask")?;
-        let height = self
-            .height_mode
-            .then(|| view(&self.height[t], "height"))
-            .transpose()?;
+        let height = view(&self.height[t], "height")?;
         let sources = Sources {
             geometry,
             tiles,
@@ -493,10 +470,7 @@ impl<'d> OcclusionMask<'d> {
                 continue;
             }
             let mask = view(&t.mask, "caster mask")?;
-            let height = self
-                .height_mode
-                .then(|| view(&t.height, "caster height"))
-                .transpose()?;
+            let height = view(&t.height, "caster height")?;
             let sources = Sources {
                 geometry,
                 tiles,
@@ -511,7 +485,7 @@ impl<'d> OcclusionMask<'d> {
         Ok(())
     }
 
-    /// One mask pass into `mask` (and `height`): local (clear the changed rectangles, keep the
+    /// One mask pass into `mask` and `height`: local (clear the changed rectangles, keep the
     /// rest) or full (clear everything), then the sources.
     #[allow(clippy::too_many_arguments)] // one pass over every source: all of it is needed
     fn record_mask(
@@ -521,7 +495,7 @@ impl<'d> OcclusionMask<'d> {
         nearest: SamplerRef<'_>,
         sources: &Sources<'_, '_>,
         mask: TextureRef<'_>,
-        height: Option<TextureRef<'_>>,
+        height: TextureRef<'_>,
         local: bool,
     ) -> Result<u32, Diagnostic> {
         let (mask_load, height_load) = if local {
@@ -529,16 +503,11 @@ impl<'d> OcclusionMask<'d> {
         } else {
             (Load::Clear([0.0; 4]), Load::Clear([-INFINITE_TOP; 4]))
         };
-        let mask = ColorTarget::new(mask, mask_load).cycled(!local);
-        let targets_buf;
-        let targets: &[ColorTarget<'_>] = if let Some(height) = height {
-            let height = ColorTarget::new(height, height_load).cycled(!local);
-            targets_buf = [mask, height];
-            &targets_buf
-        } else {
-            core::slice::from_ref(&mask)
-        };
-        let mut pass = cmd.render_pass(targets)?;
+        let targets = [
+            ColorTarget::new(mask, mask_load).cycled(!local),
+            ColorTarget::new(height, height_load).cycled(!local),
+        ];
+        let mut pass = cmd.render_pass(&targets)?;
         if local {
             // Clear the changed rectangles, then draw every source unclipped.
             let mut rects = RectParams::new();
@@ -548,11 +517,7 @@ impl<'d> OcclusionMask<'d> {
                 self.domain.height,
             );
             if n > 0 {
-                let clear = pipeline(
-                    pipelines,
-                    self.programs.clear(self.height_mode),
-                    MASK_FORMAT,
-                )?;
+                let clear = pipeline(pipelines, self.programs.clear(), MASK_FORMAT)?;
                 let rects: &[u8] = rects.bytes();
                 let bindings = Bindings {
                     vertex: StageBindings {
@@ -581,11 +546,7 @@ impl<'d> OcclusionMask<'d> {
         // The sprite mask is the occlusion layer: a static caster (Chiaro DrawSources).
         if let Some(sprite) = s.sprite.filter(|_| s.static_set) {
             // Last, like Chiaro's DrawSources: the scissor stays set for the rest of the pass.
-            let program = pipeline(
-                pipelines,
-                self.programs.sprite(self.height_mode),
-                MASK_FORMAT,
-            )?;
+            let program = pipeline(pipelines, self.programs.sprite(), MASK_FORMAT)?;
             let (params, scissor) = sprite_params(&self.domain, self.remainder);
             let samplers = [SamplerBinding::new(sprite, nearest)];
             let bindings = Bindings {
@@ -613,7 +574,6 @@ impl<'d> OcclusionMask<'d> {
         self.current = self.target;
         self.plan.commit();
         self.failed = false;
-        self.height_recorded = self.height_mode;
         self.prepared = None;
         self.recorded = false;
     }
@@ -623,13 +583,9 @@ impl<'d> OcclusionMask<'d> {
         self.mask[self.current].texture_ref()
     }
 
-    /// The current height texture, `None` unless the last committed frame had heights.
+    /// The current height texture, `None` before the first frame.
     pub fn height(&self) -> Option<TextureRef<'_>> {
-        if self.height_recorded {
-            self.height[self.current].texture_ref()
-        } else {
-            None
-        }
+        self.height[self.current].texture_ref()
     }
 
     /// The mask and heights of caster class `c` (0 static, 1 dynamic; E53), `None` while

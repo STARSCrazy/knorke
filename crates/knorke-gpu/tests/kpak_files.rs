@@ -94,12 +94,13 @@ fn reflection_counts_match_the_shader_contracts() {
     check("output.frag", F, r(3, 0, 1)); // HDR, overlay, bloom level 0
     // occlusion
     check("occluder.vert", V, r(0, 1, 1));
+    check("occluder_height.vert", V, r(0, 2, 1));
     check("tile.vert", V, r(0, 0, 1));
-    check("tile.frag", F, r(1, 0, 1));
-    check("occlusion_mask.frag", F, r(1, 0, 1));
-    check("solid.frag", F, r(0, 0, 0));
+    check("tile_height.frag", F, r(1, 0, 1));
+    check("occlusion_mask_height.frag", F, r(1, 0, 1));
+    check("solid_height.frag", F, r(0, 0, 0));
     check("rect.vert", V, r(0, 0, 1));
-    check("clear.frag", F, r(0, 0, 0));
+    check("clear_height.frag", F, r(0, 0, 0));
     // bloom
     for n in ["bloom_prefilter.frag", "bloom_down.frag", "bloom_up.frag"] {
         check(n, F, r(1, 0, 1));
@@ -129,6 +130,15 @@ fn reflection_counts_match_the_shader_contracts() {
     }
     check("pattern_id.frag", F, r(0, 0, 0));
     check("tile_pattern_id.frag", F, r(1, 2, 1));
+    // The mask is always drawn with heights: the plain mask programs are not shipped.
+    for p in [
+        "clear.frag",
+        "solid.frag",
+        "tile.frag",
+        "occlusion_mask.frag",
+    ] {
+        assert!(pack.get(p).is_err(), "{p}");
+    }
     // ADR 0019: the light rows replaced Chiaro's light programs, so none of them is shipped.
     let dropped = [
         "light.",

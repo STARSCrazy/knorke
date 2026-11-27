@@ -29,7 +29,7 @@
 //!   the caster classes of E53 and tools read it too), and a missed `clear_dirty` (a frame that
 //!   fails) would silently lose changes. They stay a host-side convenience until a consumer that
 //!   needs exactly "changed since I last looked" appears (plan 17).
-//! - The application sprite mask (`occlusion_mask.frag`, E21) is drawn by
+//! - The application sprite mask (`occlusion_mask_height.frag`, E21) is drawn by
 //!   [`OcclusionMask::record_with_sprite`] after the obstacles, into the scene rectangle of the
 //!   mask (since P31; the plan redraws that rectangle every frame).
 //! - The caster class masks of filtered shadows (E53, [`OcclusionMask::prepare_casters`]) are

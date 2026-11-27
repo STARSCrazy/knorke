@@ -35,9 +35,9 @@ fn grid(store: &mut ObstacleStore, columns: u32, rows: u32) -> ObstacleId {
         .unwrap()
 }
 
-fn collect(store: &ObstacleStore, dynamic: bool, min_radius: f32, intervals: bool) -> TriangleSet {
+fn collect(store: &ObstacleStore, dynamic: bool, min_radius: f32) -> TriangleSet {
     let mut set = TriangleSet::new();
-    set.collect(store, &NoPatterns, dynamic, min_radius, intervals);
+    set.collect(store, &NoPatterns, dynamic, min_radius);
     set
 }
 
@@ -130,11 +130,10 @@ fn static_and_dynamic_triangles_are_collected_apart_and_inactive_ones_are_skippe
         },
     );
 
-    let fixed_set = collect(&store, false, 0.5, false);
+    let fixed_set = collect(&store, false, 0.5);
     assert_eq!(fixed_set.vertices().len(), 6);
     assert_eq!(fixed_set.opacities(), &[1.0, 1.0]);
-    assert!(fixed_set.intervals().is_empty());
-    let moving_set = collect(&store, true, 0.5, false);
+    let moving_set = collect(&store, true, 0.5);
     assert_eq!(moving_set.vertices().len(), 9);
     assert_eq!(moving_set.opacities().len(), 3);
 }
@@ -148,7 +147,7 @@ fn triangles_are_in_world_space() {
         ..Default::default()
     };
     shape(&mut store, rect(8.0, 4.0), common);
-    let set = collect(&store, false, 0.5, false);
+    let set = collect(&store, false, 0.5);
     // Local x in [-4, 4], y in [-2, 2]; a quarter turn counter-clockwise swaps the extents.
     let (mut lo, mut hi) = (Vec2::new(1e9, 1e9), Vec2::new(-1e9, -1e9));
     for v in set.vertices() {
@@ -182,7 +181,7 @@ fn every_triangle_carries_the_mask_opacity_of_its_obstacle() {
             ..base
         },
     );
-    let set = collect(&store, false, 0.5, false);
+    let set = collect(&store, false, 0.5);
     // A footprint obstacle passes its opacity negated (the mask's G channel).
     assert_eq!(set.opacities(), &[0.5, 0.5, -0.25, -0.25]);
 }
@@ -194,10 +193,10 @@ fn a_pattern_lowers_the_opacity_to_its_mean() {
     let patterns = |pattern: u32| (pattern == 1).then_some(0.5);
     store.set_pattern(id, 1, &patterns).unwrap();
     let mut set = TriangleSet::new();
-    set.collect(&store, &patterns, false, 0.5, false);
+    set.collect(&store, &patterns, false, 0.5);
     assert_eq!(set.opacities(), &[0.5, 0.5]);
     // Without a pattern store the pattern is gone: the scalar opacity.
-    set.collect(&store, &NoPatterns, false, 0.5, false);
+    set.collect(&store, &NoPatterns, false, 0.5);
     assert_eq!(set.opacities(), &[1.0, 1.0]);
 }
 
@@ -210,7 +209,7 @@ fn circles_thinner_than_a_texel_are_widened_about_their_centre() {
     };
     shape(&mut store, Shape::Circle { radius: 0.25 }, centre);
     shape(&mut store, Shape::Circle { radius: 2.0 }, centre);
-    let set = collect(&store, false, 0.5, false);
+    let set = collect(&store, false, 0.5);
     assert_eq!(set.thin(), 1);
     assert_eq!(set.smallest_circle(), 0.25);
     let per = set.vertices().len() / 2;
@@ -226,9 +225,9 @@ fn circles_thinner_than_a_texel_are_widened_about_their_centre() {
     assert!((reach(&set.vertices()[per..]) - 2.0).abs() < 1e-4);
 
     // Nothing thin at a smaller limit; no circle: nothing to report.
-    let none = collect(&store, false, 0.1, false);
+    let none = collect(&store, false, 0.1);
     assert_eq!(none.thin(), 0);
-    let empty = collect(&ObstacleStore::new(), false, 0.5, false);
+    let empty = collect(&ObstacleStore::new(), false, 0.5);
     assert!(empty.is_empty());
     assert_eq!(empty.smallest_circle(), 1e30);
 }
@@ -254,7 +253,7 @@ fn height_intervals_hold_the_obstacle_interval_and_its_finite_copy() {
         interval_channels(store.get(finite).unwrap()),
         [-1.0, 3.0, -1.0, 3.0]
     );
-    let set = collect(&store, false, 0.5, true);
+    let set = collect(&store, false, 0.5);
     assert_eq!(set.intervals().len(), 4);
     assert_eq!(
         set.intervals()[0],

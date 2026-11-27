@@ -38,7 +38,6 @@ pub struct TileOccluders<'d> {
     tiles: TileSet<Texture<'d>>,
     transfer: UploadBuffer<'d>,
     upload_pending: bool,
-    height_mode: bool,
     drawing: bool,
 }
 
@@ -56,7 +55,6 @@ impl<'d> TileOccluders<'d> {
                 "tile cell",
             ),
             upload_pending: false,
-            height_mode: false,
             drawing: false,
         }
     }
@@ -74,13 +72,11 @@ impl<'d> TileOccluders<'d> {
         pipelines: &mut PipelineCache<'d>,
         obstacles: &ObstacleStore,
         patterns: &impl PatternSource,
-        height_mode: bool,
     ) -> Result<(), Diagnostic> {
         self.drawing = false;
         self.prepare_textures(obstacles, patterns)?;
-        self.height_mode = height_mode;
         if !self.tiles.is_empty() {
-            pipelines.get(shaders, self.programs.tile_grids(height_mode), MASK_FORMAT)?;
+            pipelines.get(shaders, self.programs.tiles, MASK_FORMAT)?;
             self.drawing = true;
         }
         Ok(())
@@ -198,9 +194,8 @@ impl<'d> TileOccluders<'d> {
         Ok(uploads)
     }
 
-    /// Draws one quad per grid into `pass`, whose targets are the mask (and in height mode the
-    /// height texture). `nearest` is the host's nearest-neighbour sampler. Returns the number
-    /// of draws.
+    /// Draws one quad per grid into `pass`, whose targets are the mask and the height texture.
+    /// `nearest` is the host's nearest-neighbour sampler. Returns the number of draws.
     ///
     /// # Errors
     /// Not prepared, the pass does not match the program's targets, or a binding is wrong.
@@ -214,10 +209,11 @@ impl<'d> TileOccluders<'d> {
         if !self.drawing {
             return Ok(0);
         }
-        let program = self.programs.tile_grids(self.height_mode);
-        let pipeline = pipelines.pipeline(program, MASK_FORMAT).ok_or_else(|| {
-            Diagnostic::error(NOT_PREPARED, "the tile pipeline is missing after prepare")
-        })?;
+        let pipeline = pipelines
+            .pipeline(self.programs.tiles, MASK_FORMAT)
+            .ok_or_else(|| {
+                Diagnostic::error(NOT_PREPARED, "the tile pipeline is missing after prepare")
+            })?;
         let mut draws = 0;
         for slot in self.tiles.slots() {
             let Some(texture) = slot.texture.as_ref() else {

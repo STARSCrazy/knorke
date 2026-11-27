@@ -98,15 +98,14 @@ impl<'d> TriangleBuffer<'d> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct StaticBuild {
     version: Revision,
-    heights: bool,
     min_radius: f32,
 }
 
 /// The triangle geometry of the obstacles that are not tile grids: world triangles with
-/// opacities (and in height mode intervals) in storage buffers. The static set is rebuilt and
-/// re-uploaded only when the static obstacles, the height mode or a static circle's widening
-/// changed; the dynamic set is rebuilt and uploaded in every frame that draws the mask and has a
-/// dynamic obstacle.
+/// opacities and height intervals in storage buffers. The static set is rebuilt and
+/// re-uploaded only when the static obstacles or a static circle's widening changed; the
+/// dynamic set is rebuilt and uploaded in every frame that draws the mask and has a dynamic
+/// obstacle.
 ///
 /// Per frame: [`prepare`](Self::prepare) (may fail), then [`record_uploads`](Self::record_uploads)
 /// in a copy pass, then [`record_draws`](Self::record_draws) in the render pass on the mask.
@@ -124,7 +123,6 @@ pub struct OccluderGeometry<'d> {
     dynamic_thin: u32,
     static_upload_pending: bool,
     static_interval_upload_pending: bool,
-    height_mode: bool,
     drawing: bool,
 }
 
@@ -144,15 +142,13 @@ impl<'d> OccluderGeometry<'d> {
             dynamic_thin: 0,
             static_upload_pending: false,
             static_interval_upload_pending: false,
-            height_mode: false,
             drawing: false,
         }
     }
 
     /// Rebuilds what changed (a frame that draws the mask; `min_radius` is
     /// [`thin_circle_radius`](crate::occluder_raster::thin_circle_radius)) and creates the draw
-    /// pipeline if there is anything to draw. With `height_mode` the intervals are collected
-    /// too and the height variants of the programs are used.
+    /// pipeline if there is anything to draw.
     ///
     /// # Errors
     /// Creating or mapping a buffer, or the pipeline, failed. The static geometry is then
@@ -163,7 +159,6 @@ impl<'d> OccluderGeometry<'d> {
         pipelines: &mut PipelineCache<'d>,
         obstacles: &ObstacleStore,
         patterns: &impl PatternSource,
-        height_mode: bool,
         min_radius: f32,
     ) -> Result<(), Diagnostic> {
         // A changed texel size matters to the static triangles only if a static circle is below
@@ -173,23 +168,16 @@ impl<'d> OccluderGeometry<'d> {
                 && self.static_set.smallest_circle() < det::max(min_radius, b.min_radius)
         });
         let version = obstacles.static_version();
-        let stale = self
-            .built
-            .is_none_or(|b| b.version != version || b.heights != height_mode);
-        if stale || thin_changed {
+        if self.built.is_none_or(|b| b.version != version) || thin_changed {
             self.built = None;
             self.static_set
-                .collect(obstacles, patterns, false, min_radius, height_mode);
+                .collect(obstacles, patterns, false, min_radius);
             self.static_thin = self.static_set.thin();
             self.statics.fill_triangles(&self.static_set)?;
-            self.static_intervals.floats = 0;
-            if height_mode {
-                self.static_intervals
-                    .fill_intervals(self.static_set.intervals())?;
-            }
+            self.static_intervals
+                .fill_intervals(self.static_set.intervals())?;
             self.built = Some(StaticBuild {
                 version,
-                heights: height_mode,
                 min_radius,
             });
             self.static_upload_pending = self.statics.floats > 0;
@@ -201,19 +189,16 @@ impl<'d> OccluderGeometry<'d> {
         self.dynamic_thin = 0;
         if obstacles.any_dynamic_enabled() {
             self.dynamic_set
-                .collect(obstacles, patterns, true, min_radius, height_mode);
+                .collect(obstacles, patterns, true, min_radius);
             self.dynamic_thin = self.dynamic_set.thin();
             self.dynamics.fill_triangles(&self.dynamic_set)?;
-            if height_mode {
-                self.dynamic_intervals
-                    .fill_intervals(self.dynamic_set.intervals())?;
-            }
+            self.dynamic_intervals
+                .fill_intervals(self.dynamic_set.intervals())?;
         }
 
-        self.height_mode = height_mode;
         self.drawing = self.statics.floats > 0 || self.dynamics.floats > 0;
         if self.drawing {
-            pipelines.get(shaders, self.programs.triangles(height_mode), MASK_FORMAT)?;
+            pipelines.get(shaders, self.programs.occluder, MASK_FORMAT)?;
         }
         Ok(())
     }
@@ -255,8 +240,8 @@ impl<'d> OccluderGeometry<'d> {
         Ok(uploads)
     }
 
-    /// Draws the static and/or dynamic set into `pass`, whose targets are the mask (and in
-    /// height mode the height texture). Returns the number of draws.
+    /// Draws the static and/or dynamic set into `pass`, whose targets are the mask and the
+    /// height texture. Returns the number of draws.
     ///
     /// # Errors
     /// Not prepared, the pass does not match the program's targets, or a binding is wrong.
@@ -271,13 +256,14 @@ impl<'d> OccluderGeometry<'d> {
         if !self.drawing {
             return Ok(0);
         }
-        let program = self.programs.triangles(self.height_mode);
-        let pipeline = pipelines.pipeline(program, MASK_FORMAT).ok_or_else(|| {
-            Diagnostic::error(
-                NOT_PREPARED,
-                "the occluder pipeline is missing after prepare",
-            )
-        })?;
+        let pipeline = pipelines
+            .pipeline(self.programs.occluder, MASK_FORMAT)
+            .ok_or_else(|| {
+                Diagnostic::error(
+                    NOT_PREPARED,
+                    "the occluder pipeline is missing after prepare",
+                )
+            })?;
         let sets = [
             (&self.statics, &self.static_intervals, static_set),
             (&self.dynamics, &self.dynamic_intervals, dynamic_set),
@@ -289,16 +275,10 @@ impl<'d> OccluderGeometry<'d> {
             }
             // The opacities follow the vertices in the same buffer; the pad says where.
             let params = domain.with_opacity_start(triangles.vertices).to_bytes();
-            let first = triangles.buffer()?;
-            let buffers = if self.height_mode {
-                [first, intervals.buffer()?]
-            } else {
-                [first, first]
-            };
-            let used = if self.height_mode { 2 } else { 1 };
+            let buffers = [triangles.buffer()?, intervals.buffer()?];
             let bindings = Bindings {
                 vertex: StageBindings {
-                    storage_buffers: &buffers[..used],
+                    storage_buffers: &buffers,
                     uniforms: &[&params],
                     ..Default::default()
                 },

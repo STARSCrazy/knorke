@@ -36,7 +36,7 @@ use knorke_math::{At, Vec2};
 struct Out {
     /// R8G8 mask, row-major, `[opacity, footprint]` per texel.
     mask: Vec<u8>,
-    /// RGBA16F height texture as raw halves, empty without height mode.
+    /// RGBA16F height texture as raw halves.
     heights: Vec<u16>,
     width: usize,
     uploads: u32,
@@ -104,7 +104,7 @@ impl<'d> Host<'d> {
         }
     }
 
-    fn frame(&mut self, store: &ObstacleStore, height_mode: bool) -> Out {
+    fn frame(&mut self, store: &ObstacleStore) -> Out {
         let anchor = MaskAnchor::compute(&self.projection, &self.domain);
         let params = DomainParams::new(&self.projection, &self.domain, &anchor);
         let min_radius = thin_circle_radius(&self.projection, &self.domain);
@@ -114,18 +114,11 @@ impl<'d> Host<'d> {
                 &mut self.pipelines,
                 store,
                 &NoPatterns,
-                height_mode,
                 min_radius,
             )
             .unwrap();
         self.tiles
-            .prepare(
-                &mut self.shaders,
-                &mut self.pipelines,
-                store,
-                &NoPatterns,
-                height_mode,
-            )
+            .prepare(&mut self.shaders, &mut self.pipelines, store, &NoPatterns)
             .unwrap();
 
         let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
@@ -137,16 +130,10 @@ impl<'d> Host<'d> {
         }
         let mut draws = 0;
         {
-            let mut targets = vec![ColorTarget::new(
-                self.mask.texture_ref(),
-                Load::Clear([0.0; 4]),
-            )];
-            if height_mode {
-                targets.push(ColorTarget::new(
-                    self.height.texture_ref(),
-                    Load::Clear([-65504.0; 4]),
-                ));
-            }
+            let targets = [
+                ColorTarget::new(self.mask.texture_ref(), Load::Clear([0.0; 4])),
+                ColorTarget::new(self.height.texture_ref(), Load::Clear([-65504.0; 4])),
+            ];
             let mut pass = cmd.render_pass(&targets).unwrap();
             draws += self
                 .geometry
@@ -163,18 +150,15 @@ impl<'d> Host<'d> {
                 .unwrap();
         }
         let mask_down = queue_download(self.gpu, &mut cmd, self.mask.texture_ref());
-        let height_down =
-            height_mode.then(|| queue_download(self.gpu, &mut cmd, self.height.texture_ref()));
+        let height_down = queue_download(self.gpu, &mut cmd, self.height.texture_ref());
         cmd.submit_and_wait().unwrap();
         let mask = read_download(mask_down);
-        let heights = height_down.map_or_else(Vec::new, |down| {
-            read_download(down)
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|b| u16::from_le_bytes(*b))
-                .collect()
-        });
+        let heights = read_download(height_down)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|b| u16::from_le_bytes(*b))
+            .collect();
         Out {
             mask,
             heights,
@@ -219,7 +203,7 @@ fn a_static_polygon_is_rasterized_into_the_mask_with_the_margin_band() {
     with_host(|host| {
         let mut store = ObstacleStore::new();
         polygon(&mut store, &square(), ObstacleCommon::default());
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!((out.width, out.mask.len()), (192, 192 * 128 * 2));
         assert_eq!(out.at(m(52), m(32)), 255);
         assert_eq!(out.at(m(48), m(24)), 255);
@@ -234,7 +218,7 @@ fn a_static_polygon_is_rasterized_into_the_mask_with_the_margin_band() {
         assert_eq!(out.draws, 1);
 
         // Unchanged: nothing is uploaded again, the same image is drawn.
-        let again = host.frame(&store, false);
+        let again = host.frame(&store);
         assert_eq!(again.uploads, 0);
         assert_eq!(again.mask, out.mask);
     });
@@ -250,7 +234,7 @@ fn obstacle_rotation_turns_a_thin_rectangle_onto_the_diagonal() {
             ..Default::default()
         };
         polygon(&mut store, &rect_xy(-40.0, -1.5, 40.0, 1.5), common);
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         // Texel centres with x - 64 == y - 32 lie exactly on the rotated axis.
         assert_eq!(out.at(m(64), m(32)), 255);
         assert_eq!(out.at(m(78), m(46)), 255);
@@ -268,7 +252,7 @@ fn a_tile_grid_rasterizes_its_solid_cells() {
         let mut cells = vec![0u8; 16 * 8];
         cells[3 * 16 + 6] = 1; // non-zero is solid, not just 255
         with_tiles(&mut store, &cells, 16, 8, 8.0);
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!(out.uploads, 1); // the cell texture; no static triangles
         for y in 24..=31 {
             for x in 48..=55 {
@@ -289,14 +273,14 @@ fn a_moved_and_rotated_tile_grid_follows_its_transform_without_a_new_upload() {
         let mut cells = vec![0u8; 4 * 2];
         cells[0] = 255; // cell (0, 0)
         let tiles = with_tiles(&mut store, &cells, 4, 2, 8.0);
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!(out.uploads, 1);
         assert_eq!(out.at(m(4), m(4)), 255);
 
         // Rotating by 90 degrees about (64, 32) maps local (x, y) to (64 - y, 32 + x): cell
         // (0, 0) covers 56..63 x 32..39.
         store.set_transform(tiles, at(64.0, 32.0), 90.0).unwrap();
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!(out.at(m(60), m(36)), 255);
         assert_eq!(out.at(m(4), m(4)), 0);
         assert_eq!(out.at(m(60), m(44)), 0); // cell (1, 0) is empty
@@ -327,7 +311,7 @@ fn the_mask_stores_the_opacity_of_every_obstacle_texel() {
         t.common.position = at(64.0, 48.0);
         let tiles = store.create_tile_grid(&t).unwrap();
 
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         let near = |got: u8, want: i32| (i32::from(got) - want).abs() <= 1;
         assert!(near(out.at(m(10), m(12)), 128)); // fence alone
         assert_eq!(out.at(m(20), m(12)), 255); // fence under the opaque overlap
@@ -340,7 +324,7 @@ fn the_mask_stores_the_opacity_of_every_obstacle_texel() {
         // The obstacle opacity scales the cell opacities.
         t.common.opacity = 0.5;
         store.set_tile_grid(tiles, &t).unwrap();
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert!(near(out.at(m(68), m(52)), 128));
         assert!(near(out.at(m(76), m(52)), 39));
     });
@@ -361,7 +345,7 @@ fn a_footprint_obstacle_marks_the_second_channel() {
             &rect_xy(8.0, 8.0, 16.0, 16.0),
             ObstacleCommon::default(),
         );
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!(
             (out.at(m(52), m(32)), out.footprint(m(52), m(32))),
             (128, 255)
@@ -394,7 +378,7 @@ fn an_obstacle_with_opacity_zero_draws_nothing_like_a_disabled_one() {
                 ..Default::default()
             },
         );
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!((out.draws, out.uploads), (0, 0));
         assert!(out.mask.iter().all(|&b| b == 0));
     });
@@ -416,7 +400,7 @@ fn circles_thinner_than_a_texel_still_cast_a_shadow() {
                 shape: Shape::Circle { radius: 0.2 },
             })
             .unwrap();
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!(host.geometry.thin_count(), 1);
         assert_eq!(out.at(m(64), m(32)), 255);
     });
@@ -442,11 +426,11 @@ fn dynamic_geometry_grows_its_buffer_once_and_then_stays_stable() {
                 })
                 .unwrap();
         }
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!(out.at(m(50), m(10)), 255);
         let live = counter.live();
         for _ in 0..3 {
-            let again = host.frame(&store, false);
+            let again = host.frame(&store);
             assert_eq!(again.uploads, 0, "dynamic uploads do not count");
             assert_eq!(again.mask, out.mask);
         }
@@ -461,18 +445,18 @@ fn a_destroyed_tile_grid_releases_its_texture() {
         let mut host = Host::new(gpu, pack);
         let mut store = ObstacleStore::new();
         polygon(&mut store, &square(), ObstacleCommon::default());
-        host.frame(&store, false);
-        host.frame(&store, false);
+        host.frame(&store);
+        host.frame(&store);
         let live = counter.live();
 
         let tiles = with_tiles(&mut store, &[1; 4], 2, 2, 4.0);
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         let with_tiles = counter.live();
         assert!(with_tiles > live);
         assert_eq!(out.at(m(2), m(2)), 255);
 
         store.destroy(tiles).unwrap();
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!(out.at(m(2), m(2)), 0);
         // The texture is gone; the transfer buffer for cell uploads stays for reuse.
         assert_eq!(counter.live(), with_tiles - 1);
@@ -485,14 +469,14 @@ fn edited_cells_upload_only_their_bounding_box_and_give_the_same_image() {
         let mut host = Host::new(gpu, pack);
         let mut store = ObstacleStore::new();
         let id = with_tiles(&mut store, &[1; 16 * 8], 16, 8, 8.0);
-        host.frame(&store, false);
+        host.frame(&store);
 
         store
             .set_tile_cells(id, CellRect::new(2, 2, 3, 1), Some(&[0, 0, 0]), None, None)
             .unwrap();
         let slot = host.tiles.len();
         assert_eq!(slot, 1);
-        let edited = host.frame(&store, false);
+        let edited = host.frame(&store);
         assert_eq!(edited.uploads, 1);
         assert_eq!(edited.at(m(24), m(20)), 0); // cell (3, 2) is empty now
         assert_eq!(edited.at(m(8), m(20)), 255); // cell (1, 2) next to it is not
@@ -500,7 +484,7 @@ fn edited_cells_upload_only_their_bounding_box_and_give_the_same_image() {
 
         // A host that never saw the old grid draws the same image from scratch.
         let mut fresh = Host::new(gpu, pack);
-        let whole = fresh.frame(&store, false);
+        let whole = fresh.frame(&store);
         assert_eq!(whole.mask, edited.mask);
     });
 }
@@ -516,7 +500,7 @@ fn edge_strips_draw_only_the_named_edges_of_a_cell() {
         d.edge_width = 2.0;
         d.edges = Some(&edges);
         store.create_tile_grid(&d).unwrap();
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!(out.at(m(1), m(4)), 255); // inside the strip (x < 2)
         assert_eq!(out.at(m(3), m(4)), 0);
         assert_eq!(out.at(m(6), m(4)), 0);
@@ -525,7 +509,7 @@ fn edge_strips_draw_only_the_named_edges_of_a_cell() {
     });
 }
 
-// ---- height mode ----
+// ---- heights ----
 
 #[test]
 fn the_height_texture_holds_each_obstacles_interval() {
@@ -551,7 +535,7 @@ fn the_height_texture_holds_each_obstacles_interval() {
             &rect_xy(90.0, 10.0, 100.0, 50.0),
             ObstacleCommon::default(),
         );
-        let out = host.frame(&store, true);
+        let out = host.frame(&store);
         assert_eq!(out.height(15, 15)[..2], [0.0, 3.0]);
         assert_eq!(out.height(60, 30)[..2], [-2.0, 5.0]);
         assert_eq!(out.height(95, 30)[..2], [0.0, 65504.0]);
@@ -581,7 +565,7 @@ fn overlapping_obstacles_merge_into_the_enclosing_interval() {
             &rect_xy(20.0, 20.0, 40.0, 40.0),
             common(6.0, 3.0, true),
         );
-        let out = host.frame(&store, true);
+        let out = host.frame(&store);
         assert_eq!(out.height(25, 25)[..2], [-1.0, 6.0]);
         assert_eq!(out.height(15, 15)[..2], [-1.0, 2.0]);
     });
@@ -602,7 +586,7 @@ fn an_infinite_obstacle_over_a_finite_one_keeps_the_finite_interval_in_the_last_
             &rect_xy(20.0, 10.0, 25.0, 30.0),
             ObstacleCommon::default(),
         );
-        let out = host.frame(&store, true);
+        let out = host.frame(&store);
         assert_eq!(out.height(22, 20), [0.0, 65504.0, -1.0, 6.0]);
         assert_eq!(out.height(22, 35)[3], -65504.0);
         assert_eq!(out.height(40, 50)[2..], [-65504.0; 2]);
@@ -621,7 +605,7 @@ fn tile_cells_carry_their_own_heights_and_bottoms() {
         d.common.position = at(10.0, 10.0);
         d.level_height = 2.0;
         store.create_tile_grid(&d).unwrap();
-        let out = host.frame(&store, true);
+        let out = host.frame(&store);
         assert_eq!(out.height(25, 15)[..2], [0.0, 2.0]);
         assert_eq!(out.height(15, 25)[..2], [-4.0, 6.0]);
         assert_eq!(out.height(25, 25)[..2], [0.0, 8.0]);
@@ -629,30 +613,6 @@ fn tile_cells_carry_their_own_heights_and_bottoms() {
         // The mask itself keeps only the solid cells.
         assert_eq!(out.at(m(25), m(15)), 255);
         assert_eq!(out.at(m(15), m(15)), 0);
-    });
-}
-
-#[test]
-fn switching_the_height_mode_rebuilds_the_static_buffers() {
-    with_host(|host| {
-        let mut store = ObstacleStore::new();
-        polygon(
-            &mut store,
-            &square(),
-            ObstacleCommon {
-                height: 4.0,
-                ..Default::default()
-            },
-        );
-        let plain = host.frame(&store, false);
-        assert_eq!(plain.uploads, 1);
-        let tall = host.frame(&store, true);
-        assert_eq!(tall.uploads, 1, "the intervals and the triangles are new");
-        assert_eq!(tall.height(52, 32)[..2], [0.0, 4.0]);
-        assert_eq!(tall.mask, plain.mask);
-        let back = host.frame(&store, false);
-        assert_eq!(back.uploads, 1);
-        assert_eq!(back.mask, plain.mask);
     });
 }
 
@@ -706,7 +666,7 @@ fn scene_height() -> ObstacleStore {
 #[test]
 fn the_mask_scene_matches_cpp_chiaro_texel_for_texel() {
     with_host(|host| {
-        let out = host.frame(&scene_mask(), false);
+        let out = host.frame(&scene_mask());
         let lit = out
             .mask
             .as_chunks::<2>()
@@ -729,7 +689,7 @@ fn the_mask_scene_matches_cpp_chiaro_texel_for_texel() {
 #[test]
 fn the_height_scene_matches_cpp_chiaro_texel_for_texel() {
     with_host(|host| {
-        let out = host.frame(&scene_height(), true);
+        let out = host.frame(&scene_height());
         assert_same_bytes(
             "height_scene mask",
             &out.mask,
@@ -863,7 +823,7 @@ fn a_skewed_projection_agrees_with_a_cpu_rasterizer() {
             })
             .unwrap();
 
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         let anchor = MaskAnchor::compute(&host.projection, &host.domain);
         let want = reference(&store, &host.projection, &host.domain, &anchor);
         let (mut checked, mut covered) = (0usize, 0usize);

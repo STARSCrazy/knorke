@@ -1,6 +1,6 @@
 //! P23 on a real GPU: the occlusion mask cache (`knorke_light2d::occlusion::OcclusionMask`),
 //! read back and compared with C++ Chiaro (chiaro @ 9bc5b9b, the mask dumps of
-//! `tests/golden/chiaro/field/field_ref.cpp` and, for the sprite mask in height mode,
+//! `tests/golden/chiaro/field/field_ref.cpp` and, for the sprite mask,
 //! `occluder/mask_ref.cpp`; zlib license) and with full rebuilds of the same state.
 //!
 //! The scene is `scene_mask` of P22 (128x64 scene, 32-texel margin band, so the mask is
@@ -11,17 +11,13 @@
 
 mod common;
 
+use common::light_host::MaskStages;
 use common::{at, polygon, programs, rect_xy, scene_mask_into};
 use knorke_gpu::test_support::{
     assert_same_bytes, golden_bytes, queue_download, read_download, sampled_rgba8, with_chiaro_pack,
 };
 use knorke_gpu::{CommandBuffer, Filter, Gpu, PipelineCache, Samplers, ShaderLibrary, TextureRef};
 use knorke_light2d::obstacle::ObstacleCommon;
-use knorke_light2d::occluder_raster::{
-    NoPatterns, OCCLUDER_PROGRAMS, OccluderGeometry, OccluderPrograms, TileOccluders,
-    thin_circle_radius,
-};
-use knorke_light2d::occlusion::{MaskPrograms, OcclusionMask};
 use knorke_light2d::shadow::{MaskPlanInput, MaskUpdate};
 use knorke_light2d::{ObstacleStore, Projection};
 use knorke_math::{At, Screen, Vec2};
@@ -32,7 +28,7 @@ struct Out {
     update: MaskUpdate,
     /// R8G8 mask bytes.
     mask: Vec<u8>,
-    /// RGBA16F height bytes, empty without height mode.
+    /// RGBA16F height bytes.
     height: Vec<u8>,
 }
 
@@ -41,9 +37,7 @@ struct Host<'d> {
     shaders: ShaderLibrary<'d>,
     pipelines: PipelineCache<'d>,
     samplers: Samplers<'d>,
-    geometry: OccluderGeometry<'d>,
-    tiles: TileOccluders<'d>,
-    occlusion: OcclusionMask<'d>,
+    mask: MaskStages<'d>,
     projection: Projection,
 }
 
@@ -51,83 +45,45 @@ impl<'d> Host<'d> {
     fn new(gpu: Gpu<'d>, pack: &[u8]) -> Self {
         let shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
         let pipelines = PipelineCache::new(&shaders, &programs()).unwrap();
-        let mut occlusion = OcclusionMask::new(gpu, MaskPrograms::at(OCCLUDER_PROGRAMS.len()));
+        let mut mask = MaskStages::new(gpu);
         // Local updates are never cheaper at this size (as in field_ref.cpp).
-        occlusion.set_full_rebuild_ratio(1.0);
+        mask.occlusion.set_full_rebuild_ratio(1.0);
         Self {
             gpu,
             shaders,
             pipelines,
             samplers: Samplers::new(gpu).unwrap(),
-            geometry: OccluderGeometry::new(gpu, OccluderPrograms::default()),
-            tiles: TileOccluders::new(gpu, OccluderPrograms::default()),
-            occlusion,
+            mask,
             projection: Projection::IDENTITY,
         }
     }
 
-    fn frame(&mut self, store: &ObstacleStore, height_mode: bool) -> Out {
-        self.frame_with_sprite(store, height_mode, None)
+    fn frame(&mut self, store: &ObstacleStore) -> Out {
+        self.frame_with_sprite(store, None)
     }
 
     /// A frame with the application's sprite mask `sprite` (scene size) drawn after the obstacles.
-    fn frame_with_sprite(
-        &mut self,
-        store: &ObstacleStore,
-        height_mode: bool,
-        sprite: Option<TextureRef<'_>>,
-    ) -> Out {
+    fn frame_with_sprite(&mut self, store: &ObstacleStore, sprite: Option<TextureRef<'_>>) -> Out {
         let mut input = MaskPlanInput::new(store, &self.projection, 128, 64, 1.0);
         input.sprite = sprite.is_some();
-        let update = self
-            .occlusion
-            .prepare(&mut self.shaders, &mut self.pipelines, &input, height_mode)
-            .unwrap();
-        assert_eq!(update, self.occlusion.last_update());
-        if update != MaskUpdate::Reused {
-            let min_radius = thin_circle_radius(&self.projection, &input.domain);
-            self.geometry
-                .prepare(
-                    &mut self.shaders,
-                    &mut self.pipelines,
-                    store,
-                    &NoPatterns,
-                    height_mode,
-                    min_radius,
-                )
-                .unwrap();
-            self.tiles
-                .prepare(
-                    &mut self.shaders,
-                    &mut self.pipelines,
-                    store,
-                    &NoPatterns,
-                    height_mode,
-                )
-                .unwrap();
-        }
         let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
-        self.occlusion
-            .record_with_sprite(
-                &mut cmd,
-                &self.pipelines,
-                self.samplers.sampler(Filter::Nearest),
-                &mut self.geometry,
-                &mut self.tiles,
-                sprite,
-            )
-            .unwrap();
-        self.occlusion.commit();
-        let mask = queue_download(self.gpu, &mut cmd, self.occlusion.mask().unwrap());
-        let height = self
-            .occlusion
-            .height()
-            .map(|h| queue_download(self.gpu, &mut cmd, h));
+        let update = self.mask.frame(
+            &mut self.shaders,
+            &mut self.pipelines,
+            self.samplers.sampler(Filter::Nearest),
+            &mut cmd,
+            &input,
+            sprite,
+        );
+        let occlusion = &self.mask.occlusion;
+        assert_eq!(update, occlusion.last_update());
+        let mask = queue_download(self.gpu, &mut cmd, occlusion.mask().unwrap());
+        let height = queue_download(self.gpu, &mut cmd, occlusion.height().unwrap());
         cmd.submit_and_wait().unwrap();
         Out {
             update,
             mask: read_download(mask),
-            height: height.map_or_else(Vec::new, read_download),
+            height: read_download(height),
         }
     }
 }
@@ -149,7 +105,7 @@ fn the_full_frame_matches_cpp_chiaro_texel_for_texel() {
     with_host(|host, _| {
         let mut store = ObstacleStore::new();
         scene_mask_into(&mut store);
-        let out = host.frame(&store, false);
+        let out = host.frame(&store);
         assert_eq!(out.update, MaskUpdate::Full);
         assert_same_bytes(
             "full mask",
@@ -159,11 +115,11 @@ fn the_full_frame_matches_cpp_chiaro_texel_for_texel() {
     });
 }
 
-/// `sprite_height` of `tests/golden/chiaro/occluder/mask_ref.cpp`: a finite obstacle (height
-/// mode) and a sprite mask with an opaque block over it, a block at alpha 128 (occludes) and one
+/// `sprite_height` of `tests/golden/chiaro/occluder/mask_ref.cpp`: a finite obstacle and a
+/// sprite mask with an opaque block over it, a block at alpha 128 (occludes) and one
 /// at alpha 127 (does not).
 #[test]
-fn the_sprite_mask_in_height_mode_matches_cpp_chiaro_texel_for_texel() {
+fn the_sprite_mask_with_heights_matches_cpp_chiaro_texel_for_texel() {
     with_host(|host, _| {
         let mut store = ObstacleStore::new();
         polygon(
@@ -189,7 +145,7 @@ fn the_sprite_mask_in_height_mode_matches_cpp_chiaro_texel_for_texel() {
             }
         }
         let sprite = sampled_rgba8(host.gpu, 128, 64, &px);
-        let out = host.frame_with_sprite(&store, true, Some(sprite.texture_ref()));
+        let out = host.frame_with_sprite(&store, Some(sprite.texture_ref()));
         assert_same_bytes(
             "sprite_height mask",
             &out.mask,
@@ -220,15 +176,15 @@ fn the_cached_sequence_matches_cpp_chiaro_texel_for_texel() {
             })
             .collect();
         let mut got = Vec::new();
-        let full = host.frame(&store, false);
+        let full = host.frame(&store);
         got.push(full.update);
-        let reused = host.frame(&store, false);
+        let reused = host.frame(&store);
         got.push(reused.update);
         assert!(reused.mask == full.mask);
 
         pan(&mut host.projection, -3.0, 2.0);
         store.set_transform(bar, at(96.0, 44.0), 50.0).unwrap();
-        let whole = host.frame(&store, false);
+        let whole = host.frame(&store);
         got.push(whole.update);
         assert_same_bytes(
             "pan_whole mask",
@@ -237,7 +193,7 @@ fn the_cached_sequence_matches_cpp_chiaro_texel_for_texel() {
         );
 
         pan(&mut host.projection, -1.4, -0.6);
-        let fraction = host.frame(&store, false);
+        let fraction = host.frame(&store);
         got.push(fraction.update);
         assert_same_bytes(
             "pan_fraction mask",
@@ -253,7 +209,7 @@ fn an_incremental_update_equals_a_full_rebuild_of_the_same_state() {
     with_host(|host, fresh| {
         let mut store = ObstacleStore::new();
         let bar = scene_mask_into(&mut store);
-        host.frame(&store, false);
+        host.frame(&store);
         // Whole-pixel pans keep the anchor remainder: the cache must be exact. Moving and
         // turning the bar redraws its old and new rectangle.
         for (i, (dx, dy)) in [(-3.0, 2.0), (5.0, 0.0), (0.0, -7.0), (2.0, 3.0)]
@@ -265,11 +221,11 @@ fn an_incremental_update_equals_a_full_rebuild_of_the_same_state() {
             store
                 .set_transform(bar, at(96.0 - 4.0 * i as f32, 44.0), angle)
                 .unwrap();
-            let cached = host.frame(&store, false);
+            let cached = host.frame(&store);
             assert_eq!(cached.update, MaskUpdate::Incremental, "frame {i}");
             let mut rebuilt = fresh();
             rebuilt.projection = host.projection;
-            let full = rebuilt.frame(&store, false);
+            let full = rebuilt.frame(&store);
             assert_eq!(full.update, MaskUpdate::Full);
             assert_same_bytes("incremental mask", &cached.mask, &full.mask);
         }
@@ -284,21 +240,21 @@ fn a_fractional_pan_equals_a_full_rebuild() {
     with_host(|host, fresh| {
         let mut store = ObstacleStore::new();
         scene_mask_into(&mut store);
-        host.frame(&store, false);
+        host.frame(&store);
         for i in 0..6 {
             pan(&mut host.projection, 1.37, 0.61);
-            let cached = host.frame(&store, false);
+            let cached = host.frame(&store);
             assert_eq!(cached.update, MaskUpdate::Incremental, "frame {i}");
             let mut rebuilt = fresh();
             rebuilt.projection = host.projection;
-            let full = rebuilt.frame(&store, false);
+            let full = rebuilt.frame(&store);
             assert_same_bytes(&format!("mask, frame {i}"), &cached.mask, &full.mask);
         }
     });
 }
 
 #[test]
-fn height_mode_shifts_and_redraws_the_height_texture_like_a_full_rebuild() {
+fn a_pan_shifts_and_redraws_the_height_texture_like_a_full_rebuild() {
     with_host(|host, fresh| {
         let mut store = ObstacleStore::new();
         let tall = |height, base, dynamic| ObstacleCommon {
@@ -317,24 +273,19 @@ fn height_mode_shifts_and_redraws_the_height_texture_like_a_full_rebuild() {
             &rect_xy(20.0, 20.0, 40.0, 40.0),
             tall(6.0, 3.0, true),
         );
-        let first = host.frame(&store, true);
+        let first = host.frame(&store);
         assert_eq!(first.update, MaskUpdate::Full);
         assert_eq!(first.height.len(), 192 * 128 * 8);
 
         pan(&mut host.projection, 4.0, -2.0);
         store.set_transform(mover, at(30.0, 5.0), 0.0).unwrap();
-        let cached = host.frame(&store, true);
+        let cached = host.frame(&store);
         assert_eq!(cached.update, MaskUpdate::Incremental);
         let mut rebuilt = fresh();
         rebuilt.projection = host.projection;
-        let full = rebuilt.frame(&store, true);
+        let full = rebuilt.frame(&store);
         assert_same_bytes("height mask", &cached.mask, &full.mask);
         assert_same_bytes("height texture", &cached.height, &full.height);
-
-        // Leaving height mode rebuilds and drops the height texture.
-        let flat = host.frame(&store, false);
-        assert_eq!(flat.update, MaskUpdate::Full);
-        assert!(flat.height.is_empty());
     });
 }
 
@@ -343,23 +294,23 @@ fn unchanged_frames_are_reused_and_allocate_no_textures() {
     with_host(|host, _| {
         let mut store = ObstacleStore::new();
         let bar = scene_mask_into(&mut store);
-        host.frame(&store, false);
-        let textures = host.occlusion.allocations();
-        assert_eq!(textures, 2); // the mask pair
+        host.frame(&store);
+        let textures = host.mask.occlusion.allocations();
+        assert_eq!(textures, 4); // the mask and height pairs
         for _ in 0..3 {
-            assert_eq!(host.frame(&store, false).update, MaskUpdate::Reused);
+            assert_eq!(host.frame(&store).update, MaskUpdate::Reused);
         }
         // A sub-texel pan does not move the anchor by a whole texel: still reused.
         pan(&mut host.projection, 0.25, 0.0);
-        assert_eq!(host.frame(&store, false).update, MaskUpdate::Reused);
+        assert_eq!(host.frame(&store).update, MaskUpdate::Reused);
         for i in 0..4 {
             pan(&mut host.projection, 1.0, 0.0);
             store
                 .set_transform(bar, at(90.0 + i as f32, 40.0), 33.0)
                 .unwrap();
-            assert_eq!(host.frame(&store, false).update, MaskUpdate::Incremental);
+            assert_eq!(host.frame(&store).update, MaskUpdate::Incremental);
         }
-        assert_eq!(host.occlusion.allocations(), textures);
+        assert_eq!(host.mask.occlusion.allocations(), textures);
     });
 }
 
@@ -368,31 +319,33 @@ fn a_frame_that_is_not_committed_or_a_restore_rebuilds_fully() {
     with_host(|host, _| {
         let mut store = ObstacleStore::new();
         scene_mask_into(&mut store);
-        host.frame(&store, false);
-        assert_eq!(host.frame(&store, false).update, MaskUpdate::Reused);
+        host.frame(&store);
+        assert_eq!(host.frame(&store).update, MaskUpdate::Reused);
 
         // Prepared, never recorded: the textures no longer count.
         let input = MaskPlanInput::new(&store, &host.projection, 128, 64, 1.0);
-        host.occlusion
-            .prepare(&mut host.shaders, &mut host.pipelines, &input, false)
+        host.mask
+            .occlusion
+            .prepare(&mut host.shaders, &mut host.pipelines, &input)
             .unwrap();
-        host.occlusion.commit(); // not recorded: no effect
-        assert_eq!(host.frame(&store, false).update, MaskUpdate::Full);
-        assert_eq!(host.frame(&store, false).update, MaskUpdate::Reused);
+        host.mask.occlusion.commit(); // not recorded: no effect
+        assert_eq!(host.frame(&store).update, MaskUpdate::Full);
+        assert_eq!(host.frame(&store).update, MaskUpdate::Reused);
 
-        host.occlusion.invalidate();
-        assert_eq!(host.frame(&store, false).update, MaskUpdate::Full);
+        host.mask.occlusion.invalidate();
+        assert_eq!(host.frame(&store).update, MaskUpdate::Full);
 
         // Recording twice is refused.
         let mut cmd = CommandBuffer::acquire(host.gpu.device()).unwrap();
-        let e = host
+        let m = &mut host.mask;
+        let e = m
             .occlusion
             .record(
                 &mut cmd,
                 &host.pipelines,
                 host.samplers.sampler(Filter::Nearest),
-                &mut host.geometry,
-                &mut host.tiles,
+                &mut m.geometry,
+                &mut m.tiles,
             )
             .unwrap_err();
         assert_eq!(e.code, knorke_light2d::occlusion::NOT_PREPARED);
@@ -404,14 +357,15 @@ fn a_larger_scene_reallocates_and_rebuilds() {
     with_host(|host, _| {
         let mut store = ObstacleStore::new();
         scene_mask_into(&mut store);
-        host.frame(&store, false);
-        let before = host.occlusion.allocations();
+        host.frame(&store);
+        let before = host.mask.occlusion.allocations();
         let input = MaskPlanInput::new(&store, &host.projection, 256, 64, 1.0);
         let update = host
+            .mask
             .occlusion
-            .prepare(&mut host.shaders, &mut host.pipelines, &input, false)
+            .prepare(&mut host.shaders, &mut host.pipelines, &input)
             .unwrap();
         assert_eq!(update, MaskUpdate::Full);
-        assert_eq!(host.occlusion.allocations(), before + 2);
+        assert_eq!(host.mask.occlusion.allocations(), before + 4);
     });
 }

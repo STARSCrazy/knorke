@@ -6,7 +6,7 @@
 // altered from any source distribution. Full text: LICENSE-CHIARO-ZLIB.txt.
 
 //! The world triangles of the obstacles that are not tile grids, with what the shaders need per
-//! triangle: its opacity (and, in height mode, its height interval).
+//! triangle: its opacity and its height interval.
 
 use super::params::interval_channels;
 use crate::ObstacleStore;
@@ -92,8 +92,8 @@ impl TriangleSet {
     /// Collects the world triangles of every active obstacle that is no tile grid and whose
     /// `dynamic` flag is `dynamic`, in store order, with one opacity per triangle: the value
     /// the obstacle writes to the mask ([`ObstacleStore::mask_opacity`]), negated for an
-    /// obstacle that casts a footprint shadow. With `with_intervals` also the four height
-    /// channels per triangle. Circles with a radius below `min_radius` are widened to it
+    /// obstacle that casts a footprint shadow, and the four height channels per triangle.
+    /// Circles with a radius below `min_radius` are widened to it
     /// ([`thin`](Self::thin) counts them). Allocates only while the buffers grow.
     pub fn collect(
         &mut self,
@@ -101,7 +101,6 @@ impl TriangleSet {
         patterns: &impl PatternSource,
         dynamic: bool,
         min_radius: f32,
-        with_intervals: bool,
     ) {
         self.vertices.clear();
         self.opacities.clear();
@@ -118,9 +117,7 @@ impl TriangleSet {
             .sum();
         self.vertices.reserve(total);
         self.opacities.reserve(total / 3);
-        if with_intervals {
-            self.intervals.reserve(total / 3);
-        }
+        self.intervals.reserve(total / 3);
         for (id, o) in obstacles.iter() {
             if !wanted(o) {
                 continue;
@@ -145,11 +142,8 @@ impl TriangleSet {
             };
             self.opacities
                 .resize(self.opacities.len() + triangles, opacity);
-            if with_intervals {
-                let channels = interval_channels(o);
-                self.intervals
-                    .resize(self.intervals.len() + triangles, channels);
-            }
+            self.intervals
+                .resize(self.intervals.len() + triangles, interval_channels(o));
         }
     }
 
@@ -163,8 +157,7 @@ impl TriangleSet {
         &self.opacities
     }
 
-    /// One `[-base, top, finite -base, finite top]` per triangle; empty unless collected with
-    /// intervals.
+    /// One `[-base, top, finite -base, finite top]` per triangle.
     pub fn intervals(&self) -> &[[f32; 4]] {
         &self.intervals
     }

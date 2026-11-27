@@ -7,8 +7,8 @@ use knorke_gpu::test_support::{
     half_to_f32, queue_download, read_download, sampled_rgba8, with_chiaro_pack,
 };
 use knorke_gpu::{
-    CommandBuffer, DownloadBuffer, Filter, Gpu, PipelineCache, Samplers, ShaderLibrary, Texture,
-    TextureRef,
+    CommandBuffer, DownloadBuffer, Filter, Gpu, PipelineCache, SamplerRef, Samplers, ShaderLibrary,
+    Texture, TextureRef,
 };
 use knorke_light2d::ambient_zone::{AmbientZoneParams, make_stored_zone};
 use knorke_light2d::ambient_zone_culling::{AmbientZoneList, CullScene, collect_ambient_zones};
@@ -300,14 +300,66 @@ impl Out {
     }
 }
 
+/// The obstacle stages and the occlusion mask, run per frame as the pass plan runs them.
+pub(crate) struct MaskStages<'d> {
+    pub(crate) geometry: OccluderGeometry<'d>,
+    pub(crate) tiles: TileOccluders<'d>,
+    pub(crate) occlusion: OcclusionMask<'d>,
+}
+
+impl<'d> MaskStages<'d> {
+    /// The stages at the table of [`programs`](super::programs).
+    pub(crate) fn new(gpu: Gpu<'d>) -> Self {
+        Self {
+            geometry: OccluderGeometry::new(gpu, OccluderPrograms::default()),
+            tiles: TileOccluders::new(gpu, OccluderPrograms::default()),
+            occlusion: OcclusionMask::new(gpu, MaskPrograms::at(OCCLUDER_PROGRAMS.len())),
+        }
+    }
+
+    /// Prepares, records into `cmd` (with the application's sprite mask `sprite`) and commits
+    /// one mask frame of `input`.
+    pub(crate) fn frame(
+        &mut self,
+        shaders: &mut ShaderLibrary<'d>,
+        pipelines: &mut PipelineCache<'d>,
+        nearest: SamplerRef<'_>,
+        cmd: &mut CommandBuffer<'_>,
+        input: &MaskPlanInput<'_>,
+        sprite: Option<TextureRef<'_>>,
+    ) -> MaskUpdate {
+        let update = self.occlusion.prepare(shaders, pipelines, input).unwrap();
+        if update != MaskUpdate::Reused {
+            let min_radius = thin_circle_radius(input.projection, &input.domain);
+            let store = input.obstacles;
+            self.geometry
+                .prepare(shaders, pipelines, store, &NoPatterns, min_radius)
+                .unwrap();
+            self.tiles
+                .prepare(shaders, pipelines, store, &NoPatterns)
+                .unwrap();
+        }
+        self.occlusion
+            .record_with_sprite(
+                cmd,
+                pipelines,
+                nearest,
+                &mut self.geometry,
+                &mut self.tiles,
+                sprite,
+            )
+            .unwrap();
+        self.occlusion.commit();
+        update
+    }
+}
+
 pub(crate) struct Host<'d> {
     pub(crate) gpu: Gpu<'d>,
     pub(crate) shaders: ShaderLibrary<'d>,
     pub(crate) pipelines: PipelineCache<'d>,
     pub(crate) samplers: Samplers<'d>,
-    pub(crate) geometry: OccluderGeometry<'d>,
-    pub(crate) tiles: TileOccluders<'d>,
-    pub(crate) occlusion: OcclusionMask<'d>,
+    pub(crate) mask: MaskStages<'d>,
     pub(crate) lighting: LightingStage<'d>,
     pub(crate) atlases: LightAtlases<'d>,
     pub(crate) list: LightList,
@@ -323,9 +375,7 @@ impl<'d> Host<'d> {
             shaders,
             pipelines,
             samplers: Samplers::new(gpu).unwrap(),
-            geometry: OccluderGeometry::new(gpu, OccluderPrograms::default()),
-            tiles: TileOccluders::new(gpu, OccluderPrograms::default()),
-            occlusion: OcclusionMask::new(gpu, MaskPrograms::at(OCCLUDER_PROGRAMS.len())),
+            mask: MaskStages::new(gpu),
             lighting: LightingStage::new(gpu),
             atlases: LightAtlases::new(gpu),
             list: LightList::default(),
@@ -387,53 +437,24 @@ impl<'d> Host<'d> {
         );
         let active = s.obstacles.iter().any(|(_, o)| o.is_active());
         let shadows = any_shadow_caster(&self.list) && active;
-        // As the pass plan: rows are built from the height texture, so shadows always have one.
-        let height_mode = true;
         let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
         let input = MaskPlanInput::new(&s.obstacles, &s.projection, w, h, shadow_scale);
         if shadows {
-            let update = self
-                .occlusion
-                .prepare(&mut self.shaders, &mut self.pipelines, &input, height_mode)
-                .unwrap();
-            if update != MaskUpdate::Reused {
-                let min_radius = thin_circle_radius(&s.projection, &input.domain);
-                self.geometry
-                    .prepare(
-                        &mut self.shaders,
-                        &mut self.pipelines,
-                        &s.obstacles,
-                        &NoPatterns,
-                        height_mode,
-                        min_radius,
-                    )
-                    .unwrap();
-                self.tiles
-                    .prepare(
-                        &mut self.shaders,
-                        &mut self.pipelines,
-                        &s.obstacles,
-                        &NoPatterns,
-                        height_mode,
-                    )
-                    .unwrap();
-            }
-            self.occlusion
-                .record(
-                    &mut cmd,
-                    &self.pipelines,
-                    self.samplers.sampler(Filter::Nearest),
-                    &mut self.geometry,
-                    &mut self.tiles,
-                )
-                .unwrap();
-            self.occlusion.commit();
+            self.mask.frame(
+                &mut self.shaders,
+                &mut self.pipelines,
+                self.samplers.sampler(Filter::Nearest),
+                &mut cmd,
+                &input,
+                None,
+            );
         }
+        let occlusion = &self.mask.occlusion;
         let maps = shadows.then(|| ShadowMaps {
             domain: input.domain,
             remainder: input.anchor.remainder,
-            mask: self.occlusion.mask().unwrap(),
-            height: self.occlusion.height(),
+            mask: occlusion.mask().unwrap(),
+            height: occlusion.height(),
             any_partial: s.obstacles.any_partial(),
             scene_max_top: s.obstacles.max_finite_top(),
             casters: [None, None],

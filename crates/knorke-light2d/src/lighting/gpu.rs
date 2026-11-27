@@ -72,7 +72,7 @@ pub const LIGHTING_INPUT_MISSING: DiagnosticCode =
 pub struct CasterMaps<'a> {
     /// Occlusion mask (nearest).
     pub mask: TextureRef<'a>,
-    /// Heights (nearest), in height mode.
+    /// Heights (nearest).
     pub height: Option<TextureRef<'a>>,
 }
 

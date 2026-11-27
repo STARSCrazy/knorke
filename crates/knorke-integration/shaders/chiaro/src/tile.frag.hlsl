@@ -1,5 +1,6 @@
-// Origin: chiaro @ 9bc5b9b, shaders/src/tile.frag.hlsl, copied unchanged below this notice; the blobs in
-// ../compiled are Chiaro's shadercross output of that revision, copied bit for bit.
+// Origin: chiaro @ 9bc5b9b, shaders/src/tile.frag.hlsl, copied unchanged below this notice; only its variant
+// tile_height.frag is compiled; its blobs in ../compiled are Chiaro's
+// shadercross output of that revision, copied bit for bit.
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any express or
 // implied warranty; the origin must not be misrepresented; altered source versions must be plainly marked as
 // such and this notice may not be removed or altered from any source distribution. Full text:

@@ -3,7 +3,7 @@
 //! Two kinds of geometry go into the mask, as in Chiaro:
 //!
 //! - **Triangles** of polygons, boxes and circles ([`TriangleSet`]): world triangles with one
-//!   opacity per triangle (and in height mode a height interval) in storage buffers; one draw
+//!   opacity and height interval per triangle in storage buffers; one draw
 //!   of 3 vertices per triangle without vertex buffers. The static set is rebuilt and uploaded
 //!   only when [`ObstacleStore::static_version`](crate::ObstacleStore::static_version) or the
 //!   widening of thin circles changed, the dynamic set in every frame that draws the mask.
