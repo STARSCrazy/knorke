@@ -318,6 +318,11 @@ impl ShadowState {
                 MaskUpdate::Incremental => MaskChange::Rects(mask.mask_rects()),
                 MaskUpdate::Full => MaskChange::All,
             },
+            content: match mask.last_update() {
+                MaskUpdate::Reused => MaskChange::None,
+                MaskUpdate::Incremental => MaskChange::Rects(mask.row_rects()),
+                MaskUpdate::Full => MaskChange::All,
+            },
         })
     }
 }
@@ -809,6 +814,9 @@ impl<'d> PassPlan<'d> {
             .ok_or_else(|| not_prepared("record needs a successful prepare of the frame"))?;
         let mut out = PassRecord::default();
         if shadows.is_some() {
+            // Row lights and sun maps read mask and heights only: a pan costs no field then.
+            let field = self.lighting.reads_field() || self.medium.reads_field();
+            self.occlusion.set_field_needed(field);
             out.mask = self.occlusion.record_with_sprite(
                 cmd,
                 &self.pipelines,

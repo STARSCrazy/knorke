@@ -603,7 +603,12 @@ impl<'d> RowLights<'d> {
         // Without the occlusion stage nothing casts a shadow this frame. (Not `height`: the
         // stage creates its textures when it records its first frame.)
         let shadows = frame.shadows.filter(|s| s.height_mode);
-        let mask = shadows.map(row_mask);
+        // A row sees nothing beyond the mask's rim, so an empty strip a pan exposed or pushed
+        // out changes nothing in it.
+        let mask = shadows.map(|s| RowMask {
+            change: s.content,
+            ..row_mask(s)
+        });
         let patterns = shadows.and_then(|s| s.patterns.as_ref());
         let mut allocations = 0;
         // Twice at most: growing the atlas loses its rows, so every lamp is assigned anew.

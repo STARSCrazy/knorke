@@ -273,6 +273,11 @@ pub struct OcclusionMask<'d> {
     casters: [CasterTargets<'d>; 2],
     /// The caster classes of the prepared frame (bit 0 static, bit 1 dynamic).
     caster_classes: u32,
+    /// A light of the frame reads the field ([`set_field_needed`](Self::set_field_needed)).
+    field_needed: bool,
+    /// The field was left out since it was last whole: the next frame that needs it builds it
+    /// whole.
+    field_stale: bool,
 }
 
 impl<'d> OcclusionMask<'d> {
@@ -304,6 +309,8 @@ impl<'d> OcclusionMask<'d> {
                 height: RenderTarget::new(gpu),
             }),
             caster_classes: 0,
+            field_needed: true,
+            field_stale: true,
         }
     }
 
@@ -418,6 +425,14 @@ impl<'d> OcclusionMask<'d> {
         Ok(())
     }
 
+    /// Whether a light of the prepared frame reads the distance field (Chiaro's shadow and
+    /// medium programs; the row lights do not). Without, [`record`](Self::record) leaves the
+    /// field out, and [`field`](Self::field) holds an older one until a frame needs it again,
+    /// which builds it whole. Default `true`.
+    pub fn set_field_needed(&mut self, needed: bool) {
+        self.field_needed = needed;
+    }
+
     /// The domain parameters of the prepared frame, for the obstacle stages (the same values
     /// [`record`](Self::record) draws them with).
     pub fn domain_params(&self) -> &DomainParams {
@@ -476,6 +491,12 @@ impl<'d> OcclusionMask<'d> {
         let mut out = MaskRecord::default();
         if update == MaskUpdate::Reused {
             // The sources of the frame that built the mask still hold (Chiaro OcclusionStage).
+            if self.field_needed && self.field_stale {
+                let t = self.target;
+                let (mask, field) = (view(&self.mask[t], "mask")?, view(&self.field[t], "field")?);
+                out.field_texels = self.record_field(cmd, pipelines, nearest, mask, field, false)?;
+                self.field_stale = false;
+            }
             self.record_casters(cmd, pipelines, nearest, geometry, tiles, sprite, &mut out)?;
             self.recorded = true;
             return Ok(out);
@@ -491,7 +512,7 @@ impl<'d> OcclusionMask<'d> {
                 let (cur, tgt) = (self.current, self.target);
                 let pairs = [
                     (&self.mask, true),
-                    (&self.field, true),
+                    (&self.field, self.field_needed && !self.field_stale),
                     (&self.height, self.height_mode),
                 ];
                 for (pair, used) in pairs {
@@ -526,7 +547,11 @@ impl<'d> OcclusionMask<'d> {
         };
         out.draws = self.record_mask(cmd, pipelines, nearest, &sources, mask, height, local)?;
         let field = view(&self.field[t], "field")?;
-        out.field_texels = self.record_field(cmd, pipelines, nearest, mask, field, local)?;
+        if self.field_needed {
+            let local = local && !self.field_stale;
+            out.field_texels = self.record_field(cmd, pipelines, nearest, mask, field, local)?;
+        }
+        self.field_stale = !self.field_needed;
         self.record_casters(cmd, pipelines, nearest, geometry, tiles, sprite, &mut out)?;
         self.recorded = true;
         Ok(out)
@@ -801,7 +826,8 @@ impl<'d> OcclusionMask<'d> {
         self.mask[self.current].texture_ref()
     }
 
-    /// The current distance field (R16F), `None` before the first frame.
+    /// The current distance field (R16F), `None` before the first frame; an older one after
+    /// frames that left it out ([`set_field_needed`](Self::set_field_needed)).
     pub fn field(&self) -> Option<TextureRef<'_>> {
         self.field[self.current].texture_ref()
     }
@@ -834,6 +860,12 @@ impl<'d> OcclusionMask<'d> {
     /// The changed rectangles of the last prepared frame (meaningful when it is incremental).
     pub fn mask_rects(&self) -> &DirtyRectList {
         self.plan.mask_rects()
+    }
+
+    /// Where the mask's contents changed in the last prepared frame (meaningful when it is
+    /// incremental; `MaskUpdatePlan::row_rects`).
+    pub fn row_rects(&self) -> &DirtyRectList {
+        self.plan.row_rects()
     }
 
     /// Textures (re)allocated over the stage's lifetime; constant in the steady state.

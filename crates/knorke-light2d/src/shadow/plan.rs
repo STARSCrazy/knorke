@@ -8,7 +8,8 @@
 //! The CPU half of the incremental mask and field update (E21).
 
 use super::dirty_rects::{
-    CellRect, DirtyRect, DirtyRectList, clamp_texel_coord, obstacle_grid_rect, tile_cells_grid_rect,
+    CellRect, DirtyRect, DirtyRectList, clamp_texel_coord, exposed_strips, obstacle_grid_rect,
+    tile_cells_grid_rect, vanished_strips,
 };
 use super::domain::{MaskAnchor, OcclusionDomain};
 use crate::Projection;
@@ -232,6 +233,8 @@ pub struct MaskUpdatePlan {
     /// Changed rectangles in mask texels of the current frame, unclipped.
     changed: DirtyRectList,
     mask_rects: DirtyRectList,
+    /// Changed mask contents ([`row_rects`](Self::row_rects)).
+    row_rects: DirtyRectList,
     field_rects: DirtyRectList,
     seed_rects: DirtyRectList,
     /// One per enabled static obstacle, for `grid_layout`.
@@ -263,6 +266,7 @@ impl MaskUpdatePlan {
             shift: [0; 2],
             changed: DirtyRectList::new(),
             mask_rects: DirtyRectList::new(),
+            row_rects: DirtyRectList::new(),
             field_rects: DirtyRectList::new(),
             seed_rects: DirtyRectList::new(),
             static_grid_rects: Vec::new(),
@@ -363,6 +367,14 @@ impl MaskUpdatePlan {
         &self.mask_rects
     }
 
+    /// Where the mask's contents changed, unclipped and unmerged (valid for an incremental
+    /// frame): [`mask_rects`](Self::mask_rects) without the strips a pan exposed, plus the parts
+    /// of obstacles in them and in the strips the pan pushed out of the mask. A reader of the
+    /// mask that sees nothing beyond its rim (the row build) sees no other change.
+    pub fn row_rects(&self) -> &DirtyRectList {
+        &self.row_rects
+    }
+
     /// Field texels to recompute, merged (valid for an incremental frame).
     pub fn field_rects(&self) -> &DirtyRectList {
         &self.field_rects
@@ -380,6 +392,7 @@ impl MaskUpdatePlan {
 
     fn clear_rects(&mut self) {
         self.mask_rects.clear();
+        self.row_rects.clear();
         self.field_rects.clear();
         self.seed_rects.clear();
     }
@@ -429,6 +442,8 @@ impl MaskUpdatePlan {
         self.changed.clear();
         self.changed
             .add_exposed_strips(self.shift[0], self.shift[1], w, h);
+        // Added first, as they are; `row_rects` takes the rest.
+        let strips = self.changed.rects().len();
         self.dynamic_grid_rects.clear();
         // Both footprint lists are sorted by slot index: one walk pairs them up.
         let before = &self.drawn.footprints;
@@ -499,6 +514,10 @@ impl MaskUpdatePlan {
             return false;
         }
 
+        self.row_rects.clear();
+        for r in &self.changed.rects()[strips..] {
+            self.row_rects.add(*r);
+        }
         self.mask_rects.clone_from(&self.changed);
         self.mask_rects.expand(0, w, h); // clip
         self.mask_rects.merge();
@@ -508,6 +527,13 @@ impl MaskUpdatePlan {
         if self.shift != [0, 0] {
             self.update_static_grid_rects(input);
             let offset = self.next.snapped;
+            let [a, b] = exposed_strips(self.shift, w, h);
+            let [c, d] = vanished_strips(self.shift, w, h);
+            for strip in [a, b, c, d] {
+                for rects in [&self.static_grid_rects, &self.dynamic_grid_rects] {
+                    self.row_rects.add_parts_in(rects, offset, &strip);
+                }
+            }
             self.field_rects.add_vanished_content(
                 &self.static_grid_rects,
                 offset,

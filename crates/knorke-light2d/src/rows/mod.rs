@@ -89,16 +89,16 @@ pub fn frame_suits(settings: &LightSettings, max_top: f32) -> bool {
     settings.light_rows && max_top < MAX_TOP
 }
 
-/// The square of `reach` around `ground` (mask texels) overlaps a rectangle of `list`, or the
+/// The circle of `reach` around `ground` (mask texels) overlaps a rectangle of `list`, or the
 /// list overflowed.
 fn touches(list: &DirtyRectList, ground: [f32; 2], reach: f32) -> bool {
-    let lo = [0, 1].map(|i| (ground[i] - reach).floor() as i32);
-    let hi = [0, 1].map(|i| (ground[i] + reach).ceil() as i32);
+    // Distance from `ground` to the rectangle's texels along each axis, 0 within.
+    let gap = |lo: i32, hi: i32, g: f32| det::max(det::max(lo as f32 - g, g - hi as f32), 0.0);
     list.overflowed()
-        || list
-            .rects()
-            .iter()
-            .any(|r| r.x0 < hi[0] && r.x1 > lo[0] && r.y0 < hi[1] && r.y1 > lo[1])
+        || list.rects().iter().any(|r| {
+            let [x, y] = [gap(r.x0, r.x1, ground[0]), gap(r.y0, r.y1, ground[1])];
+            x * x + y * y < reach * reach
+        })
 }
 
 /// Rows of a shadowed line or rect light, one per support point.
@@ -405,38 +405,30 @@ pub struct RowSource {
     reach: f32,
     /// The mask anchor then.
     snapped: [i32; 2],
-    /// The whole reach lay inside the mask.
-    inside: bool,
 }
 
 impl RowSource {
     fn new(light: &RowLight, mask: &RowMask<'_>) -> Self {
         let g = &light.light;
-        let ground = [g.shadow[2], g.shadow[3]];
-        let inside = (0..2).all(|i| {
-            ground[i] - light.reach >= 0.0 && ground[i] + light.reach <= mask.size[i] as f32
-        });
         Self {
-            ground,
+            ground: [g.shadow[2], g.shadow[3]],
             lamp: [g.position_radius[2], g.position_radius[3], light.size],
             window: light.window,
             reach: light.reach,
             snapped: mask.snapped,
-            inside,
         }
     }
 }
 
 impl Source for RowSource {
-    /// A pan by whole texels moves the lamp and the mask's contents alike, so the row stays as
-    /// long as its whole reach lay and lies inside the mask; what the pan exposed at the mask's
-    /// rim is new to a lamp reaching there.
+    /// A pan by whole texels moves the lamp and the mask's contents alike. A row sees nothing
+    /// beyond the mask's rim, so what the pan exposed or pushed out is new to it only where an
+    /// obstacle lies: `change` is the mask's contents (`MaskUpdatePlan::row_rects`), not its
+    /// redrawn texels.
     fn refresh(&self, now: &Self, change: MaskChange<'_>) -> Refresh<Self> {
         let shift = [0, 1].map(|i| i64::from(now.snapped[i]) - i64::from(self.snapped[i]));
-        let panned = shift != [0, 0];
         let holds = self.lamp == now.lamp
             && self.window == now.window
-            && (!panned || (self.inside && now.inside))
             && (0..2).all(|i| {
                 (now.ground[i] - self.ground[i] - shift[i] as f32).abs() <= GROUND_TOLERANCE
             })
@@ -781,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pan_by_whole_texels_keeps_rows_inside_the_mask() {
+    fn a_pan_by_whole_texels_keeps_rows_until_an_obstacle_comes_within_reach() {
         let mut cache = RowCache::default();
         let frame = |cache: &mut RowCache, l: RowLight, m: &RowMask<'_>| {
             cache.begin();
@@ -796,11 +788,16 @@ mod tests {
         assert!(!frame(&mut cache, light(1, [53.0, 50.0]), &pan(3)));
         // The lamp did not follow: it moved in the world.
         assert!(frame(&mut cache, light(1, [53.0, 50.0]), &pan(5)));
-        // Reaching over the mask's rim after the pan: the exposed strip is new to it.
-        assert!(frame(&mut cache, light(1, [15.0, 50.0]), &pan(-33)));
-        assert!(frame(&mut cache, light(1, [16.0, 50.0]), &pan(-32)));
-        // Without a pan the rim does not matter.
+        // Reaching over the mask's rim: the strips the pans exposed and pushed out were empty.
+        assert!(!frame(&mut cache, light(1, [15.0, 50.0]), &pan(-33)));
         assert!(!frame(&mut cache, light(1, [16.0, 50.0]), &pan(-32)));
+        // An obstacle's part in an exposed strip, 21 texels away: beyond the reach of 20; then
+        // 19 away, within it.
+        let mut parts = DirtyRectList::new();
+        parts.add(DirtyRect::new(0, 50, 1, 52));
+        let with = |x| mask([x, 0], MaskChange::Rects(&parts));
+        assert!(!frame(&mut cache, light(1, [22.0, 50.0]), &with(-26)));
+        assert!(frame(&mut cache, light(1, [20.0, 50.0]), &with(-28)));
     }
 
     #[test]

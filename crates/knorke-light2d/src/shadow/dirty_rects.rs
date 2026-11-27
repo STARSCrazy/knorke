@@ -311,27 +311,18 @@ impl DirtyRectList {
     }
 
     /// Adds the strips of a `w x h` mask that a shift of its contents by `(dx, dy)` exposes
-    /// (`new[x] = old[x - d]`): one full-height strip for `dx`, one full-width strip for `dy`.
-    /// They overlap in the corner; [`merge`](Self::merge) separates them.
+    /// ([`exposed_strips`]). They overlap in the corner; [`merge`](Self::merge) separates them.
     pub fn add_exposed_strips(&mut self, dx: i32, dy: i32, w: i32, h: i32) {
-        if dx > 0 {
-            self.add(DirtyRect::new(0, 0, dx.min(w), h));
-        } else if dx < 0 {
-            self.add(DirtyRect::new((w + dx).max(0), 0, w, h));
-        }
-        if dy > 0 {
-            self.add(DirtyRect::new(0, 0, w, dy.min(h)));
-        } else if dy < 0 {
-            self.add(DirtyRect::new(0, (h + dy).max(0), w, h));
+        for strip in exposed_strips([dx, dy], w, h) {
+            self.add(strip);
         }
     }
 
     /// The counterpart of [`add_exposed_strips`](Self::add_exposed_strips): the contents that
-    /// the shift by `(dx, dy)` pushed out of the `w x h` mask. For each of the two strips just
-    /// outside the mask that the old contents moved into, adds the bounding box of the parts of
-    /// `grid_rects` (moved by `offset` into the current frame's mask texels) that lie in it.
-    /// Expanded by the field bound and clipped, they cover the field texels that still remember
-    /// an obstacle which is gone.
+    /// the shift pushed out of the `w x h` mask. For each of the [`vanished_strips`], adds the
+    /// bounding box of the parts of `grid_rects` (moved by `offset` into the current frame's
+    /// mask texels) that lie in it. Expanded by the field bound and clipped, they cover the field
+    /// texels that still remember an obstacle which is gone.
     pub fn add_vanished_content(
         &mut self,
         grid_rects: &[DirtyRect],
@@ -340,29 +331,10 @@ impl DirtyRectList {
         w: i32,
         h: i32,
     ) {
-        let [dx, dy] = shift;
-        // The old mask now spans [dx, w + dx) x [dy, h + dy); the strips beyond the current mask
-        // held its lost part.
-        let mut strips = [DirtyRect::EMPTY; 2];
-        let mut count = 0;
-        if dx > 0 {
-            strips[count] = DirtyRect::new(w, dy, w + dx, h + dy);
-            count += 1;
-        } else if dx < 0 {
-            strips[count] = DirtyRect::new(dx, dy, 0, h + dy);
-            count += 1;
-        }
-        if dy > 0 {
-            strips[count] = DirtyRect::new(dx, h, w + dx, h + dy);
-            count += 1;
-        } else if dy < 0 {
-            strips[count] = DirtyRect::new(dx, dy, w + dx, 0);
-            count += 1;
-        }
-        for strip in &strips[..count] {
+        for strip in vanished_strips(shift, w, h) {
             let mut bounds = DirtyRect::EMPTY;
             for g in grid_rects {
-                let part = g.offset(offset[0], offset[1]).intersection(strip);
+                let part = g.offset(offset[0], offset[1]).intersection(&strip);
                 if !part.is_empty() {
                     bounds = if bounds.is_empty() {
                         part
@@ -374,6 +346,47 @@ impl DirtyRectList {
             self.add(bounds);
         }
     }
+
+    /// Adds every part of `grid_rects` (moved by `offset`) that lies in `strip`, each on its own.
+    pub fn add_parts_in(&mut self, grid_rects: &[DirtyRect], offset: [i32; 2], strip: &DirtyRect) {
+        for g in grid_rects {
+            self.add(g.offset(offset[0], offset[1]).intersection(strip));
+        }
+    }
+}
+
+/// The strips of a `w x h` mask that a shift of its contents by `(dx, dy)` exposes
+/// (`new[x] = old[x - d]`): a full-height strip for `dx`, a full-width strip for `dy`; empty
+/// without shift on that axis.
+pub(super) fn exposed_strips([dx, dy]: [i32; 2], w: i32, h: i32) -> [DirtyRect; 2] {
+    let x = match dx.signum() {
+        1 => DirtyRect::new(0, 0, dx.min(w), h),
+        -1 => DirtyRect::new((w + dx).max(0), 0, w, h),
+        _ => DirtyRect::EMPTY,
+    };
+    let y = match dy.signum() {
+        1 => DirtyRect::new(0, 0, w, dy.min(h)),
+        -1 => DirtyRect::new(0, (h + dy).max(0), w, h),
+        _ => DirtyRect::EMPTY,
+    };
+    [x, y]
+}
+
+/// The strips just outside a `w x h` mask that the old contents moved into with a shift by
+/// `(dx, dy)`: the old mask now spans `[dx, w + dx) x [dy, h + dy)`. Empty without shift on that
+/// axis.
+pub(super) fn vanished_strips([dx, dy]: [i32; 2], w: i32, h: i32) -> [DirtyRect; 2] {
+    let x = match dx.signum() {
+        1 => DirtyRect::new(w, dy, w + dx, h + dy),
+        -1 => DirtyRect::new(dx, dy, 0, h + dy),
+        _ => DirtyRect::EMPTY,
+    };
+    let y = match dy.signum() {
+        1 => DirtyRect::new(dx, h, w + dx, h + dy),
+        -1 => DirtyRect::new(dx, dy, w + dx, 0),
+        _ => DirtyRect::EMPTY,
+    };
+    [x, y]
 }
 
 /// A rectangle of tile cells, half-open: columns `[x0, x1)`, rows `[y0, y1)`.

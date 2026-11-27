@@ -532,6 +532,11 @@ impl<'d> MediumStage<'d> {
         self.prepared.is_some()
     }
 
+    /// The prepared frame reads the occlusion field: it builds shaft rows or sun shadow heights.
+    pub fn reads_field(&self) -> bool {
+        self.is_active() && !(self.rows.is_empty() && self.blocks.is_empty())
+    }
+
     /// The composite's input of the prepared frame; `None` if the stage does not run.
     pub fn composite_medium<'a>(
         &'a self,

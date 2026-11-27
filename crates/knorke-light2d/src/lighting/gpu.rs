@@ -117,8 +117,11 @@ pub struct ShadowMaps<'a> {
     pub patterns: Option<PatternMaps<'a>>,
     /// Mask anchor of the frame in whole texels (`MaskAnchor::snapped`), for the row lights.
     pub snapped: [i32; 2],
-    /// What the occlusion stage changed in the mask this frame, for the row lights.
+    /// What the occlusion stage redrew in the mask this frame, for the sun maps.
     pub change: MaskChange<'a>,
+    /// Where the mask's contents changed this frame, for the rows: `change` without the empty
+    /// parts of the strips a pan exposed or pushed out.
+    pub content: MaskChange<'a>,
 }
 
 impl ShadowMaps<'_> {
@@ -612,6 +615,18 @@ impl<'d> LightingStage<'d> {
     /// Whether the prepared frame has a light pass: Chiaro's draws or row lights.
     pub fn light_pass(&self) -> bool {
         self.draws.light_pass() || self.rows.frame().lights > 0
+    }
+
+    /// Whether the prepared frame draws a light with a program that reads the occlusion field:
+    /// Chiaro's, not the row lights or a sun map.
+    pub fn reads_field(&self) -> bool {
+        let reads = |p: Option<LightProgram>| {
+            p.is_some_and(|p| light_layout_of(p).sampler(LightSampler::DistanceField).is_some())
+        };
+        let chiaro_suns = self.draws.directional > self.rows.frame().suns;
+        (self.draws.draws().iter())
+            .any(|d| d.count > 0 && reads(self.programs[slot(d.program)]))
+            || (chiaro_suns && reads(self.programs[DIRECTIONAL]))
     }
 
     /// The program the prepared frame uses for `p`, if it draws any.
