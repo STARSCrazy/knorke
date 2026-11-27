@@ -316,7 +316,7 @@ fn steady_state_light2d_paths_allocate_nothing() {
         let row_mask = RowMask {
             size: [row_domain.width, row_domain.height],
             snapped: [i as i32 / 8, 0],
-            change: MaskChange::Rects(plan.mask_rects()),
+            change: MaskChange::Rects(plan.row_rects()),
         };
         row_cache.begin();
         assert!(row_list.rows.iter().any(|l| l.is_area() && l.shadowed));

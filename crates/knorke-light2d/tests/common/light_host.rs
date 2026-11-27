@@ -467,6 +467,7 @@ impl<'d> Host<'d> {
             patterns: None,
             snapped: input.anchor.snapped,
             change: Default::default(),
+            content: Default::default(),
         });
         // The atlases the frame needs, uploaded before the light pass reads them.
         let mut atlas_created = self

@@ -571,6 +571,29 @@ fn a_pan_marks_static_obstacles_pushed_out_of_the_mask_for_the_field() {
     assert!(covers(p.plan.field_rects(), 0, 30)); // the field still remembers it
 }
 
+#[test]
+fn row_rects_hold_obstacles_in_the_strips_of_a_pan_not_the_empty_strips() {
+    let mut p = Plan::plain();
+    // One box 1 texel inside the left edge, one 4 texels beyond the right edge (mask x = world x
+    // + 18, rounded out by a texel), at y 30 and 60.
+    p.boxed(-16.0, 10.0, 4.0, false);
+    p.boxed(86.0, 40.0, 4.0, false);
+    assert_eq!(p.frame(), MaskUpdate::Full);
+    // Contents one texel left: the strips are redrawn, but empty for a reader of the mask.
+    p.pan(-1.0, 0.0);
+    assert_eq!(p.frame(), MaskUpdate::Incremental);
+    assert!(!p.plan.mask_rects().rects().is_empty());
+    assert!(p.plan.row_rects().rects().is_empty());
+    // Four more: the first box leaves over the left edge, the second comes in at the right.
+    p.pan(-5.0, 0.0);
+    assert_eq!(p.frame(), MaskUpdate::Incremental);
+    let rects = p.plan.row_rects().rects();
+    let left = |r: &DirtyRect| r.x1 <= 0 && r.y0 < 30 && r.y1 > 30;
+    let right = |r: &DirtyRect| r.x0 >= 95 && r.x1 <= 100 && r.y0 < 60 && r.y1 > 60;
+    assert!(rects.iter().any(left) && rects.iter().any(right), "{rects:?}");
+    assert!(rects.iter().all(|r| left(r) || right(r)), "{rects:?}");
+}
+
 /// A cell log with one change after version 0.
 struct OneChange(ObstacleId, CellRect, bool);
 

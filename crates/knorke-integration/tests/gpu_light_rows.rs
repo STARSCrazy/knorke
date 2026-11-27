@@ -720,6 +720,13 @@ fn rows_are_built_only_when_lamp_or_mask_change() {
                     );
                     assert_eq!(check(f, "resting"), rest);
                 }
+                // A row sees nothing beyond the mask's rim: the pans above exposed and pushed out
+                // no obstacle within a lamp's reach, so they built no row. A hundred texels bring
+                // buildings into the reach of lamps that reached over the rim.
+                f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(200.0, 0.0));
+                let (built, ..) = check(f, "camera moved 100 mask texels");
+                assert!(built > 0 && built < all, "{built} of {all}");
+                assert_eq!(check(f, "resting"), rest);
 
                 // A size (plain.txt's moon): the map gains its second target, built whole; then
                 // a pan and the obstacle again update it in part.
@@ -743,6 +750,47 @@ fn rows_are_built_only_when_lamp_or_mask_change() {
 
                 f.renderer.plan_mut().invalidate();
                 assert_eq!(check(f, "invalidated"), (all, 1, 0, whole));
+            });
+        });
+    });
+}
+
+/// A frame whose shadows are all row lights and sun maps leaves the distance field out, also
+/// when the camera pans; the first frame that draws Chiaro's shadows again builds it whole, and
+/// its picture is that of a new plan.
+#[test]
+fn the_field_is_built_only_for_chiaros_shadows() {
+    with_chiaro_pack(|gpu, pack| {
+        iso_night::with_demo("hard", 44, "", |demo| {
+            demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                drop_patterns(&mut f.scene);
+                // Shadows only where a row or the moon's map gives them.
+                for id in f.scene.light_ids.clone() {
+                    f.scene.change_light(id, |d| {
+                        let row = matches!(d.kind, LightType::Point | LightType::Spot)
+                            && d.profile.is_none()
+                            && d.mask.is_none()
+                            && d.shadow_filter == ShadowFilter::All
+                            && !d.inside_obstacle;
+                        d.cast_shadows &= row || d.kind == LightType::Directional;
+                    });
+                }
+                let mut check = |f: &mut DemoFrames<'_, '_>, what: &str| {
+                    let (pixels, record) = f.frame();
+                    let (max, ..) = diff(&pixels, &f.fresh_frame(pack));
+                    eprintln!("{what}: {} field texels, {max}/255", record.mask.field_texels);
+                    assert_eq!(max, 0, "{what}");
+                    record.mask.field_texels
+                };
+                assert_eq!(check(f, "rows only"), 0);
+                f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(2.0, 0.0));
+                assert_eq!(check(f, "rows only, camera moved 1 mask texel"), 0);
+                f.settings.light.light_rows = false;
+                let whole = check(f, "Chiaro's shadows");
+                assert!(whole > 0);
+                f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(2.0, 0.0));
+                let part = check(f, "Chiaro's shadows, camera moved 1 mask texel");
+                assert!(part > 0 && part < whole, "{part} of {whole}");
             });
         });
     });
