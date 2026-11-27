@@ -30,7 +30,7 @@ use super::error::ObstacleError;
 use super::patterns::{
     PatternSource, cells_of_destroyed, check_assignment, check_table, mask_opacity,
 };
-use super::store::{Arena, ObstacleId, ObstacleStore, batch, invalid, partial_active};
+use super::store::{Arena, ObstacleId, ObstacleStore, batch, invalid, partial_active, same_length};
 use super::stored::{StoredObstacle, TileCells};
 use knorke_types::{Column, Slots};
 
@@ -333,13 +333,7 @@ impl ObstacleStore {
         pattern_ids: impl Column<u32>,
         patterns: &impl PatternSource,
     ) -> Result<(), ObstacleError> {
-        if ids.len() != pattern_ids.len() {
-            return Err(ObstacleError::LengthMismatch {
-                what: "patterns",
-                expected: ids.len(),
-                got: pattern_ids.len(),
-            });
-        }
+        same_length("patterns", ids.len(), pattern_ids.len())?;
         for (i, (id, p)) in ids.iter().zip(pattern_ids.iter()).enumerate() {
             let Some(s) = self.obstacles.get(*id) else {
                 return Err(batch("ids", i, invalid(*id)));

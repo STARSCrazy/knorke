@@ -217,7 +217,11 @@ pub(super) fn invalid(id: ObstacleId) -> ObstacleError {
     ObstacleError::InvalidHandle(id.to_bits())
 }
 
-fn same_length(what: &'static str, expected: usize, got: usize) -> Result<(), ObstacleError> {
+pub(super) fn same_length(
+    what: &'static str,
+    expected: usize,
+    got: usize,
+) -> Result<(), ObstacleError> {
     if expected == got {
         Ok(())
     } else {
@@ -934,12 +938,7 @@ impl Snapshot for ObstacleStore {
     }
 
     fn restore(&mut self, version: u16, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
-        if version != Self::VERSION {
-            return Err(SnapshotError::UnsupportedVersion {
-                id: Self::ID,
-                version,
-            });
-        }
+        crate::check_version::<Self>(version)?;
         self.obstacles.get_into(r)?;
         self.revision = r.get()?;
         self.static_version = r.get()?;

@@ -99,13 +99,9 @@ impl LightStore {
         desc: &LightDesc,
         resources: &impl LightResources,
     ) -> Result<(), LightError> {
-        if !self.lights.contains(id) {
-            return Err(invalid(id));
-        }
+        let stored = self.lights.get_mut(id).ok_or_else(|| invalid(id))?;
         check_all(desc, resources)?;
-        if let Some(stored) = self.lights.get_mut(id) {
-            *stored = StoredLight::derive(desc);
-        }
+        *stored = StoredLight::derive(desc);
         Ok(())
     }
 
@@ -298,23 +294,21 @@ impl LightStore {
 
     /// Number of lights that use `profile`.
     pub fn profile_users(&self, profile: ProfileId) -> usize {
-        self.iter()
-            .filter(|(_, l)| l.desc.profile == Some(profile))
-            .count()
+        self.users(|d| d.profile == Some(profile))
     }
 
     /// Number of lights that use `animation`.
     pub fn animation_users(&self, animation: AnimationId) -> usize {
-        self.iter()
-            .filter(|(_, l)| l.desc.animation == Some(animation))
-            .count()
+        self.users(|d| d.animation == Some(animation))
     }
 
     /// Number of lights that use `mask`.
     pub fn mask_users(&self, mask: MaskId) -> usize {
-        self.iter()
-            .filter(|(_, l)| l.desc.mask == Some(mask))
-            .count()
+        self.users(|d| d.mask == Some(mask))
+    }
+
+    fn users(&self, uses: impl Fn(&LightDesc) -> bool) -> usize {
+        self.iter().filter(|(_, l)| uses(&l.desc)).count()
     }
 }
 
@@ -339,12 +333,7 @@ impl Snapshot for LightStore {
     }
 
     fn restore(&mut self, version: u16, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
-        if version != Self::VERSION {
-            return Err(SnapshotError::UnsupportedVersion {
-                id: Self::ID,
-                version,
-            });
-        }
+        crate::check_version::<Self>(version)?;
         self.frame_count = 0;
         self.lights.get_into(r)
     }

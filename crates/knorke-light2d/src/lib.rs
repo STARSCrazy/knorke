@@ -105,6 +105,17 @@ pub use projection::{Projection, ProjectionError};
 pub use resources::StoreResources;
 pub use triangulate::{TriangulateError, Triangulator, circle_triangles};
 
+/// `Snapshot::restore` of a section that reads only its current `VERSION`.
+pub(crate) fn check_version<S: knorke_types::Snapshot>(
+    version: u16,
+) -> Result<(), knorke_types::SnapshotError> {
+    if version == S::VERSION {
+        Ok(())
+    } else {
+        Err(knorke_types::SnapshotError::UnsupportedVersion { id: S::ID, version })
+    }
+}
+
 /// Index of the first handle of `ids` equal to an earlier one, `None` without repeats. `sorted`
 /// is reused scratch: a sorted copy of the bits tells cheaply whether there is a repeat at all.
 pub(crate) fn first_repeat<T>(
