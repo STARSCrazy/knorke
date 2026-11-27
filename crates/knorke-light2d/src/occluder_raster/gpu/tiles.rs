@@ -150,11 +150,6 @@ impl<'d> TileOccluders<'d> {
         self.upload_pending
     }
 
-    /// Something to draw (after [`prepare`](Self::prepare)).
-    pub fn has_tiles(&self) -> bool {
-        self.drawing
-    }
-
     /// Number of grids with a texture.
     pub fn len(&self) -> usize {
         self.tiles.len()

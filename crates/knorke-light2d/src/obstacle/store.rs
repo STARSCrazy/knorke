@@ -201,8 +201,8 @@ pub struct ObstacleStore {
     pub(super) partial_active: u32,
     tri: Triangulator,
     scratch: Vec<Vec2>,
-    /// `destroy_many`: sorted handle bits for the duplicate check.
-    sorted: Vec<u64>,
+    /// `destroy_many`, `set_patterns`: sorted handle bits for the repeat check.
+    pub(super) sorted: Vec<u64>,
 }
 
 pub(super) fn batch(field: &'static str, index: usize, source: ObstacleError) -> ObstacleError {
@@ -217,7 +217,11 @@ pub(super) fn invalid(id: ObstacleId) -> ObstacleError {
     ObstacleError::InvalidHandle(id.to_bits())
 }
 
-fn same_length(what: &'static str, expected: usize, got: usize) -> Result<(), ObstacleError> {
+pub(super) fn same_length(
+    what: &'static str,
+    expected: usize,
+    got: usize,
+) -> Result<(), ObstacleError> {
     if expected == got {
         Ok(())
     } else {
@@ -474,17 +478,7 @@ impl ObstacleStore {
     /// removed.
     pub fn destroy_many(&mut self, ids: impl Column<ObstacleId>) -> Result<(), ObstacleError> {
         self.check_handles(&ids)?;
-        self.sorted.clear();
-        self.sorted.extend(ids.iter().map(|id| id.to_bits()));
-        self.sorted.sort_unstable();
-        if self.sorted.windows(2).any(|w| w[0] == w[1]) {
-            let index = (0..ids.len())
-                .find(|&i| {
-                    ids.get(i).is_some_and(|id| {
-                        (0..i).any(|j| ids.get(j).is_some_and(|other| other == id))
-                    })
-                })
-                .unwrap_or(0);
+        if let Some(index) = crate::first_repeat(&ids, &mut self.sorted) {
             return Err(batch(
                 "ids",
                 index,
@@ -944,12 +938,7 @@ impl Snapshot for ObstacleStore {
     }
 
     fn restore(&mut self, version: u16, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
-        if version != Self::VERSION {
-            return Err(SnapshotError::UnsupportedVersion {
-                id: Self::ID,
-                version,
-            });
-        }
+        crate::check_version::<Self>(version)?;
         self.obstacles.get_into(r)?;
         self.revision = r.get()?;
         self.static_version = r.get()?;

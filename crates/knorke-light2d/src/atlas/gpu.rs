@@ -186,11 +186,6 @@ impl<'d, S: AtlasSource> AtlasTexture<'d, S> {
         Ok(())
     }
 
-    /// An upload is waiting for [`record`](Self::record).
-    pub fn upload_pending(&self) -> bool {
-        self.pending
-    }
-
     /// The texture; `None` without contents.
     pub fn texture(&self) -> Option<TextureRef<'_>> {
         self.texture.as_ref().map(Texture::texture_ref)

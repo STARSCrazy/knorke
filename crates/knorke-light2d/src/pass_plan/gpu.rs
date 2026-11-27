@@ -39,8 +39,8 @@ use crate::medium_stage::{
 use crate::medium_table::MediumTable;
 use crate::obstacle::{ObstacleStore, PatternSource};
 use crate::occluder_raster::{
-    DomainParams, INFINITE_TOP, OCCLUDER_PROGRAMS, OccluderGeometry, OccluderPrograms,
-    TileOccluders, thin_circle_radius,
+    DomainParams, OCCLUDER_PROGRAMS, OccluderGeometry, OccluderPrograms, TileOccluders,
+    thin_circle_radius,
 };
 use crate::occlusion::{MASK_PROGRAMS, MaskPrograms, MaskRecord, OcclusionMask};
 use crate::pattern_occluders::{PATTERN_PROGRAMS, PatternOccluders, PatternPrograms};
@@ -242,9 +242,7 @@ struct Pending {
 struct ShadowState {
     domain: OcclusionDomain,
     anchor: MaskAnchor,
-    height_mode: bool,
     any_partial: bool,
-    shadow_top: f32,
     scene_max_top: f32,
 }
 
@@ -297,14 +295,8 @@ impl ShadowState {
             mask: mask
                 .mask()
                 .ok_or_else(|| not_prepared("the occlusion mask is missing"))?,
-            height: if self.height_mode {
-                mask.height()
-            } else {
-                None
-            },
-            height_mode: self.height_mode,
+            height: mask.height(),
             any_partial: self.any_partial,
-            shadow_top: self.shadow_top,
             scene_max_top: self.scene_max_top,
             casters: [mask.caster_maps(0), mask.caster_maps(1)],
             patterns: patterns.maps(),
@@ -579,9 +571,8 @@ impl<'d> PassPlan<'d> {
         // Steps 1 and 2: occlusion (Chiaro OcclusionStage::Prepare).
         let active = obstacles.iter().any(|(_, o)| o.is_active());
         let shadows = if any_shadow_caster(&self.lights) && (active || sprite) {
-            // Rows are built from the height texture, so a frame with shadows always has one; in
-            // a flat frame the obstacles' heights are all infinite.
-            let height_mode = true;
+            // Rows are built from the height texture, so a frame with shadows always has one
+            // (`height_mode` true below); in a flat frame the obstacles' heights are all infinite.
             let mut input = MaskPlanInput::new(
                 obstacles,
                 frame.projection,
@@ -595,12 +586,9 @@ impl<'d> PassPlan<'d> {
             // gone and an obstacle writes its scalar opacity.
             let source = |id| stores.patterns.and_then(|p| p.mean_opacity(id));
             let before = self.occlusion.allocations();
-            let update = self.occlusion.prepare(
-                &mut self.shaders,
-                &mut self.pipelines,
-                &input,
-                height_mode,
-            )?;
+            let update =
+                self.occlusion
+                    .prepare(&mut self.shaders, &mut self.pipelines, &input, true)?;
             self.occlusion.prepare_casters(self.lights.caster_classes)?;
             let mask_drawn = update != MaskUpdate::Reused;
             let min_radius = thin_circle_radius(frame.projection, &input.domain);
@@ -610,7 +598,7 @@ impl<'d> PassPlan<'d> {
                     &mut self.pipelines,
                     obstacles,
                     &source,
-                    height_mode,
+                    true,
                     min_radius,
                 )?;
                 self.tiles.prepare(
@@ -618,7 +606,7 @@ impl<'d> PassPlan<'d> {
                     &mut self.pipelines,
                     obstacles,
                     &source,
-                    height_mode,
+                    true,
                 )?;
             }
             prepared.allocations += self.occlusion.allocations() - before;
@@ -635,23 +623,12 @@ impl<'d> PassPlan<'d> {
             )?;
             prepared.mask_update = Some(update);
             prepared.stages.insert(PassStages::OCCLUSION);
-            let scene_max_top = if height_mode {
-                obstacles.max_finite_top()
-            } else {
-                0.0
-            };
             Some(ShadowState {
                 domain: input.domain,
                 anchor: input.anchor,
-                height_mode,
                 // The crossing path must run to read a pattern (Chiaro E25).
                 any_partial: obstacles.any_partial() || self.patterns.is_active(),
-                shadow_top: if sprite || obstacles.any_infinite_enabled() {
-                    INFINITE_TOP
-                } else {
-                    scene_max_top
-                },
-                scene_max_top,
+                scene_max_top: max_top,
             })
         } else {
             None
@@ -743,7 +720,7 @@ impl<'d> PassPlan<'d> {
             time: frame.time,
             // As for the ground, with the shadows' height mode (Chiaro `shadows->heightMode`).
             modes: LightModes {
-                height_mode: shadows.is_some_and(|s| s.height_mode),
+                height_mode: shadows.is_some(),
                 ..modes
             },
         };
@@ -936,17 +913,12 @@ impl<'d> PassPlan<'d> {
         &self.warnings
     }
 
-    /// The light list of the last prepared frame.
-    pub fn light_list(&self) -> &LightList {
-        &self.lights
-    }
-
     /// The light stage (its buffers, for tools and tests).
     pub fn lighting(&self) -> &LightingStage<'d> {
         &self.lighting
     }
 
-    /// The occlusion stage (mask and field, for tools and tests).
+    /// The occlusion stage (mask and heights, for tools and tests).
     pub fn occlusion(&self) -> &OcclusionMask<'d> {
         &self.occlusion
     }

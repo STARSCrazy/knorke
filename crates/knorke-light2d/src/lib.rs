@@ -15,7 +15,7 @@
 //! | [`mask`], [`mask_store`], [`light_mask`], [`resources`] | masks (gobo, window): shapes, store, placement; stores as light resources | P10 |
 //! | [`medium_table`], [`medium_culling`] | media table with presets; the lights and suns of the medium stage | P12 |
 //! | [`medium_map`] | medium world map: uniform blocks, grid, medium program layouts; `MediumMapStage` with `gpu` | P29 |
-//! | [`pattern_store`], [`pattern_geometry`] | obstacle patterns: store with shelf-packed atlas places, sampling, ray entry geometry | P15 |
+//! | [`pattern_store`] | obstacle patterns: store with shelf-packed atlas places, sampling | P15 |
 //! | [`shadow`] | occlusion domain and anchor, dirty rectangles, incremental mask update plan | P16 |
 //! | [`occluder_raster`] | obstacles into the occlusion mask: triangle buffers, tile cell textures | P22 |
 //! | [`occlusion`] | occlusion mask cache (GPU stage with `gpu`) | P23 |
@@ -79,7 +79,6 @@ pub mod obstacle;
 pub mod occluder_raster;
 pub mod occlusion;
 pub mod pass_plan;
-pub mod pattern_geometry;
 pub mod pattern_occluders;
 pub mod pattern_store;
 pub mod profile;
@@ -105,3 +104,33 @@ pub use pattern_store::{PatternError, PatternId, PatternStore};
 pub use projection::{Projection, ProjectionError};
 pub use resources::StoreResources;
 pub use triangulate::{TriangulateError, Triangulator, circle_triangles};
+
+/// `Snapshot::restore` of a section that reads only its current `VERSION`.
+pub(crate) fn check_version<S: knorke_types::Snapshot>(
+    version: u16,
+) -> Result<(), knorke_types::SnapshotError> {
+    if version == S::VERSION {
+        Ok(())
+    } else {
+        Err(knorke_types::SnapshotError::UnsupportedVersion { id: S::ID, version })
+    }
+}
+
+/// Index of the first handle of `ids` equal to an earlier one, `None` without repeats. `sorted`
+/// is reused scratch: a sorted copy of the bits tells cheaply whether there is a repeat at all.
+pub(crate) fn first_repeat<T>(
+    ids: &impl knorke_types::Column<knorke_types::Handle<T>>,
+    sorted: &mut Vec<u64>,
+) -> Option<usize> {
+    sorted.clear();
+    sorted.extend(ids.iter().map(|id| id.to_bits()));
+    sorted.sort_unstable();
+    if !sorted.windows(2).any(|w| w[0] == w[1]) {
+        return None;
+    }
+    Some(
+        (0..ids.len())
+            .find(|&i| (0..i).any(|j| ids.get(j) == ids.get(i)))
+            .unwrap_or(0),
+    )
+}

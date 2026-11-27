@@ -50,8 +50,6 @@ pub const MAX_SUN_TEXELS: u64 = 1 << 23;
 /// takes texels twice as long toward the sun. The build marches at most 32768 mask texels
 /// (`kMaxSteps` in `lightrow_sun_build.frag`), more than any mask's width plus height.
 pub const MAX_SUN_SIDE: u32 = 16384;
-/// Texels before the receiver that do not count as occluders (Chiaro's trace: 1).
-const SUN_RECEIVER_GAP: f32 = 1.0;
 
 /// Whether a directional light of [`LightList::directional`](crate::light_culling::LightList)
 /// needs no map: it casts no shadow, or stands straight overhead (Chiaro's directional programs
@@ -77,14 +75,9 @@ pub struct SunGrid {
     pub origin: [f32; 2],
     /// Map size in texels.
     pub size: [u32; 2],
-    /// Mask texel minus world texel: [`mask_offset`] of the anchor.
+    /// Mask texel minus world texel: the anchor's `MaskAnchor::snapped` (a pan moves the mask's
+    /// contents by its change, `add_exposed_strips` of the mask plan).
     pub offset: [i32; 2],
-}
-
-/// Mask texel minus world texel for a mask anchored at `snapped` (`MaskAnchor::snapped`): a pan
-/// moves the mask's contents by the change of `snapped` (`add_exposed_strips` of the mask plan).
-pub fn mask_offset(snapped: [i32; 2]) -> [i32; 2] {
-    snapped
 }
 
 impl SunGrid {
@@ -122,7 +115,7 @@ impl SunGrid {
         let a = [d[0] * along, d[1] * along];
         let b = [-d[1] * across, d[0] * across];
         let (a64, b64) = (a.map(f64::from), b.map(f64::from));
-        let offset = mask_offset(snapped);
+        let offset = snapped;
         // The mask's middle in world texels, in lattice coordinates.
         let centre = [0, 1].map(|k| f64::from(mask[k]) * 0.5 - f64::from(offset[k]));
         let along = dot64(centre, a64) / dot64(a64, a64);
@@ -210,7 +203,7 @@ impl SunParams {
             // obstacles farther away; near the horizon the disc's lower half is cut at half the
             // slope. A ray that does not rise walks until it leaves the mask.
             build: [
-                SUN_RECEIVER_GAP,
+                super::RECEIVER_GAP,
                 -slope.abs() * steps[0] - 0.1,
                 rise,
                 det::max(slope - rise, 0.5 * slope),
@@ -480,7 +473,7 @@ pub fn sun_bands(
         let reach = if far {
             now.reach()
         } else {
-            f64::from(SUN_RECEIVER_GAP) + 1.0
+            f64::from(super::RECEIVER_GAP) + 1.0
         };
         let c = [[r[0], r[1]], [r[2], r[1]], [r[0], r[3]]].map(local);
         let sides = [

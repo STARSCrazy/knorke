@@ -42,7 +42,7 @@ mod sun;
 pub use gpu::{ROWS_INPUT_MISSING, RowLights, RowsRecord};
 pub use sun::{
     MAX_SUN_BANDS, MAX_SUN_SIDE, MAX_SUN_TEXELS, SUN_ACROSS, SUN_ALONG, SunBands, SunGrid,
-    SunParams, SunSource, mask_offset, sun_bands, sun_plain,
+    SunParams, SunSource, sun_bands, sun_plain,
 };
 
 use knorke_math::uniform_block;

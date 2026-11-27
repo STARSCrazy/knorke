@@ -19,8 +19,8 @@
 //! | `tile_cells` | [`TileSet`], [`TileUniforms`], [`write_cell_texels`] | `TileOccluders.*` |
 //! | `gpu` (feature `gpu`) | [`OccluderGeometry`], [`TileOccluders`], the programs | `OccluderGeometry.*`, `TileOccluders.*` |
 //!
-//! The mask texture, its clearing and caching, the update plan's rectangles and the distance
-//! field are P23; this package draws "everything" into whatever render pass the host (or P23)
+//! The mask texture, its clearing and caching and the update plan's rectangles are P23; this
+//! package draws "everything" into whatever render pass the host (or P23)
 //! opens on the mask, in the order prepare, record uploads, record draws.
 //!
 //! # Redesign against the C++ version

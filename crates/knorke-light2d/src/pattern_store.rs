@@ -878,12 +878,7 @@ impl Snapshot for PatternStore {
     }
 
     fn restore(&mut self, version: u16, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
-        if version != Self::VERSION {
-            return Err(SnapshotError::UnsupportedVersion {
-                id: Self::ID,
-                version,
-            });
-        }
+        crate::check_version::<Self>(version)?;
         self.version += 1;
         let result = self.restore_state(r);
         if result.is_err() {

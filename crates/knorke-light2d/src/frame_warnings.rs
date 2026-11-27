@@ -199,10 +199,12 @@ impl Warning {
                  texel; make poles at least 1 / shadow_resolution scene pixels thick"
             }
             Self::PatternDestroyed => {
-                "active obstacles are still assigned a pattern that was destroyed and act as if                  they had none; assign another pattern or none before destroying it"
+                "active obstacles are still assigned a pattern that was destroyed and act as if \
+                 they had none; assign another pattern or none before destroying it"
             }
             Self::PatternNoAlpha => {
-                "patterns were cut from a sheet without an alpha channel, so they are fully                  opaque; use a sheet format with alpha"
+                "patterns were cut from a sheet without an alpha channel, so they are fully \
+                 opaque; use a sheet format with alpha"
             }
         }
     }
@@ -313,11 +315,6 @@ impl FrameWarnings {
         self.pending.0 |= w.0;
     }
 
-    /// Drops the pending findings (the call that made them failed).
-    pub fn drop_pending(&mut self) {
-        self.pending = WarningSet::EMPTY;
-    }
-
     /// The kinds of the last [`update`](Self::update).
     pub fn warnings(&self) -> WarningSet {
         self.warnings
@@ -345,50 +342,25 @@ impl FrameWarnings {
         self.flat_lights_seen |= f.flat_lights > 0;
         self.pending.0 |= f.gpu_findings.0;
 
-        let mut w = WarningSet::EMPTY;
-        if f.checks.any() {
-            if f.checks.contains(DebugChecks::LAYERS) {
-                for k in [
-                    Warning::StaleLayers,
-                    Warning::HalfAlpha,
-                    Warning::BlownOutHighlights,
-                    Warning::FlatMedium,
-                ] {
-                    if self.pending.contains(k) {
-                        w.insert(k);
-                    }
-                }
-            }
-            if f.checks.contains(DebugChecks::LIGHTS) {
-                for (k, n) in [
-                    (Warning::FlatLights, f.flat_lights),
-                    (Warning::UnreachableLights, f.unreachable_lights),
-                    (Warning::FacingAwayLights, f.facing_away_lights),
-                    (Warning::AmbientZoneHeights, f.zone_height_spans),
-                ] {
-                    if n > 0 {
-                        w.insert(k);
-                    }
-                }
-            }
-            if f.checks.contains(DebugChecks::OBSTACLES) {
-                for (k, found) in [
-                    (Warning::ThinObstacles, f.thin_obstacles > 0),
-                    (Warning::PatternDestroyed, f.destroyed_pattern_users > 0),
-                    (
-                        Warning::PatternNoAlpha,
-                        self.pending.contains(Warning::PatternNoAlpha),
-                    ),
-                ] {
-                    if found {
-                        w.insert(k);
-                    }
-                }
-            }
-        }
-        if f.unshadowed_lights > 0 {
-            w.insert(Warning::UnshadowedLights);
-        }
+        let pending = self.pending;
+        let found = |k: Warning| match k {
+            Warning::StaleLayers
+            | Warning::HalfAlpha
+            | Warning::BlownOutHighlights
+            | Warning::FlatMedium
+            | Warning::PatternNoAlpha => pending.contains(k),
+            Warning::FlatLights => f.flat_lights > 0,
+            Warning::UnreachableLights => f.unreachable_lights > 0,
+            Warning::FacingAwayLights => f.facing_away_lights > 0,
+            Warning::AmbientZoneHeights => f.zone_height_spans > 0,
+            Warning::ThinObstacles => f.thin_obstacles > 0,
+            Warning::PatternDestroyed => f.destroyed_pattern_users > 0,
+            Warning::UnshadowedLights => f.unshadowed_lights > 0,
+        };
+        // A kind counts if its check is on (`UnshadowedLights` has none: always).
+        let w: WarningSet = (Warning::ALL.into_iter())
+            .filter(|&k| f.checks.contains(k.check()) && found(k))
+            .collect();
         self.pending = WarningSet::EMPTY;
         self.warnings = w;
         self.new = w.without(self.reported);
@@ -466,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_is_consumed_and_can_be_dropped() {
+    fn pending_is_consumed() {
         let mut w = FrameWarnings::new();
         let quiet = FrameFindings {
             checks: DebugChecks::LAYERS,
@@ -475,9 +447,6 @@ mod tests {
         w.add_pending(WarningSet::of(Warning::StaleLayers));
         assert!(w.update(&quiet).contains(Warning::StaleLayers));
         assert!(w.update(&quiet).is_empty(), "consumed");
-        w.add_pending(WarningSet::of(Warning::FlatMedium));
-        w.drop_pending();
-        assert!(w.update(&quiet).is_empty());
     }
 
     #[test]

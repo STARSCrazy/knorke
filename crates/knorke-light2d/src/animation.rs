@@ -611,12 +611,7 @@ impl Snapshot for AnimationStore {
     }
 
     fn restore(&mut self, version: u16, r: &mut Reader<'_>) -> Result<(), SnapshotError> {
-        if version != Self::VERSION {
-            return Err(SnapshotError::UnsupportedVersion {
-                id: Self::ID,
-                version,
-            });
-        }
+        crate::check_version::<Self>(version)?;
         self.animations.get_into(r)?;
         if self.animations.iter().any(|(_, d)| d.validate().is_err()) {
             return Err(SnapshotError::Invalid(

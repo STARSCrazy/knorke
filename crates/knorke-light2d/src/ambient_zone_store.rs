@@ -17,13 +17,11 @@
 //! [`AmbientZoneId`]; the C++ `Reserve` (allocation before mutation) is not needed in Rust, since
 //! allocation failure aborts; the handle-0 case is gone because a `Handle` is never 0.
 
-use crate::ambient_zone::{MAX_ZONE_VERTICES, StoredZone, ZoneError, ZoneErrorKind, ZoneShape};
+use crate::ambient_zone::{StoredZone, ZoneError, ZoneErrorKind, ZoneShape};
 use knorke_types::{Handle, Slots};
 
 /// Most zones alive at once.
 pub const MAX_ZONES: usize = 4096;
-/// Most vertices of a polygon zone.
-pub const MAX_VERTICES: usize = MAX_ZONE_VERTICES;
 
 /// Handle kind of an ambient zone.
 #[derive(Clone, Copy, Debug)]

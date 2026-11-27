@@ -24,8 +24,7 @@
 //! - Results are a [`LightList`] of plain `repr(C)` records ([`GpuLight`] and friends) in vectors
 //!   whose capacity is reused: after the first frames of a given size, collecting allocates
 //!   nothing. All maths that influences results uses [`knorke_math::det`].
-//! - The shadow parameters live in the occlusion mask's texel space: [`OcclusionDomain`] and
-//!   [`MaskAnchor`] come from [`crate::shadow`] (P16) and are re-exported here.
+//! - The shadow parameters live in the occlusion mask's texel space ([`crate::shadow`], P16).
 
 use crate::animation::{AnimationStore, rotate_about_z};
 use crate::area_light::{AreaEmitter, AreaKind, area_normalization, rect_across};
@@ -41,7 +40,7 @@ use crate::mask::mask_atlas_blocks;
 use crate::mask_store::MaskStore;
 use crate::rows::{MAX_ROWS, RowLight, RowSpace, light_suits, row_key, row_span};
 use crate::settings::LightSettings;
-pub use crate::shadow::{MaskAnchor, OcclusionDomain};
+use crate::shadow::{MaskAnchor, OcclusionDomain};
 use crate::{LightStore, Projection};
 use knorke_math::{At, Screen, Vec2, Vec3, det};
 use std::borrow::Cow;
