@@ -189,10 +189,10 @@ fn render_pass_checks_pipeline_bindings_and_usage() {
             .join("tests/data")
             .join(format.pack_file_name("test"));
         let mut lib = ShaderLibrary::load(gpu, &path).unwrap();
-        // jfa_seed.frag: one sampler, one uniform block; writes (uv of the seed or -1).
+        // occlusion_mask.frag: one sampler, one uniform block of 32 bytes.
         let programs = [ProgramDesc::new(
             "fullscreen.vert",
-            "jfa_seed.frag",
+            "occlusion_mask.frag",
             Blend::Opaque,
         )];
         let mut cache = PipelineCache::new(&lib, &programs).unwrap();

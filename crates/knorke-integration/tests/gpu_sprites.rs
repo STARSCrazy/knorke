@@ -454,21 +454,27 @@ fn shader_dir(sub: &str) -> PathBuf {
 }
 
 /// The committed blobs were compiled from the committed sources
-/// (`cargo xtask shaders --compile crates/knorke-integration/shaders`).
+/// (`cargo xtask shaders --compile crates/knorke-integration/shaders`). `chiaro/` holds the
+/// Chiaro programs still in use as Chiaro's shadercross blobs; recompiling them with DXC
+/// changes some SPIR-V and drops their MSL, so a change there is a deliberate step.
 #[test]
 fn compiled_shaders_are_up_to_date() {
-    let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(shader_dir("src"))
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .map(|p| {
-            let name = p.file_name().unwrap().to_string_lossy().into_owned();
-            (name, std::fs::read(&p).unwrap())
-        })
-        .collect();
-    files.sort();
-    let sum = source_checksum(files.iter().map(|(n, b)| (n.as_str(), b.as_slice())));
-    let recorded = std::fs::read_to_string(shader_dir("compiled").join("sources.sum")).unwrap();
-    assert_eq!(format!("{sum:016x}"), recorded.trim());
+    for dir in ["", "chiaro/"] {
+        let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(shader_dir(&format!("{dir}src")))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .map(|p| {
+                let name = p.file_name().unwrap().to_string_lossy().into_owned();
+                (name, std::fs::read(&p).unwrap())
+            })
+            .collect();
+        files.sort();
+        let sum = source_checksum(files.iter().map(|(n, b)| (n.as_str(), b.as_slice())));
+        let recorded =
+            std::fs::read_to_string(shader_dir(&format!("{dir}compiled")).join("sources.sum"))
+                .unwrap();
+        assert_eq!(format!("{sum:016x}"), recorded.trim(), "shaders/{dir}");
+    }
 }
 
 /// The hand-written reflection files match what the SPIR-V declares, at the descriptor sets

@@ -1,0 +1,33 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_UpParams
+{
+    float2 UvScale;
+    float2 SourceTexel;
+    float Weight;
+    packed_float3 Pad;
+};
+
+struct main0_out
+{
+    float4 out_var_SV_Target0 [[color(0)]];
+};
+
+struct main0_in
+{
+    float2 in_var_TEXCOORD0 [[user(locn0)]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], constant type_UpParams& UpParams [[buffer(0)]], texture2d<float> Source [[texture(0)]], sampler SourceSampler [[sampler(0)]])
+{
+    main0_out out = {};
+    float2 _38 = in.in_var_TEXCOORD0 * UpParams.UvScale;
+    float _46 = -UpParams.SourceTexel.x;
+    float _59 = -UpParams.SourceTexel.y;
+    out.out_var_SV_Target0 = float4(((((Source.sample(SourceSampler, _38, level(0.0)).xyz * 4.0) + ((((Source.sample(SourceSampler, (_38 + float2(_46, 0.0)), level(0.0)).xyz + Source.sample(SourceSampler, (_38 + float2(UpParams.SourceTexel.x, 0.0)), level(0.0)).xyz) + Source.sample(SourceSampler, (_38 + float2(0.0, _59)), level(0.0)).xyz) + Source.sample(SourceSampler, (_38 + float2(0.0, UpParams.SourceTexel.y)), level(0.0)).xyz) * 2.0)) + (((Source.sample(SourceSampler, (_38 - UpParams.SourceTexel), level(0.0)).xyz + Source.sample(SourceSampler, (_38 + UpParams.SourceTexel), level(0.0)).xyz) + Source.sample(SourceSampler, (_38 + float2(UpParams.SourceTexel.x, _59)), level(0.0)).xyz) + Source.sample(SourceSampler, (_38 + float2(_46, UpParams.SourceTexel.y)), level(0.0)).xyz)) * 0.0625) * UpParams.Weight, 0.0);
+    return out;
+}
+

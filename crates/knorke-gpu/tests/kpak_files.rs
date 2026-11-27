@@ -26,7 +26,7 @@ fn committed_test_packs_are_valid() {
             [
                 "clear.frag",
                 "fullscreen.vert",
-                "jfa_seed.frag",
+                "occlusion_mask.frag",
                 "solid.frag"
             ]
         );
@@ -34,10 +34,10 @@ fn committed_test_packs_are_valid() {
         assert_eq!(vert.stage, Stage::Vertex);
         assert_eq!(vert.reflection, Reflection::default());
         assert_eq!(vert.entry_point, format.default_entry_point());
-        let seed = pack.get("jfa_seed.frag").unwrap();
-        assert_eq!(seed.stage, Stage::Fragment);
+        let mask = pack.get("occlusion_mask.frag").unwrap();
+        assert_eq!(mask.stage, Stage::Fragment);
         assert_eq!(
-            (seed.reflection.samplers, seed.reflection.uniform_buffers),
+            (mask.reflection.samplers, mask.reflection.uniform_buffers),
             (1, 1)
         );
         if format == ShaderFormat::Spirv {
@@ -58,7 +58,7 @@ fn full_pack(format: ShaderFormat) -> Option<Vec<u8>> {
         Ok(b) => Some(b),
         Err(_) => {
             eprintln!(
-                "skipped: {} missing (run `cargo xtask shaders --src <chiaro>/shaders/compiled`)",
+                "skipped: {} missing (run `cargo xtask shaders`)",
                 path.display()
             );
             None
@@ -92,41 +92,17 @@ fn reflection_counts_match_the_shader_contracts() {
     // scene, light buffer, glow buffer, material, specular/direction sums, surface buffer
     check("composite.frag", F, r(6, 0, 1));
     check("output.frag", F, r(3, 0, 1)); // HDR, overlay, bloom level 0
-    check("light.vert", V, r(0, 1, 1));
-    check("light.frag", F, r(1, 0, 0)); // the profile atlas
     // occlusion
     check("occluder.vert", V, r(0, 1, 1));
     check("tile.vert", V, r(0, 0, 1));
     check("tile.frag", F, r(1, 0, 1));
     check("occlusion_mask.frag", F, r(1, 0, 1));
     check("solid.frag", F, r(0, 0, 0));
-    // shadows
-    check("light_sdf.frag", F, r(3, 0, 1));
-    for n in ["jfa_seed.frag", "jfa_step.frag", "jfa_distance.frag"] {
-        check(n, F, r(1, 0, 1));
-    }
     check("rect.vert", V, r(0, 0, 1));
     check("clear.frag", F, r(0, 0, 0));
     // bloom
     for n in ["bloom_prefilter.frag", "bloom_down.frag", "bloom_up.frag"] {
         check(n, F, r(1, 0, 1));
-    }
-    // exact and direction material variants
-    for (base, samplers) in [
-        ("light_surface", 2),
-        ("light_sdf_surface", 5),
-        ("directional_surface", 4),
-    ] {
-        let plain = get(&format!("{base}.frag"));
-        let exact = get(&format!("{base}_exact.frag"));
-        let direction = get(&format!("{base}_direction.frag"));
-        assert_eq!(plain.reflection.samplers, samplers, "{base}");
-        assert_eq!(exact.reflection.samplers, samplers + 1, "{base}");
-        assert_eq!(
-            exact.reflection.uniform_buffers,
-            plain.reflection.uniform_buffers
-        );
-        assert_eq!(direction.reflection, plain.reflection, "{base}");
     }
     // ambient zones
     check("ambient_zone.vert", V, r(0, 1, 1));
@@ -151,35 +127,20 @@ fn reflection_counts_match_the_shader_contracts() {
         );
         assert_eq!(z.reflection.storage_buffers, 0);
     }
-    // pattern twins: +2 samplers, 3 storage buffers, +1 uniform block
-    let mut twins = 0;
-    for p in pack.iter().filter(|p| p.name.contains("_pattern")) {
-        let plain = p.name.replace("_pattern", "");
-        let Ok(base) = pack.get(&plain) else {
-            continue;
-        };
-        if p.name.ends_with("_id.frag") {
-            continue;
-        }
-        twins += 1;
-        assert_eq!(
-            p.reflection.samplers,
-            base.reflection.samplers + 2,
-            "{}",
-            p.name
-        );
-        assert_eq!(
-            p.reflection.uniform_buffers,
-            base.reflection.uniform_buffers + 1
-        );
-        assert_eq!(p.reflection.storage_buffers, 3, "{}", p.name);
-        assert!(p.reflection.uniform_buffers <= 4, "SDL_GPU limit per stage");
-    }
-    assert!(twins > 0);
     check("pattern_id.frag", F, r(0, 0, 0));
     check("tile_pattern_id.frag", F, r(1, 2, 1));
+    // ADR 0019: the light rows replaced Chiaro's light programs, so none of them is shipped.
+    let dropped = [
+        "light.",
+        "light_",
+        "directional",
+        "jfa_",
+        "medium_polar",
+        "medium_sun",
+    ];
     for p in pack.iter() {
         assert_eq!(p.reflection.storage_textures, 0, "{}", p.name);
+        assert!(!dropped.iter().any(|d| p.name.starts_with(d)), "{}", p.name);
     }
 }
 

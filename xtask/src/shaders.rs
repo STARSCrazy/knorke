@@ -1,11 +1,12 @@
 //! `cargo xtask shaders`: builds shader packs (`.kpak`, ADR 0014 §3) from compiled shader
 //! blobs and their reflection JSON, and compiles Knorke's own HLSL with DXC.
 //!
-//! Input directory layout (what shadercross writes, e.g. Chiaro's `shaders/compiled`):
-//! `<name>.<stage>.json` plus `<name>.<stage>.spv|msl|dxil` per program, stage `vert` or
-//! `frag`. Several `--src` directories go into one pack. Output:
+//! Input directory layout (what shadercross writes): `<name>.<stage>.json` plus
+//! `<name>.<stage>.spv|msl|dxil` per program, stage `vert` or `frag`. Several `--src`
+//! directories go into one pack; without `--src` they are the repo's two shader dirs
+//! ([`DEFAULT_SRC`]), so plain `cargo xtask shaders` builds the full pack. Output:
 //! `<out>/<pack>.<format>.kpak` for each requested format; a program without a blob of a
-//! format is left out of that format's pack (Knorke's own shaders have no MSL yet).
+//! format is left out of that format's pack (only Chiaro's shadercross blobs have MSL).
 //!
 //! The source checksum in the pack header is taken over the shader sources (every file of
 //! `--sources`, default `<src>/../src` of each `--src` that has one, sorted by name); without
@@ -16,7 +17,9 @@
 //! environment variable `KNORKE_DXC`, else `dxc` on the PATH; it must be a build with SPIR-V
 //! support, the one of the Windows SDK has none). The reflection JSON (four counts) is written
 //! by hand next to the blobs and checked by the tests of the crate that owns the shaders;
-//! `compiled/sources.sum` records the checksum of the sources the blobs were built from.
+//! `compiled/sources.sum` records the checksum of the sources the blobs were built from; the
+//! pack is built afterwards as above. An `.msl` blob of a recompiled program is deleted: DXC
+//! cannot renew it, and a stale one would go into the MSL pack.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -28,7 +31,15 @@ use knorke_gpu::kpak::{
 const USAGE: &str = "usage: cargo xtask shaders --src <compiled dir> [--src <more>] [--name <pack>] [--out <dir>]\n\
      \x20                           [--sources <hlsl dir>] [--only a.frag,b.vert] [--formats spirv,msl,dxil]\n\
      \x20      cargo xtask shaders --compile <dir with src/> [--dxc <dxc.exe>]\n\n\
-     defaults: --name knorke-chiaro, --out target/shaders, --sources <src>/../src, all programs, all formats";
+     defaults: --src the repo's shader dirs, --name knorke-chiaro,\n\
+     \x20         --out target/shaders, --sources <src>/../src, all programs, all formats";
+
+/// The repo's shader dirs, relative to the workspace root: Chiaro's programs that Knorke still
+/// uses (shadercross blobs of chiaro 9bc5b9b) and Knorke's own (DXC).
+const DEFAULT_SRC: [&str; 2] = [
+    "crates/knorke-integration/shaders/chiaro/compiled",
+    "crates/knorke-integration/shaders/compiled",
+];
 
 struct Args {
     src: Vec<PathBuf>,
@@ -75,8 +86,8 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
             other => return Err(format!("unknown argument '{other}'")),
         }
     }
-    if src.is_empty() && compile.is_none() {
-        return Err("--src or --compile is required".to_owned());
+    if src.is_empty() {
+        src = DEFAULT_SRC.iter().map(PathBuf::from).collect();
     }
     Ok(Args {
         src,
@@ -277,6 +288,8 @@ fn compile(dir: &Path, dxc: Option<&Path>) -> Result<(), String> {
                 return Err(format!("{}: dxc failed for {ext}", path.display()));
             }
         }
+        // Stale once the SPIR-V is new; missing is fine (the program leaves the MSL pack).
+        let _ = std::fs::remove_file(out.join(format!("{name}.msl")));
         if !out.join(format!("{name}.json")).is_file() {
             return Err(format!("{name}.json is missing in {}", out.display()));
         }
@@ -297,7 +310,7 @@ pub(crate) fn run(args: &[String]) -> ExitCode {
         if let Some(dir) = &a.compile {
             compile(dir, a.dxc.as_deref())?;
         }
-        if a.src.is_empty() { Ok(()) } else { build(&a) }
+        build(&a)
     });
     match result {
         Ok(()) => ExitCode::SUCCESS,

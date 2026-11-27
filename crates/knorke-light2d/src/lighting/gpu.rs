@@ -675,20 +675,14 @@ pub(crate) fn bind_named(
         }
     }
     let mut vertex_storage = [None; LightStorage::COUNT];
-    let mut fragment_storage = [None; LightStorage::COUNT];
     for b in LightStorage::ALL {
         if let Some(i) = layout.storage(b) {
-            let buffer =
-                r.storage[b as usize].ok_or_else(|| missing_resource(program, b.hlsl_name()))?;
-            let stage = if b.is_vertex() {
-                &mut vertex_storage
-            } else {
-                &mut fragment_storage
-            };
-            stage[usize::from(i)] = Some(buffer);
+            vertex_storage[usize::from(i)] = Some(
+                r.storage[b as usize].ok_or_else(|| missing_resource(program, b.hlsl_name()))?,
+            );
         }
     }
-    let (vs, fs) = (packed(&vertex_storage), packed(&fragment_storage));
+    let vs = packed(&vertex_storage);
     let vertex_uniforms: [&[u8]; 1] = [vertex.unwrap_or(&[])];
     if layout.vertex_uniform_count > 0 && vertex.is_none() {
         return Err(missing_resource(program, "its pass parameters"));
@@ -703,9 +697,6 @@ pub(crate) fn bind_named(
         },
         fragment: StageBindings {
             samplers: &samplers[..usize::from(layout.sampler_count)],
-            storage_buffers: fs.as_ref().map_or(&[][..], |v| {
-                &v[..usize::from(layout.fragment_storage_count)]
-            }),
             uniforms: &uniforms[..usize::from(layout.uniform_count)],
             ..Default::default()
         },

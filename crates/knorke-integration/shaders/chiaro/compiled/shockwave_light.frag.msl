@@ -1,0 +1,58 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_RingFragParams
+{
+    float4 InvAxes;
+    float4 OriginZAxis;
+    float4 SceneStep;
+};
+
+struct main0_out
+{
+    float4 out_var_SV_Target0 [[color(0)]];
+};
+
+struct main0_in
+{
+    float2 in_var_TEXCOORD0 [[user(locn0)]];
+    float4 in_var_TEXCOORD1 [[user(locn1), flat]];
+    float4 in_var_TEXCOORD2 [[user(locn2), flat]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], constant type_RingFragParams& RingFragParams [[buffer(0)]], texture2d<float> SurfaceTex [[texture(0)]], sampler SurfaceSampler [[sampler(0)]])
+{
+    main0_out out = {};
+    float _91;
+    if (RingFragParams.SceneStep.w != 0.0)
+    {
+        float _90;
+        do
+        {
+            uint4 _82 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, ((float2(clamp(int2(floor(in.in_var_TEXCOORD0)), int2(0), int2(RingFragParams.SceneStep.xy) - int2(1))) + float2(0.5)) / RingFragParams.SceneStep.xy), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_82.w < 128u)
+            {
+                _90 = 0.0;
+                break;
+            }
+            _90 = float(_82.x) * RingFragParams.SceneStep.z;
+            break;
+        } while(false);
+        _91 = _90;
+    }
+    else
+    {
+        _91 = 0.0;
+    }
+    float2 _96 = (in.in_var_TEXCOORD0 - RingFragParams.OriginZAxis.xy) - (RingFragParams.OriginZAxis.zw * _91);
+    float _113 = length(float2(length(float3(dot(RingFragParams.InvAxes.xy, _96), dot(RingFragParams.InvAxes.zw, _96), _91).xy - in.in_var_TEXCOORD1.xy) - in.in_var_TEXCOORD1.z, _91)) * in.in_var_TEXCOORD1.w;
+    if (_113 >= 1.0)
+    {
+        discard_fragment();
+    }
+    out.out_var_SV_Target0 = float4(in.in_var_TEXCOORD2.xyz * (0.5 + (0.5 * cos(3.1415927410125732421875 * _113))), 0.0);
+    return out;
+}
+

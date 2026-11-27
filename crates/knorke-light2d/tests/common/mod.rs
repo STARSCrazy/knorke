@@ -57,11 +57,7 @@ pub(crate) fn check_layout(frag: &Program<'_>, vert: &Program<'_>, l: &LightLayo
         u16::from(l.uniform_count),
         "{ctx}: uniforms"
     );
-    assert_eq!(
-        f.storage_buffers,
-        u16::from(l.fragment_storage_count),
-        "{ctx}: storage"
-    );
+    assert_eq!(f.storage_buffers, 0, "{ctx}: storage");
     assert_eq!(f.storage_textures, 0, "{ctx}");
     assert_eq!(v.samplers, 0, "{ctx}");
     assert_eq!(
@@ -75,7 +71,7 @@ pub(crate) fn check_layout(frag: &Program<'_>, vert: &Program<'_>, l: &LightLayo
         "{ctx}: vertex uniforms"
     );
 
-    // SDL's SPIR-V convention: fragment samplers then storage buffers in set 2, fragment
+    // SDL's SPIR-V convention: fragment samplers in set 2, fragment
     // uniforms in set 3, vertex storage buffers in set 0.
     let fb = knorke_gpu::test_support::spirv::decode(frag.code).bindings;
     let vb = knorke_gpu::test_support::spirv::decode(vert.code).bindings;
@@ -86,18 +82,7 @@ pub(crate) fn check_layout(frag: &Program<'_>, vert: &Program<'_>, l: &LightLayo
         check_binding(&fb, u.hlsl_name(), 3, l.uniform(u), &ctx);
     }
     for b in LightStorage::ALL {
-        let slot = l.storage(b);
-        if b.is_vertex() {
-            check_binding(&vb, b.hlsl_name(), 0, slot, &ctx);
-        } else {
-            check_binding(
-                &fb,
-                b.hlsl_name(),
-                2,
-                slot.map(|s| l.sampler_count + s),
-                &ctx,
-            );
-        }
+        check_binding(&vb, b.hlsl_name(), 0, l.storage(b), &ctx);
     }
 }
 

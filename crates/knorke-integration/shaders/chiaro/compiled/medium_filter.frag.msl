@@ -1,0 +1,394 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_MediumParams
+{
+    float4 MediumInvAxes;
+    float4 MediumOriginZAxis;
+    float4 MediumSizes;
+    float4 MediumView;
+    float4 MediumSteps;
+    float4 MediumHaze;
+    float4 MediumHazeColor;
+    float4 MediumAmbient;
+    float4 MediumTable[16];
+    float4 MediumLightPass;
+    float4 MediumPhase[4];
+};
+
+struct main0_out
+{
+    float4 out_var_SV_Target0 [[color(0)]];
+    float4 out_var_SV_Target1 [[color(1)]];
+};
+
+struct main0_in
+{
+    float2 in_var_TEXCOORD0 [[user(locn0)]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], constant type_MediumParams& MediumParams [[buffer(0)]], texture2d<float> ScatterTex [[texture(0)]], texture2d<float> SurfaceTex [[texture(1)]], texture2d<float> MediumTex [[texture(2)]], sampler ScatterSampler [[sampler(0)]], sampler SurfaceSampler [[sampler(1)]], sampler MediumSampler [[sampler(2)]])
+{
+    main0_out out = {};
+    bool _96;
+    int2 _76 = int2(MediumParams.MediumSizes.zw) - int2(1);
+    int2 _77 = clamp(int2(floor(in.in_var_TEXCOORD0 * MediumParams.MediumSizes.zw)), int2(0), _76);
+    int2 _90 = int2(MediumParams.MediumSizes.xy) - int2(1);
+    int2 _91 = clamp(int2(floor(((float2(_77) + float2(0.5)) * MediumParams.MediumSizes.xy) / MediumParams.MediumSizes.zw)), int2(0), _90);
+    float _121;
+    do
+    {
+        _96 = MediumParams.MediumSteps.z == 0.0;
+        if (_96)
+        {
+            _121 = 0.0;
+            break;
+        }
+        float _120;
+        do
+        {
+            uint4 _112 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, ((float2(_91) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_112.w < 128u)
+            {
+                _120 = 0.0;
+                break;
+            }
+            _120 = float(_112.x) * MediumParams.MediumSteps.x;
+            break;
+        } while(false);
+        _121 = _120;
+        break;
+    } while(false);
+    bool _130;
+    float _146;
+    do
+    {
+        _130 = MediumParams.MediumSteps.w == 0.0;
+        if (_130)
+        {
+            _146 = 0.0;
+            break;
+        }
+        _146 = float(uint4(rint(fast::clamp(MediumTex.sample(MediumSampler, ((float2(_91) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0)).w) * 0.0039215688593685626983642578125;
+        break;
+    } while(false);
+    float2 _149 = float2(rint(_121 / MediumParams.MediumSteps.x), rint(_146 * 255.0));
+    float2 _154 = float2(1.0) / MediumParams.MediumSizes.zw;
+    float2 _156 = float2(clamp(_77 + int2(-1), int2(0), _76)) + float2(0.5);
+    int2 _168 = clamp(int2(floor((_156 * MediumParams.MediumSizes.xy) / MediumParams.MediumSizes.zw)), int2(0), _90);
+    float _193;
+    do
+    {
+        if (_96)
+        {
+            _193 = 0.0;
+            break;
+        }
+        float _192;
+        do
+        {
+            uint4 _184 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, ((float2(_168) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_184.w < 128u)
+            {
+                _192 = 0.0;
+                break;
+            }
+            _192 = float(_184.x) * MediumParams.MediumSteps.x;
+            break;
+        } while(false);
+        _193 = _192;
+        break;
+    } while(false);
+    float _213;
+    do
+    {
+        if (_130)
+        {
+            _213 = 0.0;
+            break;
+        }
+        _213 = float(uint4(rint(fast::clamp(MediumTex.sample(MediumSampler, ((float2(_168) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0)).w) * 0.0039215688593685626983642578125;
+        break;
+    } while(false);
+    float2 _218 = (_149 - float2(rint(_193 / MediumParams.MediumSteps.x), rint(_213 * 255.0))) * float2(0.5, 0.0392156876623630523681640625);
+    int _221 = 2 - abs(-1);
+    float _226 = float(_221 * _221) * exp(-dot(_218, _218));
+    float2 _233 = float2(clamp(_77 + int2(0, -1), int2(0), _76)) + float2(0.5);
+    int2 _245 = clamp(int2(floor((_233 * MediumParams.MediumSizes.xy) / MediumParams.MediumSizes.zw)), int2(0), _90);
+    float _270;
+    do
+    {
+        if (_96)
+        {
+            _270 = 0.0;
+            break;
+        }
+        float _269;
+        do
+        {
+            uint4 _261 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, ((float2(_245) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_261.w < 128u)
+            {
+                _269 = 0.0;
+                break;
+            }
+            _269 = float(_261.x) * MediumParams.MediumSteps.x;
+            break;
+        } while(false);
+        _270 = _269;
+        break;
+    } while(false);
+    float _290;
+    do
+    {
+        if (_130)
+        {
+            _290 = 0.0;
+            break;
+        }
+        _290 = float(uint4(rint(fast::clamp(MediumTex.sample(MediumSampler, ((float2(_245) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0)).w) * 0.0039215688593685626983642578125;
+        break;
+    } while(false);
+    float2 _295 = (_149 - float2(rint(_270 / MediumParams.MediumSteps.x), rint(_290 * 255.0))) * float2(0.5, 0.0392156876623630523681640625);
+    int _298 = 2 - abs(0);
+    float _300 = float(_298 * _221);
+    float _303 = _300 * exp(-dot(_295, _295));
+    float2 _312 = float2(clamp(_77 + int2(1, -1), int2(0), _76)) + float2(0.5);
+    int2 _324 = clamp(int2(floor((_312 * MediumParams.MediumSizes.xy) / MediumParams.MediumSizes.zw)), int2(0), _90);
+    float _349;
+    do
+    {
+        if (_96)
+        {
+            _349 = 0.0;
+            break;
+        }
+        float _348;
+        do
+        {
+            uint4 _340 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, ((float2(_324) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_340.w < 128u)
+            {
+                _348 = 0.0;
+                break;
+            }
+            _348 = float(_340.x) * MediumParams.MediumSteps.x;
+            break;
+        } while(false);
+        _349 = _348;
+        break;
+    } while(false);
+    float _369;
+    do
+    {
+        if (_130)
+        {
+            _369 = 0.0;
+            break;
+        }
+        _369 = float(uint4(rint(fast::clamp(MediumTex.sample(MediumSampler, ((float2(_324) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0)).w) * 0.0039215688593685626983642578125;
+        break;
+    } while(false);
+    float2 _374 = (_149 - float2(rint(_349 / MediumParams.MediumSteps.x), rint(_369 * 255.0))) * float2(0.5, 0.0392156876623630523681640625);
+    int _377 = 2 - abs(1);
+    float _379 = float(_377 * _221);
+    float _382 = _379 * exp(-dot(_374, _374));
+    float2 _391 = float2(clamp(_77 + int2(-1, 0), int2(0), _76)) + float2(0.5);
+    int2 _403 = clamp(int2(floor((_391 * MediumParams.MediumSizes.xy) / MediumParams.MediumSizes.zw)), int2(0), _90);
+    float _428;
+    do
+    {
+        if (_96)
+        {
+            _428 = 0.0;
+            break;
+        }
+        float _427;
+        do
+        {
+            uint4 _419 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, ((float2(_403) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_419.w < 128u)
+            {
+                _427 = 0.0;
+                break;
+            }
+            _427 = float(_419.x) * MediumParams.MediumSteps.x;
+            break;
+        } while(false);
+        _428 = _427;
+        break;
+    } while(false);
+    float _448;
+    do
+    {
+        if (_130)
+        {
+            _448 = 0.0;
+            break;
+        }
+        _448 = float(uint4(rint(fast::clamp(MediumTex.sample(MediumSampler, ((float2(_403) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0)).w) * 0.0039215688593685626983642578125;
+        break;
+    } while(false);
+    float2 _453 = (_149 - float2(rint(_428 / MediumParams.MediumSteps.x), rint(_448 * 255.0))) * float2(0.5, 0.0392156876623630523681640625);
+    float _457 = _300 * exp(-dot(_453, _453));
+    float _470 = float(_298 * _298);
+    float2 _479 = float2(clamp(_77 + int2(1, 0), int2(0), _76)) + float2(0.5);
+    int2 _491 = clamp(int2(floor((_479 * MediumParams.MediumSizes.xy) / MediumParams.MediumSizes.zw)), int2(0), _90);
+    float _516;
+    do
+    {
+        if (_96)
+        {
+            _516 = 0.0;
+            break;
+        }
+        float _515;
+        do
+        {
+            uint4 _507 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, ((float2(_491) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_507.w < 128u)
+            {
+                _515 = 0.0;
+                break;
+            }
+            _515 = float(_507.x) * MediumParams.MediumSteps.x;
+            break;
+        } while(false);
+        _516 = _515;
+        break;
+    } while(false);
+    float _536;
+    do
+    {
+        if (_130)
+        {
+            _536 = 0.0;
+            break;
+        }
+        _536 = float(uint4(rint(fast::clamp(MediumTex.sample(MediumSampler, ((float2(_491) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0)).w) * 0.0039215688593685626983642578125;
+        break;
+    } while(false);
+    float2 _541 = (_149 - float2(rint(_516 / MediumParams.MediumSteps.x), rint(_536 * 255.0))) * float2(0.5, 0.0392156876623630523681640625);
+    float _544 = float(_377 * _298);
+    float _547 = _544 * exp(-dot(_541, _541));
+    float2 _556 = float2(clamp(_77 + int2(-1, 1), int2(0), _76)) + float2(0.5);
+    int2 _568 = clamp(int2(floor((_556 * MediumParams.MediumSizes.xy) / MediumParams.MediumSizes.zw)), int2(0), _90);
+    float _593;
+    do
+    {
+        if (_96)
+        {
+            _593 = 0.0;
+            break;
+        }
+        float _592;
+        do
+        {
+            uint4 _584 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, ((float2(_568) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_584.w < 128u)
+            {
+                _592 = 0.0;
+                break;
+            }
+            _592 = float(_584.x) * MediumParams.MediumSteps.x;
+            break;
+        } while(false);
+        _593 = _592;
+        break;
+    } while(false);
+    float _613;
+    do
+    {
+        if (_130)
+        {
+            _613 = 0.0;
+            break;
+        }
+        _613 = float(uint4(rint(fast::clamp(MediumTex.sample(MediumSampler, ((float2(_568) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0)).w) * 0.0039215688593685626983642578125;
+        break;
+    } while(false);
+    float2 _618 = (_149 - float2(rint(_593 / MediumParams.MediumSteps.x), rint(_613 * 255.0))) * float2(0.5, 0.0392156876623630523681640625);
+    float _622 = _379 * exp(-dot(_618, _618));
+    float2 _631 = float2(clamp(_77 + int2(0, 1), int2(0), _76)) + float2(0.5);
+    int2 _643 = clamp(int2(floor((_631 * MediumParams.MediumSizes.xy) / MediumParams.MediumSizes.zw)), int2(0), _90);
+    float _668;
+    do
+    {
+        if (_96)
+        {
+            _668 = 0.0;
+            break;
+        }
+        float _667;
+        do
+        {
+            uint4 _659 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, ((float2(_643) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_659.w < 128u)
+            {
+                _667 = 0.0;
+                break;
+            }
+            _667 = float(_659.x) * MediumParams.MediumSteps.x;
+            break;
+        } while(false);
+        _668 = _667;
+        break;
+    } while(false);
+    float _688;
+    do
+    {
+        if (_130)
+        {
+            _688 = 0.0;
+            break;
+        }
+        _688 = float(uint4(rint(fast::clamp(MediumTex.sample(MediumSampler, ((float2(_643) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0)).w) * 0.0039215688593685626983642578125;
+        break;
+    } while(false);
+    float2 _693 = (_149 - float2(rint(_668 / MediumParams.MediumSteps.x), rint(_688 * 255.0))) * float2(0.5, 0.0392156876623630523681640625);
+    float _697 = _544 * exp(-dot(_693, _693));
+    float2 _706 = float2(clamp(_77 + int2(1), int2(0), _76)) + float2(0.5);
+    int2 _718 = clamp(int2(floor((_706 * MediumParams.MediumSizes.xy) / MediumParams.MediumSizes.zw)), int2(0), _90);
+    float _743;
+    do
+    {
+        if (_96)
+        {
+            _743 = 0.0;
+            break;
+        }
+        float _742;
+        do
+        {
+            uint4 _734 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, ((float2(_718) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_734.w < 128u)
+            {
+                _742 = 0.0;
+                break;
+            }
+            _742 = float(_734.x) * MediumParams.MediumSteps.x;
+            break;
+        } while(false);
+        _743 = _742;
+        break;
+    } while(false);
+    float _763;
+    do
+    {
+        if (_130)
+        {
+            _763 = 0.0;
+            break;
+        }
+        _763 = float(uint4(rint(fast::clamp(MediumTex.sample(MediumSampler, ((float2(_718) + float2(0.5)) * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0)).w) * 0.0039215688593685626983642578125;
+        break;
+    } while(false);
+    float2 _768 = (_149 - float2(rint(_743 / MediumParams.MediumSteps.x), rint(_763 * 255.0))) * float2(0.5, 0.0392156876623630523681640625);
+    float _774 = float(_377 * _377) * exp(-dot(_768, _768));
+    out.out_var_SV_Target0 = (((((((((ScatterTex.sample(ScatterSampler, (_156 * _154), level(0.0)) * _226) + (ScatterTex.sample(ScatterSampler, (_233 * _154), level(0.0)) * _303)) + (ScatterTex.sample(ScatterSampler, (_312 * _154), level(0.0)) * _382)) + (ScatterTex.sample(ScatterSampler, (_391 * _154), level(0.0)) * _457)) + (ScatterTex.sample(ScatterSampler, ((float2(clamp(_77, int2(0), _76)) + float2(0.5)) * _154), level(0.0)) * _470)) + (ScatterTex.sample(ScatterSampler, (_479 * _154), level(0.0)) * _547)) + (ScatterTex.sample(ScatterSampler, (_556 * _154), level(0.0)) * _622)) + (ScatterTex.sample(ScatterSampler, (_631 * _154), level(0.0)) * _697)) + (ScatterTex.sample(ScatterSampler, (_706 * _154), level(0.0)) * _774)) / float4((((((((_226 + _303) + _382) + _457) + _470) + _547) + _622) + _697) + _774);
+    out.out_var_SV_Target1 = float4(_149 * float2(0.0039215688593685626983642578125), 0.0, 0.0);
+    return out;
+}
+

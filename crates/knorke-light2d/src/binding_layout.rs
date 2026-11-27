@@ -34,12 +34,6 @@
 pub enum LightSampler {
     /// `SurfaceTex`: surface buffer.
     Surface,
-    /// `Mask`: occlusion mask of the caster class.
-    OcclusionMask,
-    /// `Field`: distance field of the caster class.
-    DistanceField,
-    /// `Heights`: obstacle heights of the caster class.
-    OcclusionHeight,
     /// `MaterialTex`: material buffer (exact mode).
     Material,
     /// `ProfileAtlas` (point and spot lights).
@@ -48,10 +42,6 @@ pub enum LightSampler {
     Mask,
     /// `MediumMap`: medium world map.
     MediumMap,
-    /// `PatternIds`: pattern obstacle id texture.
-    PatternIds,
-    /// `PatternAtlas`.
-    PatternAtlas,
     /// `MediumTex` (medium programs).
     MediumTex,
     /// `ScatterTex` (medium programs).
@@ -76,19 +66,14 @@ pub enum LightSampler {
 
 impl LightSampler {
     /// Number of sampler kinds.
-    pub const COUNT: usize = 20;
+    pub const COUNT: usize = 15;
     /// All kinds in order.
     pub const ALL: [LightSampler; Self::COUNT] = [
         Self::Surface,
-        Self::OcclusionMask,
-        Self::DistanceField,
-        Self::OcclusionHeight,
         Self::Material,
         Self::Profile,
         Self::Mask,
         Self::MediumMap,
-        Self::PatternIds,
-        Self::PatternAtlas,
         Self::MediumTex,
         Self::ScatterTex,
         Self::PureAmbient,
@@ -105,15 +90,10 @@ impl LightSampler {
     pub const fn hlsl_name(self) -> &'static str {
         match self {
             Self::Surface => "SurfaceTex",
-            Self::OcclusionMask => "Mask",
-            Self::DistanceField => "Field",
-            Self::OcclusionHeight => "Heights",
             Self::Material => "MaterialTex",
             Self::Profile => "ProfileAtlas",
             Self::Mask => "MaskAtlas",
             Self::MediumMap => "MediumMap",
-            Self::PatternIds => "PatternIds",
-            Self::PatternAtlas => "PatternAtlas",
             Self::MediumTex => "MediumTex",
             Self::ScatterTex => "ScatterTex",
             Self::PureAmbient => "PureAmbientTex",
@@ -131,16 +111,8 @@ impl LightSampler {
 /// Fragment uniform blocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LightUniform {
-    /// `SurfaceParams`.
-    Surface,
-    /// `ShadowParams` (distance field programs).
-    Shadow,
-    /// `DirectionalParams`.
-    Directional,
     /// `MediumMapParams`.
     MediumMap,
-    /// `PatternParams`.
-    Pattern,
     /// `MediumParams` (medium programs, composite).
     MediumParams,
     /// `ZoneParams` (medium programs).
@@ -149,93 +121,56 @@ pub enum LightUniform {
     PolarQuery,
     /// `SunParams` (medium programs).
     Sun,
-    /// `PolarRowParams` (medium programs).
-    PolarRow,
-    /// `SunHeightParams` (medium programs).
-    SunHeight,
     /// `CompositeParams` (composite).
     Composite,
 }
 
 impl LightUniform {
     /// Number of uniform kinds.
-    pub const COUNT: usize = 12;
+    pub const COUNT: usize = 6;
     /// All kinds in order.
     pub const ALL: [LightUniform; Self::COUNT] = [
-        Self::Surface,
-        Self::Shadow,
-        Self::Directional,
         Self::MediumMap,
-        Self::Pattern,
         Self::MediumParams,
         Self::Zone,
         Self::PolarQuery,
         Self::Sun,
-        Self::PolarRow,
-        Self::SunHeight,
         Self::Composite,
     ];
 
     /// HLSL name of the block.
     pub const fn hlsl_name(self) -> &'static str {
         match self {
-            Self::Surface => "SurfaceParams",
-            Self::Shadow => "ShadowParams",
-            Self::Directional => "DirectionalParams",
             Self::MediumMap => "MediumMapParams",
-            Self::Pattern => "PatternParams",
             Self::MediumParams => "MediumParams",
             Self::Zone => "ZoneParams",
             Self::PolarQuery => "PolarQueryParams",
             Self::Sun => "SunParams",
-            Self::PolarRow => "PolarRowParams",
-            Self::SunHeight => "SunHeightParams",
             Self::Composite => "CompositeParams",
         }
     }
 }
 
-/// Storage buffers: `Lights` and `Masks` belong to the vertex shader, the pattern buffers to
-/// the fragment shader.
+/// Vertex storage buffers (no medium or composite program has fragment storage).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum LightStorage {
-    /// Vertex: `StructuredBuffer<GpuLight>`.
+    /// `StructuredBuffer<GpuLight>`.
     Lights,
-    /// Vertex: `StructuredBuffer<GpuMask>`.
+    /// `StructuredBuffer<GpuMask>`.
     Masks,
-    /// Fragment.
-    PatternObstacles,
-    /// Fragment.
-    Patterns,
-    /// Fragment.
-    PatternData,
 }
 
 impl LightStorage {
     /// Number of storage kinds.
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 2;
     /// All kinds in order.
-    pub const ALL: [LightStorage; Self::COUNT] = [
-        Self::Lights,
-        Self::Masks,
-        Self::PatternObstacles,
-        Self::Patterns,
-        Self::PatternData,
-    ];
-
-    /// Whether the vertex shader reads this buffer.
-    pub const fn is_vertex(self) -> bool {
-        matches!(self, Self::Lights | Self::Masks)
-    }
+    pub const ALL: [LightStorage; Self::COUNT] = [Self::Lights, Self::Masks];
 
     /// HLSL name of the buffer.
     pub const fn hlsl_name(self) -> &'static str {
         match self {
             Self::Lights => "Lights",
             Self::Masks => "Masks",
-            Self::PatternObstacles => "PatternObstacles",
-            Self::Patterns => "Patterns",
-            Self::PatternData => "PatternData",
         }
     }
 }
@@ -252,8 +187,6 @@ pub struct LightLayout {
     pub uniform_count: u8,
     /// Vertex storage buffers.
     pub vertex_storage_count: u8,
-    /// Fragment storage buffers.
-    pub fragment_storage_count: u8,
     /// Vertex uniform blocks (pass params of the light vertex shaders; 0 for fullscreen).
     pub vertex_uniform_count: u8,
 }
@@ -267,7 +200,7 @@ impl LightLayout {
     pub const fn uniform(&self, u: LightUniform) -> Option<u8> {
         self.uniforms[u as usize]
     }
-    /// Slot of storage buffer `b` within the stage it belongs to.
+    /// Slot of vertex storage buffer `b`.
     pub const fn storage(&self, b: LightStorage) -> Option<u8> {
         self.storage[b as usize]
     }
@@ -297,7 +230,6 @@ impl LayoutBuilder {
                 sampler_count: 0,
                 uniform_count: 0,
                 vertex_storage_count: 0,
-                fragment_storage_count: 0,
                 vertex_uniform_count: 0,
             },
         }
@@ -312,15 +244,10 @@ impl LayoutBuilder {
         self.layout.uniforms[u as usize] = Some(self.layout.uniform_count);
         self.layout.uniform_count += 1;
     }
-    /// Appends storage buffer `b` to its stage.
+    /// Appends vertex storage buffer `b`.
     pub const fn storage(&mut self, b: LightStorage) {
-        if b.is_vertex() {
-            self.layout.storage[b as usize] = Some(self.layout.vertex_storage_count);
-            self.layout.vertex_storage_count += 1;
-        } else {
-            self.layout.storage[b as usize] = Some(self.layout.fragment_storage_count);
-            self.layout.fragment_storage_count += 1;
-        }
+        self.layout.storage[b as usize] = Some(self.layout.vertex_storage_count);
+        self.layout.vertex_storage_count += 1;
     }
     /// Sets the number of vertex uniform blocks.
     pub const fn vertex_uniforms(&mut self, count: u8) {

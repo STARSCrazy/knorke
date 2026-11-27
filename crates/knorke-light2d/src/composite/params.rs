@@ -323,7 +323,6 @@ mod tests {
             let layout = composite_layout_of(program);
             assert_eq!(layout.sampler_count, samplers, "{program:?}");
             assert_eq!(layout.uniform_count, uniforms, "{program:?}");
-            assert_eq!(layout.fragment_storage_count, 0);
             assert_eq!(layout.vertex_storage_count, 0);
             assert_eq!(layout.vertex_uniform_count, 0);
         }

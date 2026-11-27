@@ -45,7 +45,7 @@ fn shaders_are_created_lazily_and_released() {
         assert_eq!(a, b, "cached");
         lib.shader_by_name("clear.frag").unwrap();
         lib.shader_by_name("solid.frag").unwrap();
-        lib.shader_by_name("jfa_seed.frag").unwrap();
+        lib.shader_by_name("occlusion_mask.frag").unwrap();
         assert_eq!(lib.created_count(), 4);
         assert_eq!(counter.live(), 4);
         assert_eq!(
@@ -97,7 +97,7 @@ fn pipeline_cache_keys_by_program_and_target_format() {
         let gpu = Gpu::new(&device, &counter);
         let mut lib = library(gpu);
         let programs = [
-            ProgramDesc::new("fullscreen.vert", "jfa_seed.frag", Blend::Opaque),
+            ProgramDesc::new("fullscreen.vert", "occlusion_mask.frag", Blend::Opaque),
             ProgramDesc::new("fullscreen.vert", "solid.frag", Blend::Max),
             ProgramDesc {
                 second: Some(SecondTarget {

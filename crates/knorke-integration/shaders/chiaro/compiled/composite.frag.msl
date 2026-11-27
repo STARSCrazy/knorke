@@ -1,0 +1,508 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_CompositeParams
+{
+    uint DecodeSrgb;
+    uint UseLightBuffer;
+    uint UseGlow;
+    uint DecodeGlow;
+    float4 Ambient;
+    uint GlowFromScene;
+    float GlowScale;
+    uint UseSpecular;
+    uint UseDirection;
+    float4 ViewDirSpec;
+    float4 ScreenRight;
+    float4 XYAxes;
+    float4 ZAxisScene;
+    float4 InvAxes;
+    float4 OriginStep;
+    float4 Wet;
+};
+
+struct main0_out
+{
+    float4 out_var_SV_Target0 [[color(0)]];
+};
+
+struct main0_in
+{
+    float2 in_var_TEXCOORD0 [[user(locn0)]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], constant type_CompositeParams& CompositeParams [[buffer(0)]], texture2d<float> Scene [[texture(0)]], texture2d<float> LightBuffer [[texture(1)]], texture2d<float> GlowTex [[texture(2)]], texture2d<float> MaterialTex [[texture(3)]], texture2d<float> DetailTex [[texture(4)]], texture2d<float> SurfaceTex [[texture(5)]], sampler SceneSampler [[sampler(0)]], sampler LightSampler [[sampler(1)]], sampler GlowSampler [[sampler(2)]], sampler MaterialSampler [[sampler(3)]], sampler DetailSampler [[sampler(4)]], sampler SurfaceSampler [[sampler(5)]])
+{
+    main0_out out = {};
+    float4 _128 = Scene.sample(SceneSampler, in.in_var_TEXCOORD0, level(0.0));
+    float4 _143;
+    if (CompositeParams.DecodeSrgb != 0u)
+    {
+        float3 _134 = _128.xyz;
+        float3 _141 = mix(powr((precise::max(_134, float3(0.0)) + float3(0.054999999701976776123046875)) * float3(0.947867333889007568359375), float3(2.400000095367431640625)), _134 * float3(0.077399380505084991455078125), step(_134, float3(0.040449999272823333740234375)));
+        _143 = float4(_141.x, _141.y, _141.z, _128.w);
+    }
+    else
+    {
+        _143 = _128;
+    }
+    float3 _157;
+    if (CompositeParams.UseLightBuffer != 0u)
+    {
+        _157 = LightBuffer.sample(LightSampler, in.in_var_TEXCOORD0, level(0.0)).xyz;
+    }
+    else
+    {
+        _157 = CompositeParams.Ambient.xyz;
+    }
+    float4 _813;
+    if (CompositeParams.UseDirection != 0u)
+    {
+        bool _188;
+        bool _194;
+        float2 _168 = in.in_var_TEXCOORD0 * CompositeParams.ZAxisScene.zw;
+        int2 _171 = int2(CompositeParams.ZAxisScene.zw);
+        int2 _173 = clamp(int2(floor(_168)), int2(0), _171 - int2(1));
+        float2 _178 = (float2(_173) + float2(0.5)) / CompositeParams.ZAxisScene.zw;
+        float4 _180 = MaterialTex.sample(MaterialSampler, _178, level(0.0));
+        bool _193;
+        float3 _230;
+        float _231;
+        float _232;
+        float _233;
+        do
+        {
+            uint4 _186 = uint4(rint(fast::clamp(_180, float4(0.0), float4(1.0)) * 255.0));
+            uint _187 = _186.w;
+            _188 = _187 >= 128u;
+            if (_187 >= 192u)
+            {
+                _193 = _187 < 255u;
+            }
+            else
+            {
+                _193 = false;
+            }
+            _194 = !_188;
+            if (_194)
+            {
+                _230 = float3(0.0, 0.0, 1.0);
+                _231 = 0.0;
+                _232 = 0.0;
+                _233 = 2.0;
+                break;
+            }
+            float2 _203 = fast::clamp((rint(fast::clamp(_180.xy, float2(0.0), float2(1.0)) * 255.0) - float2(128.0)) * float2(0.0078740157186985015869140625), float2(-1.0), float2(1.0));
+            float _204 = _203.x;
+            float _205 = _203.y;
+            float2 _209 = float2(_204 + _205, _204 - _205) * 0.5;
+            float _210 = _209.x;
+            uint _218 = _186.z;
+            _230 = fast::normalize(float3(_210, _209.y, (1.0 - abs(_210)) - abs(_209.y)));
+            _231 = float(_218 >> 5u) * 0.14285714924335479736328125;
+            _232 = float((_218 >> 4u) & 1u);
+            _233 = exp2(1.0 + (float(_218 & 15u) * 0.466666698455810546875));
+            break;
+        } while(false);
+        float4 _810;
+        if (_194)
+        {
+            float3 _240 = _143.xyz * (CompositeParams.Ambient.xyz + precise::max(_157 - CompositeParams.Ambient.xyz, float3(0.0)));
+            _810 = float4(_240.x, _240.y, _240.z, _143.w);
+        }
+        else
+        {
+            float3 _289;
+            float _290;
+            if (CompositeParams.ScreenRight.w != 0.0)
+            {
+                float4 _250 = SurfaceTex.sample(SurfaceSampler, _178, level(0.0));
+                float _287;
+                float3 _288;
+                do
+                {
+                    uint4 _258 = uint4(rint(fast::clamp(_250, float4(0.0), float4(1.0)) * 255.0));
+                    if (_258.w < 128u)
+                    {
+                        _287 = 0.0;
+                        _288 = float3(0.0, 0.0, 1.0);
+                        break;
+                    }
+                    float2 _272 = fast::clamp((rint(fast::clamp(_250.yz, float2(0.0), float2(1.0)) * 255.0) - float2(128.0)) * float2(0.0078740157186985015869140625), float2(-1.0), float2(1.0));
+                    float _273 = _272.x;
+                    float _274 = _272.y;
+                    float2 _278 = float2(_273 + _274, _273 - _274) * 0.5;
+                    float _279 = _278.x;
+                    _287 = float(_258.x) * CompositeParams.OriginStep.z;
+                    _288 = fast::normalize(float3(_279, _278.y, (1.0 - abs(_279)) - abs(_278.y)));
+                    break;
+                } while(false);
+                _289 = _288;
+                _290 = _287;
+            }
+            else
+            {
+                _289 = float3(0.0, 0.0, 1.0);
+                _290 = 0.0;
+            }
+            float _311;
+            float2 _297 = (_168 - CompositeParams.OriginStep.xy) - (CompositeParams.ZAxisScene.xy * _290);
+            float2 _304 = float2(dot(CompositeParams.InvAxes.xy, _297), dot(CompositeParams.InvAxes.zw, _297));
+            float _428;
+            do
+            {
+                _311 = _231 * CompositeParams.ViewDirSpec.w;
+                if ((isunordered(_311, 0.0) || _311 <= 0.0))
+                {
+                    _428 = _233;
+                    break;
+                }
+                float _365;
+                float3 _366;
+                if ((_173.x + 1) < _171.x)
+                {
+                    bool _334;
+                    float4 _326 = MaterialTex.sample(MaterialSampler, ((float2(_173 + int2(1, 0)) + float2(0.5)) / CompositeParams.ZAxisScene.zw), level(0.0));
+                    float3 _359;
+                    do
+                    {
+                        _334 = uint4(rint(fast::clamp(_326, float4(0.0), float4(1.0)) * 255.0)).w >= 128u;
+                        if (!_334)
+                        {
+                            _359 = float3(0.0, 0.0, 1.0);
+                            break;
+                        }
+                        float2 _344 = fast::clamp((rint(fast::clamp(_326.xy, float2(0.0), float2(1.0)) * 255.0) - float2(128.0)) * float2(0.0078740157186985015869140625), float2(-1.0), float2(1.0));
+                        float _345 = _344.x;
+                        float _346 = _344.y;
+                        float2 _350 = float2(_345 + _346, _345 - _346) * 0.5;
+                        float _351 = _350.x;
+                        _359 = fast::normalize(float3(_351, _350.y, (1.0 - abs(_351)) - abs(_350.y)));
+                        break;
+                    } while(false);
+                    float3 _363;
+                    if (_334)
+                    {
+                        _363 = _230 + _359;
+                    }
+                    else
+                    {
+                        _363 = _230;
+                    }
+                    _365 = _334 ? 2.0 : 1.0;
+                    _366 = _363;
+                }
+                else
+                {
+                    _365 = 1.0;
+                    _366 = _230;
+                }
+                float _418;
+                float3 _419;
+                if ((_173.y + 1) < _171.y)
+                {
+                    bool _386;
+                    float4 _378 = MaterialTex.sample(MaterialSampler, ((float2(_173 + int2(0, 1)) + float2(0.5)) / CompositeParams.ZAxisScene.zw), level(0.0));
+                    float3 _411;
+                    do
+                    {
+                        _386 = uint4(rint(fast::clamp(_378, float4(0.0), float4(1.0)) * 255.0)).w >= 128u;
+                        if (!_386)
+                        {
+                            _411 = float3(0.0, 0.0, 1.0);
+                            break;
+                        }
+                        float2 _396 = fast::clamp((rint(fast::clamp(_378.xy, float2(0.0), float2(1.0)) * 255.0) - float2(128.0)) * float2(0.0078740157186985015869140625), float2(-1.0), float2(1.0));
+                        float _397 = _396.x;
+                        float _398 = _396.y;
+                        float2 _402 = float2(_397 + _398, _397 - _398) * 0.5;
+                        float _403 = _402.x;
+                        _411 = fast::normalize(float3(_403, _402.y, (1.0 - abs(_403)) - abs(_402.y)));
+                        break;
+                    } while(false);
+                    float _416;
+                    float3 _417;
+                    if (_386)
+                    {
+                        _416 = _365 + 1.0;
+                        _417 = _366 + _411;
+                    }
+                    else
+                    {
+                        _416 = _365;
+                        _417 = _366;
+                    }
+                    _418 = _416;
+                    _419 = _417;
+                }
+                else
+                {
+                    _418 = _365;
+                    _419 = _366;
+                }
+                float _421 = length(_419) / _418;
+                _428 = precise::max(1.0, (_421 / (_421 + (_233 * (1.0 - _421)))) * _233);
+                break;
+            } while(false);
+            float3 _436 = CompositeParams.ScreenRight.xyz - (_289 * dot(CompositeParams.ScreenRight.xyz, _289));
+            float3 _461;
+            if (length(_436) < 9.9999997473787516355514526367188e-05)
+            {
+                float3 _443 = fast::normalize(cross(float3(0.0, 0.0, 1.0), _289));
+                float3 _459;
+                if ((((CompositeParams.XYAxes.x * _443.x) + (CompositeParams.XYAxes.z * _443.y)) + (CompositeParams.ZAxisScene.x * _443.z)) < 0.0)
+                {
+                    _459 = -_443;
+                }
+                else
+                {
+                    _459 = _443;
+                }
+                _461 = _459;
+            }
+            else
+            {
+                _461 = fast::normalize(_436);
+            }
+            float3 _462 = cross(_289, _461);
+            float3 _478;
+            if ((((CompositeParams.XYAxes.y * _462.x) + (CompositeParams.XYAxes.w * _462.y)) + (CompositeParams.ZAxisScene.y * _462.z)) > 0.0)
+            {
+                _478 = -_462;
+            }
+            else
+            {
+                _478 = _462;
+            }
+            float3 _487 = fast::normalize(((_461 * _230.x) + (_478 * _230.y)) + (_289 * _230.z));
+            float4 _491 = DetailTex.sample(DetailSampler, in.in_var_TEXCOORD0, level(0.0));
+            float3 _498 = precise::max(_157 - CompositeParams.Ambient.xyz, float3(0.0));
+            float3 _499 = _491.xyz;
+            float _500 = length(_499);
+            float _501 = _491.w;
+            float _508;
+            if (_501 < 9.9999997473787516355514526367188e-06)
+            {
+                _508 = 0.0;
+            }
+            else
+            {
+                _508 = fast::clamp(_500 / _501, 0.0, 1.0);
+            }
+            float3 _515;
+            if (_500 > 0.0)
+            {
+                _515 = _499 / float3(_500);
+            }
+            else
+            {
+                _515 = _289;
+            }
+            float _517 = precise::max(0.0500000007450580596923828125, dot(_289, _515));
+            float _526;
+            if (_188)
+            {
+                _526 = mix(1.0, precise::min(4.0, precise::max(0.0, dot(_487, _515)) / _517), _508);
+            }
+            else
+            {
+                _526 = 1.0;
+            }
+            float _532 = precise::max(1.0, (_508 / (_508 + (_428 * (1.0 - _508)))) * _428);
+            float3 _535 = (_498 / float3(_517)) * _508;
+            float3 _801;
+            do
+            {
+                bool _545;
+                if ((CompositeParams.Wet.x > 1.0) ? _193 : false)
+                {
+                    _545 = _289.z > 0.949999988079071044921875;
+                }
+                else
+                {
+                    _545 = false;
+                }
+                if (!_545)
+                {
+                    float3 _583;
+                    do
+                    {
+                        if (_311 <= 0.0)
+                        {
+                            _583 = float3(0.0);
+                            break;
+                        }
+                        float _580;
+                        do
+                        {
+                            if (dot(_487, _515) <= 0.0)
+                            {
+                                _580 = 0.0;
+                                break;
+                            }
+                            float3 _561 = _515 + CompositeParams.ViewDirSpec.xyz;
+                            float _562 = length(_561);
+                            float _571;
+                            if (_562 > 0.0)
+                            {
+                                _571 = precise::max(0.0, dot(_487, _561 / float3(_562)));
+                            }
+                            else
+                            {
+                                _571 = 0.0;
+                            }
+                            float _572 = _532 + 2.0;
+                            _580 = (_572 / (8.0 * (1.0 - exp2((-0.5) * _572)))) * powr(_571, _532);
+                            break;
+                        } while(false);
+                        _583 = _535 * (_311 * _580);
+                        break;
+                    } while(false);
+                    _801 = _583;
+                    break;
+                }
+                if (_311 <= 0.0)
+                {
+                    _801 = float3(0.0);
+                    break;
+                }
+                float _798;
+                do
+                {
+                    if (dot(_487, _515) <= 0.0)
+                    {
+                        _798 = 0.0;
+                        break;
+                    }
+                    float3 _594 = _515 + CompositeParams.ViewDirSpec.xyz;
+                    float _595 = length(_594);
+                    if (_595 <= 0.0)
+                    {
+                        _798 = 0.0;
+                        break;
+                    }
+                    float3 _600 = _594 / float3(_595);
+                    float _601 = dot(_487, _600);
+                    if (_601 <= 0.0)
+                    {
+                        _798 = 0.0;
+                        break;
+                    }
+                    float3 _608 = float3(-CompositeParams.ScreenRight.y, CompositeParams.ScreenRight.x, 0.0);
+                    float _612 = (dot(_600, CompositeParams.ScreenRight.xyz) / _601) * sqrt(CompositeParams.Wet.x);
+                    float _615 = (dot(_600, _608) / _601) / CompositeParams.Wet.x;
+                    float _616 = _532 + 2.0;
+                    float _630 = ((_616 / (8.0 * (1.0 - exp2((-0.5) * _616)))) * rsqrt(CompositeParams.Wet.x)) * exp(((-0.5) * _532) * ((_612 * _612) + (_615 * _615)));
+                    float _797;
+                    if (CompositeParams.Wet.y > 0.0)
+                    {
+                        float2 _641 = float2(dot(_304, CompositeParams.ScreenRight.xy), dot(_304, _608.xy)) * CompositeParams.Wet.z;
+                        float _642 = _641.x;
+                        float _644 = _641.y;
+                        float2 _645 = float2(_642 * 0.20000000298023223876953125, _644);
+                        float2 _646 = floor(_645);
+                        float2 _647 = _645 - _646;
+                        float2 _651 = (_647 * _647) * (float2(3.0) - (_647 * 2.0));
+                        float3 _654 = fract(_646.xyx * 0.103100001811981201171875);
+                        float3 _659 = _654 + float3(dot(_654, _654.yzx + float3(33.3300018310546875)));
+                        float3 _669 = fract((_646 + float2(1.0, 0.0)).xyx * 0.103100001811981201171875);
+                        float3 _674 = _669 + float3(dot(_669, _669.yzx + float3(33.3300018310546875)));
+                        float3 _684 = fract((_646 + float2(0.0, 1.0)).xyx * 0.103100001811981201171875);
+                        float3 _689 = _684 + float3(dot(_684, _684.yzx + float3(33.3300018310546875)));
+                        float3 _699 = fract((_646 + float2(1.0)).xyx * 0.103100001811981201171875);
+                        float3 _704 = _699 + float3(dot(_699, _699.yzx + float3(33.3300018310546875)));
+                        float _711 = _651.x;
+                        float2 _720 = float2((_642 * 0.5) + 17.0, _644 * 2.2999999523162841796875);
+                        float2 _721 = floor(_720);
+                        float2 _722 = _720 - _721;
+                        float2 _726 = (_722 * _722) * (float2(3.0) - (_722 * 2.0));
+                        float3 _729 = fract(_721.xyx * 0.103100001811981201171875);
+                        float3 _734 = _729 + float3(dot(_729, _729.yzx + float3(33.3300018310546875)));
+                        float3 _744 = fract((_721 + float2(1.0, 0.0)).xyx * 0.103100001811981201171875);
+                        float3 _749 = _744 + float3(dot(_744, _744.yzx + float3(33.3300018310546875)));
+                        float3 _759 = fract((_721 + float2(0.0, 1.0)).xyx * 0.103100001811981201171875);
+                        float3 _764 = _759 + float3(dot(_759, _759.yzx + float3(33.3300018310546875)));
+                        float3 _774 = fract((_721 + float2(1.0)).xyx * 0.103100001811981201171875);
+                        float3 _779 = _774 + float3(dot(_774, _774.yzx + float3(33.3300018310546875)));
+                        float _786 = _726.x;
+                        float _793 = smoothstep(0.4000000059604644775390625, 0.64999997615814208984375, (0.60000002384185791015625 * mix(mix(fract((_659.x + _659.y) * _659.z), fract((_674.x + _674.y) * _674.z), _711), mix(fract((_689.x + _689.y) * _689.z), fract((_704.x + _704.y) * _704.z), _711), _651.y)) + (0.4000000059604644775390625 * mix(mix(fract((_734.x + _734.y) * _734.z), fract((_749.x + _749.y) * _749.z), _786), mix(fract((_764.x + _764.y) * _764.z), fract((_779.x + _779.y) * _779.z), _786), _726.y)));
+                        _797 = _630 * mix(1.0, 2.0 * _793, CompositeParams.Wet.y);
+                    }
+                    else
+                    {
+                        _797 = _630;
+                    }
+                    _798 = _797;
+                    break;
+                } while(false);
+                _801 = _535 * (_311 * _798);
+                break;
+            } while(false);
+            float3 _808 = (_143.xyz * (CompositeParams.Ambient.xyz + (_498 * _526))) + (_801 * mix(float3(1.0), _143.xyz, float3(_232)));
+            _810 = float4(_808.x, _808.y, _808.z, _143.w);
+        }
+        _813 = _810;
+    }
+    else
+    {
+        float3 _811 = _143.xyz * _157;
+        _813 = float4(_811.x, _811.y, _811.z, _143.w);
+    }
+    float4 _849;
+    if (CompositeParams.UseSpecular != 0u)
+    {
+        float _842;
+        do
+        {
+            uint4 _833 = uint4(rint(fast::clamp(MaterialTex.sample(MaterialSampler, in.in_var_TEXCOORD0, level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            if (_833.w < 128u)
+            {
+                _842 = 0.0;
+                break;
+            }
+            _842 = float((_833.z >> 4u) & 1u);
+            break;
+        } while(false);
+        float3 _847 = _813.xyz + (DetailTex.sample(DetailSampler, in.in_var_TEXCOORD0, level(0.0)).xyz * mix(float3(1.0), _143.xyz, float3(_842)));
+        _849 = float4(_847.x, _847.y, _847.z, _813.w);
+    }
+    else
+    {
+        _849 = _813;
+    }
+    float4 _888;
+    if (CompositeParams.UseGlow != 0u)
+    {
+        float4 _858 = GlowTex.sample(GlowSampler, in.in_var_TEXCOORD0, level(0.0));
+        float3 _859 = _858.xyz;
+        float3 _879;
+        if (CompositeParams.GlowFromScene != 0u)
+        {
+            _879 = _143.xyz;
+        }
+        else
+        {
+            float3 _878;
+            if (CompositeParams.DecodeGlow != 0u)
+            {
+                _878 = mix(powr((precise::max(_859, float3(0.0)) + float3(0.054999999701976776123046875)) * float3(0.947867333889007568359375), float3(2.400000095367431640625)), _859 * float3(0.077399380505084991455078125), step(_859, float3(0.040449999272823333740234375)));
+            }
+            else
+            {
+                _878 = _859;
+            }
+            _879 = _878;
+        }
+        float3 _886 = _849.xyz + (_879 * (_858.w * CompositeParams.GlowScale));
+        _888 = float4(_886.x, _886.y, _886.z, _849.w);
+    }
+    else
+    {
+        _888 = _849;
+    }
+    out.out_var_SV_Target0 = _888;
+    return out;
+}
+

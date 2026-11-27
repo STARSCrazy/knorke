@@ -1,0 +1,52 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_StructuredBuffer_v2float
+{
+    float2 _m0[1];
+};
+
+struct type_StructuredBuffer_v4float
+{
+    float4 _m0[1];
+};
+
+struct type_DomainParams
+{
+    float4 OriginXAxis;
+    float4 YAxisMargin;
+    float4 TexelScaleDomainSize;
+    float2 Remainder;
+    uint OpacityStart;
+    float Pad;
+};
+
+struct main0_out
+{
+    float4 out_var_TEXCOORD0 [[user(locn0)]];
+    float2 out_var_TEXCOORD1 [[user(locn1)]];
+    float4 gl_Position [[position]];
+};
+
+vertex main0_out main0(constant type_DomainParams& DomainParams [[buffer(0)]], const device type_StructuredBuffer_v2float& Vertices [[buffer(1)]], const device type_StructuredBuffer_v4float& Intervals [[buffer(2)]], uint gl_VertexIndex [[vertex_id]])
+{
+    main0_out out = {};
+    uint _74 = gl_VertexIndex / 3u;
+    uint _80 = DomainParams.OpacityStart + (_74 / 2u);
+    float _90;
+    if ((_74 & 1u) != 0u)
+    {
+        _90 = Vertices._m0[_80].y;
+    }
+    else
+    {
+        _90 = Vertices._m0[_80].x;
+    }
+    out.out_var_TEXCOORD0 = Intervals._m0[_74];
+    out.out_var_TEXCOORD1 = float2(abs(_90), float(_90 < 0.0));
+    out.gl_Position = float4((((((((DomainParams.OriginXAxis.xy + (DomainParams.OriginXAxis.zw * Vertices._m0[gl_VertexIndex].x)) + (DomainParams.YAxisMargin.xy * Vertices._m0[gl_VertexIndex].y)) + DomainParams.YAxisMargin.zw) * DomainParams.TexelScaleDomainSize.xy) - DomainParams.Remainder) / DomainParams.TexelScaleDomainSize.zw) * float2(2.0, -2.0)) + float2(-1.0, 1.0), 0.0, 1.0);
+    return out;
+}
+

@@ -18,10 +18,11 @@
 //! (zero copy, `&'static`).
 //!
 //! **Where packs live:** `cargo xtask shaders` writes to `target/shaders/` (not committed;
-//! the full Chiaro set is ~17 MB over three formats). The crate's GPU tests use tiny
-//! committed packs in `crates/knorke-gpu/tests/data/test.{spirv,msl,dxil}.kpak` (four
-//! programs, ~19 KB together), rebuilt with
-//! `cargo xtask shaders --src <chiaro>/shaders/compiled --name test --out crates/knorke-gpu/tests/data --only fullscreen.vert,clear.frag,solid.frag,jfa_seed.frag`.
+//! ~7 MB over three formats) from the blobs committed under `crates/knorke-integration/shaders`.
+//! The crate's GPU tests use tiny committed packs in
+//! `crates/knorke-gpu/tests/data/test.{spirv,msl,dxil}.kpak` (four programs, ~20 KB together),
+//! rebuilt with
+//! `cargo xtask shaders --src crates/knorke-integration/shaders/chiaro/compiled --name test --out crates/knorke-gpu/tests/data --only fullscreen.vert,clear.frag,solid.frag,occlusion_mask.frag`.
 //! Tests against the full pack skip when `target/shaders/` has none.
 //!
 //! **Ownership (ADR 0002):** the host owns device, swapchain, command buffers and the frame

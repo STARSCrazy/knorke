@@ -1,0 +1,1300 @@
+#include <metal_stdlib>
+#include <simd/simd.h>
+
+using namespace metal;
+
+struct type_MediumParams
+{
+    float4 MediumInvAxes;
+    float4 MediumOriginZAxis;
+    float4 MediumSizes;
+    float4 MediumView;
+    float4 MediumSteps;
+    float4 MediumHaze;
+    float4 MediumHazeColor;
+    float4 MediumAmbient;
+    float4 MediumTable[16];
+    float4 MediumLightPass;
+    float4 MediumPhase[4];
+};
+
+struct type_MediumMapParams
+{
+    float4 MediumMapX;
+    float4 MediumMapY;
+    float4 MediumMapSize;
+    float4 MediumMapInvAxes;
+    float4 MediumMapOrigin;
+};
+
+struct type_SunParams
+{
+    float4 SunColor;
+    float4 SunToLight;
+    float4 SunMaskX;
+    float4 SunMaskY;
+    float4 SunAtlas;
+    float4 SunBlock;
+};
+
+struct main0_out
+{
+    float4 out_var_SV_Target0 [[color(0)]];
+};
+
+struct main0_in
+{
+    float2 in_var_TEXCOORD0 [[user(locn0)]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], constant type_MediumParams& MediumParams [[buffer(0)]], constant type_MediumMapParams& MediumMapParams [[buffer(1)]], constant type_SunParams& SunParams [[buffer(2)]], texture2d<float> SurfaceTex [[texture(0)]], texture2d<float> MediumTex [[texture(1)]], texture2d<float> MediumMap [[texture(2)]], texture2d<float> SunHeights [[texture(3)]], sampler SurfaceSampler [[sampler(0)]], sampler MediumSampler [[sampler(1)]], sampler MediumMapSampler [[sampler(2)]], sampler SunHeightSampler [[sampler(3)]])
+{
+    main0_out out = {};
+    float4 _2004;
+    do
+    {
+        float2 _123 = float2(clamp(int2(floor(((float2(int2(floor(in.in_var_TEXCOORD0 * MediumParams.MediumSizes.zw))) + float2(0.5)) * MediumParams.MediumSizes.xy) / MediumParams.MediumSizes.zw)), int2(0), int2(MediumParams.MediumSizes.xy) - int2(1))) + float2(0.5);
+        float _153;
+        do
+        {
+            if (MediumParams.MediumSteps.z == 0.0)
+            {
+                _153 = 0.0;
+                break;
+            }
+            float _152;
+            do
+            {
+                uint4 _144 = uint4(rint(fast::clamp(SurfaceTex.sample(SurfaceSampler, (_123 * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+                if (_144.w < 128u)
+                {
+                    _152 = 0.0;
+                    break;
+                }
+                _152 = float(_144.x) * MediumParams.MediumSteps.x;
+                break;
+            } while(false);
+            _153 = _152;
+            break;
+        } while(false);
+        float _186;
+        float _187;
+        float _188;
+        uint _189;
+        do
+        {
+            if (MediumParams.MediumSteps.w == 0.0)
+            {
+                _186 = 0.0;
+                _187 = 0.0;
+                _188 = 0.0;
+                _189 = 0u;
+                break;
+            }
+            uint4 _172 = uint4(rint(fast::clamp(MediumTex.sample(MediumSampler, (_123 * (float2(1.0) / MediumParams.MediumSizes.xy)), level(0.0)), float4(0.0), float4(1.0)) * 255.0));
+            _186 = float(_172.w) * 0.0039215688593685626983642578125;
+            _187 = float(255u - _172.y) * MediumParams.MediumSteps.y;
+            _188 = float(_172.x) * MediumParams.MediumSteps.y;
+            _189 = min((_172.z >> 4u), 15u);
+            break;
+        } while(false);
+        bool _192 = MediumParams.MediumHaze.x > 0.0;
+        bool _198;
+        if (_186 > 0.0)
+        {
+            _198 = _188 > precise::max(_187, _153);
+        }
+        else
+        {
+            _198 = false;
+        }
+        bool _203;
+        if (!_192)
+        {
+            _203 = !_198;
+        }
+        else
+        {
+            _203 = false;
+        }
+        if (_203)
+        {
+            _2004 = float4(0.0);
+            break;
+        }
+        float _210;
+        if (_192)
+        {
+            _210 = _153;
+        }
+        else
+        {
+            _210 = precise::max(_187, _153);
+        }
+        bool _214 = SunParams.SunColor.w > 0.5;
+        bool _217 = MediumMapParams.MediumMapSize.w > 0.0;
+        float _223;
+        if (_214)
+        {
+            _223 = SunParams.SunToLight.w;
+        }
+        else
+        {
+            _223 = 0.0;
+        }
+        float _246;
+        if (_217)
+        {
+            float4 _234 = MediumMap.sample(MediumMapSampler, (float2(0.5) / MediumMapParams.MediumMapSize.xy), level(0.0));
+            float _235 = _234.w;
+            float _245;
+            if (_235 > 0.0)
+            {
+                _245 = precise::min((_235 * 1.00100004673004150390625) + 0.001000000047497451305389404296875, MediumMapParams.MediumMapSize.z);
+            }
+            else
+            {
+                _245 = 0.0;
+            }
+            _246 = _245;
+        }
+        else
+        {
+            _246 = 0.0;
+        }
+        float _248 = precise::min(precise::max(_223, _246), _192 ? 3.3999999521443642490773241379936e+38 : _188);
+        float3 _1648;
+        if (_248 > _210)
+        {
+            float _252 = fast::clamp(_223, _210, _248);
+            uint _259;
+            if (_214)
+            {
+                _259 = uint(SunParams.SunColor.w + 0.5) - 1u;
+            }
+            else
+            {
+                _259 = 0u;
+            }
+            int _263 = max(int(MediumParams.MediumLightPass.x), 1);
+            float _267 = _186 * MediumParams.MediumTable[_189].w;
+            float _276 = MediumParams.MediumHaze.x * MediumParams.MediumHaze.y;
+            float _284 = exp(-(MediumParams.MediumView.w * ((_267 * precise::max(_188 - precise::max(_187, _210), 0.0)) + (_276 * exp((-_210) / MediumParams.MediumHaze.y)))));
+            float _296 = exp(-(MediumParams.MediumView.w * ((_267 * precise::max(_188 - precise::max(_187, _248), 0.0)) + (_276 * exp((-_248) / MediumParams.MediumHaze.y)))));
+            bool _297 = _252 > _210;
+            bool _303;
+            if (_297 ? (_248 > _252) : false)
+            {
+                _303 = _263 > 1;
+            }
+            else
+            {
+                _303 = false;
+            }
+            float _319;
+            if (_303)
+            {
+                _319 = exp(-(MediumParams.MediumView.w * ((_267 * precise::max(_188 - precise::max(_187, _252), 0.0)) + (_276 * exp((-_252) / MediumParams.MediumHaze.y)))));
+            }
+            else
+            {
+                _319 = _296;
+            }
+            int _333;
+            if (_303)
+            {
+                _333 = clamp(int(rint((float(_263) * (_319 - _284)) / precise::max(_296 - _284, 1.0000000031710768509710513471353e-30))), 1, _263 - 1);
+            }
+            else
+            {
+                _333 = _263;
+            }
+            float3 _335;
+            _335 = float3(0.0);
+            float3 _336;
+            for (int _338 = 0; _338 < (_303 ? 2 : 1); _335 = _336, _338++)
+            {
+                bool _344 = _338 == 0;
+                float _345 = _344 ? _210 : _252;
+                float _350;
+                if (_344)
+                {
+                    _350 = _303 ? _252 : _248;
+                }
+                else
+                {
+                    _350 = _248;
+                }
+                float _351 = _344 ? _284 : _319;
+                int _357;
+                if (_344)
+                {
+                    _357 = _333;
+                }
+                else
+                {
+                    _357 = _263 - _333;
+                }
+                bool _359 = (_344 ? _214 : false) ? _297 : false;
+                uint _362 = uint(MediumParams.MediumLightPass.y);
+                float _363 = (_344 ? _319 : _296) - _351;
+                float _364 = float(_357);
+                float _365 = _363 / _364;
+                float _366 = 0.001000000047497451305389404296875 * _363;
+                bool _367 = _365 <= 1.0000000116860974230803549289703e-07;
+                float _369 = (_350 - _345) / _364;
+                float _435;
+                if (_359)
+                {
+                    float2 _379 = (_123 - MediumParams.MediumOriginZAxis.xy) - (MediumParams.MediumOriginZAxis.zw * _345);
+                    float _433;
+                    do
+                    {
+                        float3 _391 = float3(dot(MediumParams.MediumInvAxes.xy, _379), dot(MediumParams.MediumInvAxes.zw, _379), 1.0);
+                        float2 _397 = float2(dot(SunParams.SunMaskX.xyz, _391), dot(SunParams.SunMaskY.xyz, _391));
+                        bool _408;
+                        if (!any(_397 < float2(0.0)))
+                        {
+                            _408 = any(_397 > SunParams.SunAtlas.xy);
+                        }
+                        else
+                        {
+                            _408 = true;
+                        }
+                        if (_408)
+                        {
+                            _433 = 0.0;
+                            break;
+                        }
+                        float2 _417 = fast::clamp((_397 * SunParams.SunBlock.xy) / SunParams.SunAtlas.xy, float2(0.5), SunParams.SunBlock.xy - float2(0.5));
+                        _433 = SunHeights.sample(SunHeightSampler, (float2(_417.x, _417.y + (float(_259) * SunParams.SunBlock.y)) / SunParams.SunAtlas.zw), level(0.0)).x;
+                        break;
+                    } while(false);
+                    _435 = _345 - _433;
+                }
+                else
+                {
+                    _435 = 1.0;
+                }
+                float3 _442;
+                _442 = float3(0.0);
+                float _438;
+                float _441;
+                float3 _443;
+                float _437 = _435;
+                float _440 = _345;
+                int _444 = 0;
+                for (; _444 < _357; _437 = _438, _440 = _441, _442 = _443, _444++)
+                {
+                    if (_444 == (_357 - 1))
+                    {
+                        _441 = _350;
+                    }
+                    else
+                    {
+                        float _624;
+                        if (_367)
+                        {
+                            _624 = _345 + (float(_444 + 1) * _369);
+                        }
+                        else
+                        {
+                            float _462 = log(precise::max(_351 + (float(_444 + 1) * _365), 1.0000000031710768509710513471353e-30));
+                            float _463 = -_462;
+                            float _467 = (_186 * MediumParams.MediumTable[_189].w) * MediumParams.MediumView.w;
+                            float _468 = _276 * MediumParams.MediumView.w;
+                            bool _473;
+                            if (_467 > 0.0)
+                            {
+                                _473 = _188 > _187;
+                            }
+                            else
+                            {
+                                _473 = false;
+                            }
+                            float _478;
+                            if (_473)
+                            {
+                                _478 = fast::clamp(_187, _440, _350);
+                            }
+                            else
+                            {
+                                _478 = _350;
+                            }
+                            float _484;
+                            if (_473)
+                            {
+                                _484 = precise::max(fast::clamp(_188, _440, _350), _478);
+                            }
+                            else
+                            {
+                                _484 = _350;
+                            }
+                            float _619;
+                            if (_463 >= (((_267 * precise::max(_188 - precise::max(_187, _478), 0.0)) * MediumParams.MediumView.w) + (_468 * exp((-_478) / MediumParams.MediumHaze.y))))
+                            {
+                                float _603;
+                                if (_473)
+                                {
+                                    _603 = _467 * precise::max(_188 - precise::max(_187, _440), 0.0);
+                                }
+                                else
+                                {
+                                    _603 = 0.0;
+                                }
+                                float _604 = _463 - _603;
+                                bool _609;
+                                if (_468 > 0.0)
+                                {
+                                    _609 = _604 > 0.0;
+                                }
+                                else
+                                {
+                                    _609 = false;
+                                }
+                                float _617;
+                                if (_609)
+                                {
+                                    _617 = (-MediumParams.MediumHaze.y) * log(_604 / _468);
+                                }
+                                else
+                                {
+                                    _617 = _440;
+                                }
+                                _619 = fast::clamp(_617, _440, _478);
+                            }
+                            else
+                            {
+                                float _595;
+                                if (_463 >= (((_267 * precise::max(_188 - precise::max(_187, _484), 0.0)) * MediumParams.MediumView.w) + (_468 * exp((-_484) / MediumParams.MediumHaze.y))))
+                                {
+                                    bool _533;
+                                    if (_468 > 0.0)
+                                    {
+                                        _533 = _463 > 0.0;
+                                    }
+                                    else
+                                    {
+                                        _533 = false;
+                                    }
+                                    float _541;
+                                    if (_533)
+                                    {
+                                        _541 = (-MediumParams.MediumHaze.y) * log(_463 / _468);
+                                    }
+                                    else
+                                    {
+                                        _541 = _478;
+                                    }
+                                    float _545 = precise::max(_478, precise::max(_188 - (_463 / _467), (_541 <= _484) ? _541 : _478));
+                                    float _549 = _468 * exp((-_545) / MediumParams.MediumHaze.y);
+                                    float _557 = _545 + ((((_467 * (_188 - _545)) + _549) + _462) / (_467 + (_549 / MediumParams.MediumHaze.y)));
+                                    float _561 = _468 * exp((-_557) / MediumParams.MediumHaze.y);
+                                    float _569 = _557 + ((((_467 * (_188 - _557)) + _561) + _462) / (_467 + (_561 / MediumParams.MediumHaze.y)));
+                                    float _573 = _468 * exp((-_569) / MediumParams.MediumHaze.y);
+                                    float _581 = _569 + ((((_467 * (_188 - _569)) + _573) + _462) / (_467 + (_573 / MediumParams.MediumHaze.y)));
+                                    float _585 = _468 * exp((-_581) / MediumParams.MediumHaze.y);
+                                    _595 = fast::clamp(_581 + ((((_467 * (_188 - _581)) + _585) + _462) / (_467 + (_585 / MediumParams.MediumHaze.y))), _478, _484);
+                                }
+                                else
+                                {
+                                    bool _517;
+                                    if (_468 > 0.0)
+                                    {
+                                        _517 = _463 > 0.0;
+                                    }
+                                    else
+                                    {
+                                        _517 = false;
+                                    }
+                                    float _525;
+                                    if (_517)
+                                    {
+                                        _525 = (-MediumParams.MediumHaze.y) * log(_463 / _468);
+                                    }
+                                    else
+                                    {
+                                        _525 = _350;
+                                    }
+                                    _595 = fast::clamp(_525, _484, _350);
+                                }
+                                _619 = _595;
+                            }
+                            _624 = _619;
+                        }
+                        _441 = _624;
+                    }
+                    if (_359)
+                    {
+                        float2 _634 = (_123 - MediumParams.MediumOriginZAxis.xy) - (MediumParams.MediumOriginZAxis.zw * _441);
+                        float _688;
+                        do
+                        {
+                            float3 _646 = float3(dot(MediumParams.MediumInvAxes.xy, _634), dot(MediumParams.MediumInvAxes.zw, _634), 1.0);
+                            float2 _652 = float2(dot(SunParams.SunMaskX.xyz, _646), dot(SunParams.SunMaskY.xyz, _646));
+                            bool _663;
+                            if (!any(_652 < float2(0.0)))
+                            {
+                                _663 = any(_652 > SunParams.SunAtlas.xy);
+                            }
+                            else
+                            {
+                                _663 = true;
+                            }
+                            if (_663)
+                            {
+                                _688 = 0.0;
+                                break;
+                            }
+                            float2 _672 = fast::clamp((_652 * SunParams.SunBlock.xy) / SunParams.SunAtlas.xy, float2(0.5), SunParams.SunBlock.xy - float2(0.5));
+                            _688 = SunHeights.sample(SunHeightSampler, (float2(_672.x, _672.y + (float(_259) * SunParams.SunBlock.y)) / SunParams.SunAtlas.zw), level(0.0)).x;
+                            break;
+                        } while(false);
+                        _438 = _441 - _688;
+                    }
+                    else
+                    {
+                        _438 = 1.0;
+                    }
+                    bool _690 = _437 < 0.0;
+                    bool _694;
+                    if (_690)
+                    {
+                        _694 = _438 < 0.0;
+                    }
+                    else
+                    {
+                        _694 = false;
+                    }
+                    float _718;
+                    float _719;
+                    if (_694)
+                    {
+                        _718 = _440;
+                        _719 = _440;
+                    }
+                    else
+                    {
+                        float _716;
+                        float _717;
+                        if (_690)
+                        {
+                            _716 = _440 + (((_441 - _440) * (-_437)) / (_438 - _437));
+                            _717 = _441;
+                        }
+                        else
+                        {
+                            float _709;
+                            if (_438 < 0.0)
+                            {
+                                _709 = _440 + (((_441 - _440) * _437) / (_437 - _438));
+                            }
+                            else
+                            {
+                                _709 = _441;
+                            }
+                            _716 = _440;
+                            _717 = _709;
+                        }
+                        _718 = _716;
+                        _719 = _717;
+                    }
+                    bool _720 = _719 <= _718;
+                    if (_720)
+                    {
+                        _443 = _442;
+                        continue;
+                    }
+                    float3 _1041;
+                    do
+                    {
+                        if (_720)
+                        {
+                            _1041 = float3(0.0);
+                            break;
+                        }
+                        float _727 = fast::clamp(_187, _718, _719);
+                        float _729 = precise::max(fast::clamp(_188, _718, _719), _727);
+                        float3 _832;
+                        do
+                        {
+                            if (_727 <= _718)
+                            {
+                                _832 = float3(0.0);
+                                break;
+                            }
+                            float _738 = _718 + (0.5 * precise::min(_727 - _718, MediumParams.MediumHaze.y));
+                            float _746 = -dot(SunParams.SunToLight.xyz, MediumParams.MediumView.xyz);
+                            bool _751;
+                            if (_738 >= _187)
+                            {
+                                _751 = _738 <= _188;
+                            }
+                            else
+                            {
+                                _751 = false;
+                            }
+                            float _752 = _751 ? _267 : 0.0;
+                            float _756 = MediumParams.MediumHaze.x * exp((-_738) / MediumParams.MediumHaze.y);
+                            uint _759 = _189 >> 2u;
+                            uint _760 = _189 & 3u;
+                            float _763 = MediumParams.MediumPhase[_759][_760] * MediumParams.MediumPhase[_759][_760];
+                            float _767 = (1.0 + _763) - ((2.0 * MediumParams.MediumPhase[_759][_760]) * _746);
+                            float _779 = MediumParams.MediumHazeColor.w * MediumParams.MediumHazeColor.w;
+                            float _783 = (1.0 + _779) - ((2.0 * MediumParams.MediumHazeColor.w) * _746);
+                            float _790 = _752 + _756;
+                            if (_790 <= 0.0)
+                            {
+                                _832 = float3(0.0);
+                                break;
+                            }
+                            float _826;
+                            if (_727 >= 3.3999999521443642490773241379936e+38)
+                            {
+                                _826 = 1.0;
+                            }
+                            else
+                            {
+                                _826 = exp(-(MediumParams.MediumView.w * ((_267 * precise::max(_188 - precise::max(_187, _727), 0.0)) + (_276 * exp((-_727) / MediumParams.MediumHaze.y)))));
+                            }
+                            _832 = (float4(((MediumParams.MediumTable[_189].xyz * _752) * ((1.0 - _763) / (_767 * sqrt(_767)))) + ((MediumParams.MediumHazeColor.xyz * _756) * ((1.0 - _779) / (_783 * sqrt(_783)))), _790).xyz / float3(_790)) * (_826 - exp(-(MediumParams.MediumView.w * ((_267 * precise::max(_188 - precise::max(_187, _718), 0.0)) + (_276 * exp((-_718) / MediumParams.MediumHaze.y))))));
+                            break;
+                        } while(false);
+                        float3 _935;
+                        do
+                        {
+                            if (_729 <= _727)
+                            {
+                                _935 = float3(0.0);
+                                break;
+                            }
+                            float _841 = _727 + (0.5 * precise::min(_729 - _727, MediumParams.MediumHaze.y));
+                            float _849 = -dot(SunParams.SunToLight.xyz, MediumParams.MediumView.xyz);
+                            bool _854;
+                            if (_841 >= _187)
+                            {
+                                _854 = _841 <= _188;
+                            }
+                            else
+                            {
+                                _854 = false;
+                            }
+                            float _855 = _854 ? _267 : 0.0;
+                            float _859 = MediumParams.MediumHaze.x * exp((-_841) / MediumParams.MediumHaze.y);
+                            uint _862 = _189 >> 2u;
+                            uint _863 = _189 & 3u;
+                            float _866 = MediumParams.MediumPhase[_862][_863] * MediumParams.MediumPhase[_862][_863];
+                            float _870 = (1.0 + _866) - ((2.0 * MediumParams.MediumPhase[_862][_863]) * _849);
+                            float _882 = MediumParams.MediumHazeColor.w * MediumParams.MediumHazeColor.w;
+                            float _886 = (1.0 + _882) - ((2.0 * MediumParams.MediumHazeColor.w) * _849);
+                            float _893 = _855 + _859;
+                            if (_893 <= 0.0)
+                            {
+                                _935 = float3(0.0);
+                                break;
+                            }
+                            float _929;
+                            if (_729 >= 3.3999999521443642490773241379936e+38)
+                            {
+                                _929 = 1.0;
+                            }
+                            else
+                            {
+                                _929 = exp(-(MediumParams.MediumView.w * ((_267 * precise::max(_188 - precise::max(_187, _729), 0.0)) + (_276 * exp((-_729) / MediumParams.MediumHaze.y)))));
+                            }
+                            _935 = (float4(((MediumParams.MediumTable[_189].xyz * _855) * ((1.0 - _866) / (_870 * sqrt(_870)))) + ((MediumParams.MediumHazeColor.xyz * _859) * ((1.0 - _882) / (_886 * sqrt(_886)))), _893).xyz / float3(_893)) * (_929 - exp(-(MediumParams.MediumView.w * ((_267 * precise::max(_188 - precise::max(_187, _727), 0.0)) + (_276 * exp((-_727) / MediumParams.MediumHaze.y))))));
+                            break;
+                        } while(false);
+                        float3 _1039;
+                        do
+                        {
+                            if (_719 <= _729)
+                            {
+                                _1039 = float3(0.0);
+                                break;
+                            }
+                            float _945 = _729 + (0.5 * precise::min(_719 - _729, MediumParams.MediumHaze.y));
+                            float _953 = -dot(SunParams.SunToLight.xyz, MediumParams.MediumView.xyz);
+                            bool _958;
+                            if (_945 >= _187)
+                            {
+                                _958 = _945 <= _188;
+                            }
+                            else
+                            {
+                                _958 = false;
+                            }
+                            float _959 = _958 ? _267 : 0.0;
+                            float _963 = MediumParams.MediumHaze.x * exp((-_945) / MediumParams.MediumHaze.y);
+                            uint _966 = _189 >> 2u;
+                            uint _967 = _189 & 3u;
+                            float _970 = MediumParams.MediumPhase[_966][_967] * MediumParams.MediumPhase[_966][_967];
+                            float _974 = (1.0 + _970) - ((2.0 * MediumParams.MediumPhase[_966][_967]) * _953);
+                            float _986 = MediumParams.MediumHazeColor.w * MediumParams.MediumHazeColor.w;
+                            float _990 = (1.0 + _986) - ((2.0 * MediumParams.MediumHazeColor.w) * _953);
+                            float _997 = _959 + _963;
+                            if (_997 <= 0.0)
+                            {
+                                _1039 = float3(0.0);
+                                break;
+                            }
+                            float _1033;
+                            if (_719 >= 3.3999999521443642490773241379936e+38)
+                            {
+                                _1033 = 1.0;
+                            }
+                            else
+                            {
+                                _1033 = exp(-(MediumParams.MediumView.w * ((_267 * precise::max(_188 - precise::max(_187, _719), 0.0)) + (_276 * exp((-_719) / MediumParams.MediumHaze.y)))));
+                            }
+                            _1039 = (float4(((MediumParams.MediumTable[_189].xyz * _959) * ((1.0 - _970) / (_974 * sqrt(_974)))) + ((MediumParams.MediumHazeColor.xyz * _963) * ((1.0 - _986) / (_990 * sqrt(_990)))), _997).xyz / float3(_997)) * (_1033 - exp(-(MediumParams.MediumView.w * ((_267 * precise::max(_188 - precise::max(_187, _729), 0.0)) + (_276 * exp((-_729) / MediumParams.MediumHaze.y))))));
+                            break;
+                        } while(false);
+                        _1041 = (_832 + _935) + _1039;
+                        break;
+                    } while(false);
+                    float3 _1646;
+                    if (_217)
+                    {
+                        float _1046 = precise::max(_188 - precise::max(_187, _718), 0.0);
+                        float _1055 = exp(-(MediumParams.MediumView.w * ((_267 * _1046) + (_276 * exp((-_718) / MediumParams.MediumHaze.y)))));
+                        float _1067 = exp(-(MediumParams.MediumView.w * ((_267 * precise::max(_188 - precise::max(_187, _719), 0.0)) + (_276 * exp((-_719) / MediumParams.MediumHaze.y)))));
+                        float _1068 = _1067 - _1055;
+                        float3 _1645;
+                        if (_1068 > _366)
+                        {
+                            float _1236;
+                            if (_1068 > 1.0000000116860974230803549289703e-07)
+                            {
+                                float _1081 = log(precise::max(0.5 * (_1055 + _1067), 1.0000000031710768509710513471353e-30));
+                                float _1082 = -_1081;
+                                float _1086 = (_186 * MediumParams.MediumTable[_189].w) * MediumParams.MediumView.w;
+                                float _1087 = _276 * MediumParams.MediumView.w;
+                                bool _1092;
+                                if (_1086 > 0.0)
+                                {
+                                    _1092 = _188 > _187;
+                                }
+                                else
+                                {
+                                    _1092 = false;
+                                }
+                                float _1097;
+                                if (_1092)
+                                {
+                                    _1097 = fast::clamp(_187, _718, _719);
+                                }
+                                else
+                                {
+                                    _1097 = _719;
+                                }
+                                float _1103;
+                                if (_1092)
+                                {
+                                    _1103 = precise::max(fast::clamp(_188, _718, _719), _1097);
+                                }
+                                else
+                                {
+                                    _1103 = _719;
+                                }
+                                float _1235;
+                                if (_1082 >= (((_267 * precise::max(_188 - precise::max(_187, _1097), 0.0)) * MediumParams.MediumView.w) + (_1087 * exp((-_1097) / MediumParams.MediumHaze.y))))
+                                {
+                                    float _1219;
+                                    if (_1092)
+                                    {
+                                        _1219 = _1086 * _1046;
+                                    }
+                                    else
+                                    {
+                                        _1219 = 0.0;
+                                    }
+                                    float _1220 = _1082 - _1219;
+                                    bool _1225;
+                                    if (_1087 > 0.0)
+                                    {
+                                        _1225 = _1220 > 0.0;
+                                    }
+                                    else
+                                    {
+                                        _1225 = false;
+                                    }
+                                    float _1233;
+                                    if (_1225)
+                                    {
+                                        _1233 = (-MediumParams.MediumHaze.y) * log(_1220 / _1087);
+                                    }
+                                    else
+                                    {
+                                        _1233 = _718;
+                                    }
+                                    _1235 = fast::clamp(_1233, _718, _1097);
+                                }
+                                else
+                                {
+                                    float _1214;
+                                    if (_1082 >= (((_267 * precise::max(_188 - precise::max(_187, _1103), 0.0)) * MediumParams.MediumView.w) + (_1087 * exp((-_1103) / MediumParams.MediumHaze.y))))
+                                    {
+                                        bool _1152;
+                                        if (_1087 > 0.0)
+                                        {
+                                            _1152 = _1082 > 0.0;
+                                        }
+                                        else
+                                        {
+                                            _1152 = false;
+                                        }
+                                        float _1160;
+                                        if (_1152)
+                                        {
+                                            _1160 = (-MediumParams.MediumHaze.y) * log(_1082 / _1087);
+                                        }
+                                        else
+                                        {
+                                            _1160 = _1097;
+                                        }
+                                        float _1164 = precise::max(_1097, precise::max(_188 - (_1082 / _1086), (_1160 <= _1103) ? _1160 : _1097));
+                                        float _1168 = _1087 * exp((-_1164) / MediumParams.MediumHaze.y);
+                                        float _1176 = _1164 + ((((_1086 * (_188 - _1164)) + _1168) + _1081) / (_1086 + (_1168 / MediumParams.MediumHaze.y)));
+                                        float _1180 = _1087 * exp((-_1176) / MediumParams.MediumHaze.y);
+                                        float _1188 = _1176 + ((((_1086 * (_188 - _1176)) + _1180) + _1081) / (_1086 + (_1180 / MediumParams.MediumHaze.y)));
+                                        float _1192 = _1087 * exp((-_1188) / MediumParams.MediumHaze.y);
+                                        float _1200 = _1188 + ((((_1086 * (_188 - _1188)) + _1192) + _1081) / (_1086 + (_1192 / MediumParams.MediumHaze.y)));
+                                        float _1204 = _1087 * exp((-_1200) / MediumParams.MediumHaze.y);
+                                        _1214 = fast::clamp(_1200 + ((((_1086 * (_188 - _1200)) + _1204) + _1081) / (_1086 + (_1204 / MediumParams.MediumHaze.y))), _1097, _1103);
+                                    }
+                                    else
+                                    {
+                                        bool _1136;
+                                        if (_1087 > 0.0)
+                                        {
+                                            _1136 = _1082 > 0.0;
+                                        }
+                                        else
+                                        {
+                                            _1136 = false;
+                                        }
+                                        float _1144;
+                                        if (_1136)
+                                        {
+                                            _1144 = (-MediumParams.MediumHaze.y) * log(_1082 / _1087);
+                                        }
+                                        else
+                                        {
+                                            _1144 = _719;
+                                        }
+                                        _1214 = fast::clamp(_1144, _1103, _719);
+                                    }
+                                    _1235 = _1214;
+                                }
+                                _1236 = _1235;
+                            }
+                            else
+                            {
+                                _1236 = 0.5 * (_718 + _719);
+                            }
+                            float2 _1243 = (_123 - MediumParams.MediumOriginZAxis.xy) - (MediumParams.MediumOriginZAxis.zw * _1236);
+                            float3 _1250 = float3(dot(MediumParams.MediumInvAxes.xy, _1243), dot(MediumParams.MediumInvAxes.zw, _1243), _1236);
+                            float3 _1643;
+                            do
+                            {
+                                if (MediumMapParams.MediumMapSize.w == 0.0)
+                                {
+                                    _1643 = float3(1.0);
+                                    break;
+                                }
+                                float2 _1264 = float2(0.5) / MediumMapParams.MediumMapSize.xy;
+                                float4 _1266 = MediumMap.sample(MediumMapSampler, _1264, level(0.0));
+                                float _1267 = _1266.w;
+                                float _1277;
+                                if (_1267 > 0.0)
+                                {
+                                    _1277 = precise::min((_1267 * 1.00100004673004150390625) + 0.001000000047497451305389404296875, MediumMapParams.MediumMapSize.z);
+                                }
+                                else
+                                {
+                                    _1277 = 0.0;
+                                }
+                                float _1278 = _1277 - _1236;
+                                if (_1278 <= 0.0)
+                                {
+                                    _1643 = float3(1.0);
+                                    break;
+                                }
+                                float3 _1642;
+                                do
+                                {
+                                    float3 _1289 = (_1250 + (SunParams.SunToLight.xyz * (_1278 / precise::max(SunParams.SunToLight.z, 0.0500000007450580596923828125)))) - _1250;
+                                    float _1290 = length(_1289);
+                                    bool _1295;
+                                    if (MediumMapParams.MediumMapSize.w != 0.0)
+                                    {
+                                        _1295 = _362 == 0u;
+                                    }
+                                    else
+                                    {
+                                        _1295 = true;
+                                    }
+                                    bool _1300;
+                                    if (!_1295)
+                                    {
+                                        _1300 = _1290 < 9.9999997473787516355514526367188e-06;
+                                    }
+                                    else
+                                    {
+                                        _1300 = true;
+                                    }
+                                    if (_1300)
+                                    {
+                                        _1642 = float3(1.0);
+                                        break;
+                                    }
+                                    float4 _1306 = MediumMap.sample(MediumMapSampler, _1264, level(0.0));
+                                    float _1307 = _1306.w;
+                                    float _1317;
+                                    if (_1307 > 0.0)
+                                    {
+                                        _1317 = precise::min((_1307 * 1.00100004673004150390625) + 0.001000000047497451305389404296875, MediumMapParams.MediumMapSize.z);
+                                    }
+                                    else
+                                    {
+                                        _1317 = 0.0;
+                                    }
+                                    float _1318 = _1289.z;
+                                    float _1337;
+                                    float _1338;
+                                    if (_1318 > 9.9999999747524270787835121154785e-07)
+                                    {
+                                        _1337 = 0.0;
+                                        _1338 = precise::min(1.0, (_1317 - _1236) / _1318);
+                                    }
+                                    else
+                                    {
+                                        float _1333;
+                                        if (_1318 < (-9.9999999747524270787835121154785e-07))
+                                        {
+                                            _1333 = precise::max(0.0, (_1317 - _1236) / _1318);
+                                        }
+                                        else
+                                        {
+                                            if (_1236 > _1317)
+                                            {
+                                                _1642 = float3(1.0);
+                                                break;
+                                            }
+                                            _1333 = 0.0;
+                                        }
+                                        _1337 = _1333;
+                                        _1338 = 1.0;
+                                    }
+                                    if (_1338 <= _1337)
+                                    {
+                                        _1642 = float3(1.0);
+                                        break;
+                                    }
+                                    float2 _1342 = _1250.xy;
+                                    float2 _1343 = _1289.xy;
+                                    float3 _1353 = float3(_1342 + (_1343 * _1337), 1.0);
+                                    float2 _1359 = float2(dot(MediumMapParams.MediumMapX.xyz, _1353), dot(MediumMapParams.MediumMapY.xyz, _1353));
+                                    float3 _1362 = float3(_1342 + (_1343 * _1338), 1.0);
+                                    float2 _1365 = float2(dot(MediumMapParams.MediumMapX.xyz, _1362), dot(MediumMapParams.MediumMapY.xyz, _1362));
+                                    bool _1409;
+                                    do
+                                    {
+                                        if (MediumMapParams.MediumMapSize.w < 1.5)
+                                        {
+                                            _1409 = true;
+                                            break;
+                                        }
+                                        float4 _1395 = float4(MediumMap.sample(MediumMapSampler, (float2(1.5, 0.5) / MediumMapParams.MediumMapSize.xy), level(0.0)).w, MediumMap.sample(MediumMapSampler, (float2(2.5, 0.5) / MediumMapParams.MediumMapSize.xy), level(0.0)).w, MediumMap.sample(MediumMapSampler, (float2(3.5, 0.5) / MediumMapParams.MediumMapSize.xy), level(0.0)).w, MediumMap.sample(MediumMapSampler, (float2(4.5, 0.5) / MediumMapParams.MediumMapSize.xy), level(0.0)).w);
+                                        bool _1408;
+                                        if (all((precise::max(_1359, _1365) + float2(2.5)) >= _1395.xy))
+                                        {
+                                            _1408 = all((precise::min(_1359, _1365) - float2(3.5)) <= _1395.zw);
+                                        }
+                                        else
+                                        {
+                                            _1408 = false;
+                                        }
+                                        _1409 = _1408;
+                                        break;
+                                    } while(false);
+                                    if (!_1409)
+                                    {
+                                        _1642 = float3(1.0);
+                                        break;
+                                    }
+                                    float _1415 = (_1338 - _1337) / float(_362);
+                                    float _1417;
+                                    _1417 = 0.0;
+                                    float _1418;
+                                    for (uint _1420 = 0u; _1420 < _362; _1417 = _1418, _1420++)
+                                    {
+                                        float _1427 = _1337 + (float(_1420) * _1415);
+                                        float _1433 = _1236 + (_1318 * _1427);
+                                        float _1436 = _1236 + (_1318 * (_1427 + _1415));
+                                        float3 _1439 = float3(_1342 + (_1343 * (_1427 + (0.5 * _1415))), 1.0);
+                                        float2 _1443 = float2(dot(MediumMapParams.MediumMapX.xyz, _1439), dot(MediumMapParams.MediumMapY.xyz, _1439)) - float2(0.5);
+                                        int2 _1445 = int2(floor(_1443));
+                                        float2 _1446 = float2(_1445);
+                                        float2 _1447 = _1443 - _1446;
+                                        float _1448 = precise::min(_1433, _1436);
+                                        float _1449 = precise::max(_1433, _1436);
+                                        float _1450 = _1449 - _1448;
+                                        int2 _1451 = int2(MediumMapParams.MediumMapSize.xy);
+                                        bool _1458;
+                                        if (all(_1445 >= int2(0)))
+                                        {
+                                            _1458 = all(_1445 < _1451);
+                                        }
+                                        else
+                                        {
+                                            _1458 = false;
+                                        }
+                                        float _1496;
+                                        if (_1458)
+                                        {
+                                            float4 _1467 = MediumMap.sample(MediumMapSampler, ((_1446 + float2(0.5)) * (float2(1.0) / MediumMapParams.MediumMapSize.xy)), level(0.0));
+                                            float _1487;
+                                            if (_1450 > 9.9999997473787516355514526367188e-06)
+                                            {
+                                                _1487 = fast::clamp((precise::min(_1449, _1467.z) - precise::max(_1448, _1467.y)) / _1450, 0.0, 1.0);
+                                            }
+                                            else
+                                            {
+                                                bool _1478;
+                                                if (_1448 >= _1467.y)
+                                                {
+                                                    _1478 = _1448 <= _1467.z;
+                                                }
+                                                else
+                                                {
+                                                    _1478 = false;
+                                                }
+                                                _1487 = float(_1478);
+                                            }
+                                            _1496 = (((1.0 - _1447.x) * (1.0 - _1447.y)) * _1467.x) * _1487;
+                                        }
+                                        else
+                                        {
+                                            _1496 = 0.0;
+                                        }
+                                        int2 _1497 = _1445 + int2(1, 0);
+                                        bool _1504;
+                                        if (all(_1497 >= int2(0)))
+                                        {
+                                            _1504 = all(_1497 < _1451);
+                                        }
+                                        else
+                                        {
+                                            _1504 = false;
+                                        }
+                                        float _1543;
+                                        if (_1504)
+                                        {
+                                            float4 _1514 = MediumMap.sample(MediumMapSampler, ((float2(_1497) + float2(0.5)) * (float2(1.0) / MediumMapParams.MediumMapSize.xy)), level(0.0));
+                                            float _1534;
+                                            if (_1450 > 9.9999997473787516355514526367188e-06)
+                                            {
+                                                _1534 = fast::clamp((precise::min(_1449, _1514.z) - precise::max(_1448, _1514.y)) / _1450, 0.0, 1.0);
+                                            }
+                                            else
+                                            {
+                                                bool _1525;
+                                                if (_1448 >= _1514.y)
+                                                {
+                                                    _1525 = _1448 <= _1514.z;
+                                                }
+                                                else
+                                                {
+                                                    _1525 = false;
+                                                }
+                                                _1534 = float(_1525);
+                                            }
+                                            _1543 = _1496 + (((_1447.x * (1.0 - _1447.y)) * _1514.x) * _1534);
+                                        }
+                                        else
+                                        {
+                                            _1543 = _1496;
+                                        }
+                                        int2 _1544 = _1445 + int2(0, 1);
+                                        bool _1551;
+                                        if (all(_1544 >= int2(0)))
+                                        {
+                                            _1551 = all(_1544 < _1451);
+                                        }
+                                        else
+                                        {
+                                            _1551 = false;
+                                        }
+                                        float _1590;
+                                        if (_1551)
+                                        {
+                                            float4 _1561 = MediumMap.sample(MediumMapSampler, ((float2(_1544) + float2(0.5)) * (float2(1.0) / MediumMapParams.MediumMapSize.xy)), level(0.0));
+                                            float _1581;
+                                            if (_1450 > 9.9999997473787516355514526367188e-06)
+                                            {
+                                                _1581 = fast::clamp((precise::min(_1449, _1561.z) - precise::max(_1448, _1561.y)) / _1450, 0.0, 1.0);
+                                            }
+                                            else
+                                            {
+                                                bool _1572;
+                                                if (_1448 >= _1561.y)
+                                                {
+                                                    _1572 = _1448 <= _1561.z;
+                                                }
+                                                else
+                                                {
+                                                    _1572 = false;
+                                                }
+                                                _1581 = float(_1572);
+                                            }
+                                            _1590 = _1543 + ((((1.0 - _1447.x) * _1447.y) * _1561.x) * _1581);
+                                        }
+                                        else
+                                        {
+                                            _1590 = _1543;
+                                        }
+                                        int2 _1591 = _1445 + int2(1);
+                                        bool _1598;
+                                        if (all(_1591 >= int2(0)))
+                                        {
+                                            _1598 = all(_1591 < _1451);
+                                        }
+                                        else
+                                        {
+                                            _1598 = false;
+                                        }
+                                        float _1636;
+                                        if (_1598)
+                                        {
+                                            float4 _1608 = MediumMap.sample(MediumMapSampler, ((float2(_1591) + float2(0.5)) * (float2(1.0) / MediumMapParams.MediumMapSize.xy)), level(0.0));
+                                            float _1628;
+                                            if (_1450 > 9.9999997473787516355514526367188e-06)
+                                            {
+                                                _1628 = fast::clamp((precise::min(_1449, _1608.z) - precise::max(_1448, _1608.y)) / _1450, 0.0, 1.0);
+                                            }
+                                            else
+                                            {
+                                                bool _1619;
+                                                if (_1448 >= _1608.y)
+                                                {
+                                                    _1619 = _1448 <= _1608.z;
+                                                }
+                                                else
+                                                {
+                                                    _1619 = false;
+                                                }
+                                                _1628 = float(_1619);
+                                            }
+                                            _1636 = _1590 + (((_1447.x * _1447.y) * _1608.x) * _1628);
+                                        }
+                                        else
+                                        {
+                                            _1636 = _1590;
+                                        }
+                                        _1418 = _1417 + _1636;
+                                    }
+                                    _1642 = float3(exp(((-_1417) * _1415) * _1290));
+                                    break;
+                                } while(false);
+                                _1643 = _1642;
+                                break;
+                            } while(false);
+                            _1645 = _1041 * _1643;
+                        }
+                        else
+                        {
+                            _1645 = _1041;
+                        }
+                        _1646 = _1645;
+                    }
+                    else
+                    {
+                        _1646 = _1041;
+                    }
+                    _443 = _442 + _1646;
+                }
+                _336 = _335 + _442;
+            }
+            _1648 = _335;
+        }
+        else
+        {
+            _1648 = float3(0.0);
+        }
+        float _1649 = precise::max(_210, _248);
+        float3 _1994;
+        do
+        {
+            if (3.3999999521443642490773241379936e+38 <= _1649)
+            {
+                _1994 = float3(0.0);
+                break;
+            }
+            float _1655 = fast::clamp(_187, _1649, 3.3999999521443642490773241379936e+38);
+            float _1657 = precise::max(fast::clamp(_188, _1649, 3.3999999521443642490773241379936e+38), _1655);
+            float3 _1774;
+            do
+            {
+                if (_1655 <= _1649)
+                {
+                    _1774 = float3(0.0);
+                    break;
+                }
+                float _1668 = _1649 + (0.5 * precise::min(_1655 - _1649, MediumParams.MediumHaze.y));
+                float _1676 = -dot(SunParams.SunToLight.xyz, MediumParams.MediumView.xyz);
+                bool _1683;
+                if (_1668 >= _187)
+                {
+                    _1683 = _1668 <= _188;
+                }
+                else
+                {
+                    _1683 = false;
+                }
+                float _1689;
+                if (_1683)
+                {
+                    _1689 = _186 * MediumParams.MediumTable[_189].w;
+                }
+                else
+                {
+                    _1689 = 0.0;
+                }
+                float _1693 = MediumParams.MediumHaze.x * exp((-_1668) / MediumParams.MediumHaze.y);
+                uint _1696 = _189 >> 2u;
+                uint _1697 = _189 & 3u;
+                float _1700 = MediumParams.MediumPhase[_1696][_1697] * MediumParams.MediumPhase[_1696][_1697];
+                float _1704 = (1.0 + _1700) - ((2.0 * MediumParams.MediumPhase[_1696][_1697]) * _1676);
+                float _1716 = MediumParams.MediumHazeColor.w * MediumParams.MediumHazeColor.w;
+                float _1720 = (1.0 + _1716) - ((2.0 * MediumParams.MediumHazeColor.w) * _1676);
+                float _1727 = _1689 + _1693;
+                if (_1727 <= 0.0)
+                {
+                    _1774 = float3(0.0);
+                    break;
+                }
+                float _1736 = _186 * MediumParams.MediumTable[_189].w;
+                float _1743 = MediumParams.MediumHaze.x * MediumParams.MediumHaze.y;
+                float _1768;
+                if (_1655 >= 3.3999999521443642490773241379936e+38)
+                {
+                    _1768 = 1.0;
+                }
+                else
+                {
+                    _1768 = exp(-(MediumParams.MediumView.w * ((_1736 * precise::max(_188 - precise::max(_187, _1655), 0.0)) + (_1743 * exp((-_1655) / MediumParams.MediumHaze.y)))));
+                }
+                _1774 = (float4(((MediumParams.MediumTable[_189].xyz * _1689) * ((1.0 - _1700) / (_1704 * sqrt(_1704)))) + ((MediumParams.MediumHazeColor.xyz * _1693) * ((1.0 - _1716) / (_1720 * sqrt(_1720)))), _1727).xyz / float3(_1727)) * (_1768 - exp(-(MediumParams.MediumView.w * ((_1736 * precise::max(_188 - precise::max(_187, _1649), 0.0)) + (_1743 * exp((-_1649) / MediumParams.MediumHaze.y))))));
+                break;
+            } while(false);
+            float3 _1891;
+            do
+            {
+                if (_1657 <= _1655)
+                {
+                    _1891 = float3(0.0);
+                    break;
+                }
+                float _1785 = _1655 + (0.5 * precise::min(_1657 - _1655, MediumParams.MediumHaze.y));
+                float _1793 = -dot(SunParams.SunToLight.xyz, MediumParams.MediumView.xyz);
+                bool _1800;
+                if (_1785 >= _187)
+                {
+                    _1800 = _1785 <= _188;
+                }
+                else
+                {
+                    _1800 = false;
+                }
+                float _1806;
+                if (_1800)
+                {
+                    _1806 = _186 * MediumParams.MediumTable[_189].w;
+                }
+                else
+                {
+                    _1806 = 0.0;
+                }
+                float _1810 = MediumParams.MediumHaze.x * exp((-_1785) / MediumParams.MediumHaze.y);
+                uint _1813 = _189 >> 2u;
+                uint _1814 = _189 & 3u;
+                float _1817 = MediumParams.MediumPhase[_1813][_1814] * MediumParams.MediumPhase[_1813][_1814];
+                float _1821 = (1.0 + _1817) - ((2.0 * MediumParams.MediumPhase[_1813][_1814]) * _1793);
+                float _1833 = MediumParams.MediumHazeColor.w * MediumParams.MediumHazeColor.w;
+                float _1837 = (1.0 + _1833) - ((2.0 * MediumParams.MediumHazeColor.w) * _1793);
+                float _1844 = _1806 + _1810;
+                if (_1844 <= 0.0)
+                {
+                    _1891 = float3(0.0);
+                    break;
+                }
+                float _1853 = _186 * MediumParams.MediumTable[_189].w;
+                float _1860 = MediumParams.MediumHaze.x * MediumParams.MediumHaze.y;
+                float _1885;
+                if (_1657 >= 3.3999999521443642490773241379936e+38)
+                {
+                    _1885 = 1.0;
+                }
+                else
+                {
+                    _1885 = exp(-(MediumParams.MediumView.w * ((_1853 * precise::max(_188 - precise::max(_187, _1657), 0.0)) + (_1860 * exp((-_1657) / MediumParams.MediumHaze.y)))));
+                }
+                _1891 = (float4(((MediumParams.MediumTable[_189].xyz * _1806) * ((1.0 - _1817) / (_1821 * sqrt(_1821)))) + ((MediumParams.MediumHazeColor.xyz * _1810) * ((1.0 - _1833) / (_1837 * sqrt(_1837)))), _1844).xyz / float3(_1844)) * (_1885 - exp(-(MediumParams.MediumView.w * ((_1853 * precise::max(_188 - precise::max(_187, _1655), 0.0)) + (_1860 * exp((-_1655) / MediumParams.MediumHaze.y))))));
+                break;
+            } while(false);
+            float3 _1992;
+            do
+            {
+                if (3.3999999521443642490773241379936e+38 <= _1657)
+                {
+                    _1992 = float3(0.0);
+                    break;
+                }
+                float _1903 = _1657 + (0.5 * precise::min(3.3999999521443642490773241379936e+38 - _1657, MediumParams.MediumHaze.y));
+                float _1911 = -dot(SunParams.SunToLight.xyz, MediumParams.MediumView.xyz);
+                bool _1918;
+                if (_1903 >= _187)
+                {
+                    _1918 = _1903 <= _188;
+                }
+                else
+                {
+                    _1918 = false;
+                }
+                float _1924;
+                if (_1918)
+                {
+                    _1924 = _186 * MediumParams.MediumTable[_189].w;
+                }
+                else
+                {
+                    _1924 = 0.0;
+                }
+                float _1928 = MediumParams.MediumHaze.x * exp((-_1903) / MediumParams.MediumHaze.y);
+                uint _1931 = _189 >> 2u;
+                uint _1932 = _189 & 3u;
+                float _1935 = MediumParams.MediumPhase[_1931][_1932] * MediumParams.MediumPhase[_1931][_1932];
+                float _1939 = (1.0 + _1935) - ((2.0 * MediumParams.MediumPhase[_1931][_1932]) * _1911);
+                float _1951 = MediumParams.MediumHazeColor.w * MediumParams.MediumHazeColor.w;
+                float _1955 = (1.0 + _1951) - ((2.0 * MediumParams.MediumHazeColor.w) * _1911);
+                float _1962 = _1924 + _1928;
+                if (_1962 <= 0.0)
+                {
+                    _1992 = float3(0.0);
+                    break;
+                }
+                _1992 = (float4(((MediumParams.MediumTable[_189].xyz * _1924) * ((1.0 - _1935) / (_1939 * sqrt(_1939)))) + ((MediumParams.MediumHazeColor.xyz * _1928) * ((1.0 - _1951) / (_1955 * sqrt(_1955)))), _1962).xyz / float3(_1962)) * (1.0 - exp(-(MediumParams.MediumView.w * (((_186 * MediumParams.MediumTable[_189].w) * precise::max(_188 - precise::max(_187, _1657), 0.0)) + ((MediumParams.MediumHaze.x * MediumParams.MediumHaze.y) * exp((-_1657) / MediumParams.MediumHaze.y))))));
+                break;
+            } while(false);
+            _1994 = (_1774 + _1891) + _1992;
+            break;
+        } while(false);
+        _2004 = float4(SunParams.SunColor.xyz * (_1648 + _1994), 0.0);
+        break;
+    } while(false);
+    out.out_var_SV_Target0 = _2004;
+    return out;
+}
+
