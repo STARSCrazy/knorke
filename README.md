@@ -2,10 +2,11 @@
 
 Rust-first, agent-native, kompositionelle Game Engine. Fachmodule (Rendering, Beleuchtung, Navigation, KI, Wahrnehmung) sind einzeln nutzbar und werden über explizite Integrationsprofile verbunden. Herkunft: [Sagax](https://github.com/STARSCrazy/sagax) (KI/Navigation) und [Chiaro](https://github.com/STARSCrazy/chiaro) (Beleuchtung).
 
-**Stand:** Phase 0 – Grundlagen für Datenaustausch und Analyse, Inventur. Noch keine Fachmodule.
+**Stand (2026-11-28):** Grundlagen, KI-Module, Software-Renderer, GPU-2D-Licht (Chiaro-Port abgeschlossen), Nachbearbeitung, Audio, Szene als Text und Agenten-Kommandozeile stehen. Als Nächstes: erstes Spiel, 3D ([Arbeitsliste](docs/einschaetzung-2026-11-28.md)).
 
 - Plan: [`docs/plan.md`](docs/plan.md)
 - Entscheidungen: [`docs/adr/`](docs/adr/README.md) (Index mit Status)
+- Stand mit ausführlichen Berichten: [`docs/stand.md`](docs/stand.md)
 - Bestandsaufnahme: [`docs/inventory/`](docs/inventory/)
 
 ## Crates
@@ -21,11 +22,15 @@ Rust-first, agent-native, kompositionelle Game Engine. Fachmodule (Rendering, Be
 | `knorke-ai` | Entscheidungen: Utility-`Decider`, `StateMachine`, Gedächtnis (`Knowledge`, `Alertness`, `GoalGuess`), Missionen, Gruppen (`Crew`, `Squad`) |
 | `knorke-render` | CPU-Software-Renderer im Pixel-Look (aus pixelraum): Raster, Kamera, Gitter, Texturen, Sprites, Picking, Palette, Blending; liefert G-Buffer-Samples ans Licht, sRGB-Ausgabe einmal am Ende |
 | `knorke-lighting` | CPU-Licht und Schatten für `knorke-render` (Punktlichter, Sonne, Schattenkarten), linear gerechnet; eingefroren, neues Licht entsteht auf der GPU (ADR 0014) |
-| `knorke-light2d` | 2D-Licht aus Chiaro (ADR 0014), bisher der GPU-freie Teil: Projektion, Triangulierung, Pixel-/Material-Codecs, Licht-Store mit Handles und Snapshots, Lichtmathematik; GPU-Stufen folgen hinter Feature `gpu` |
+| `knorke-gpu` | Sichere Hülle um SDL3 GPU: Handles mit Leck-Zähler, Render-Ziele, Sampler, Upload-Puffer, Shader-Paket (`kpak`); der Host besitzt Gerät, Swapchain und Submit (ADR 0002, 0014). Ohne Feature `sdl` nur GPU-freie Logik |
+| `knorke-light2d` | 2D-Licht aus Chiaro auf der GPU (ADR 0014, 0019): Licht-Store mit Handles und Snapshots, Projektion, Codecs, Lichtmathematik; mit Feature `gpu` Licht aus Schatten-Zeilen (Punkt, Spot, Linie, Fläche, Sonne, Medium) |
+| `knorke-post` | Nachbearbeitung aus Chiaro: Farbübertragung, Tonemap, Grading, Bloom, CRT, Schockwellen; Bloom- und Ausgabe-Pässe auf `knorke-gpu` hinter Feature `gpu` (ADR 0014) |
 | `knorke-integration` | Verbindungscode zwischen den Modulen, Features je Profil: `ai` (Wahrnehmung → Gedächtnis → Navigation), `pixel` (Renderer + Licht) und `stealth` (Wachen und Eindringling, aus einer Szene gebaut); Prelude, Szenario- und Bildtests |
 | `knorke-runtime` | Laufzeit: fester Tick aus Host-Zeit (`FixedStep`), Frame-Ablauf um eine `Simulation` mit Commands am Tick-Anfang (`Runtime`), Systeme als Tabelle in fester Reihenfolge (ADR 0009) |
 | `knorke-scene` | Authoring: Szene als Text (`knorke.scene/1`), Komponenten als Rust-Typen mit JSON Schema, Änderungen nur als Change-Set (ganz oder gar nicht, mit Undo) (ADR 0018) |
 | `knorke-agent` | Agenten-Ebene: `discover`, `inspect`, `validate`, `mutate`, `execute`, `render` (PNG, Feature `gpu`) als Funktionen und als Kommandozeile `knorke`, Antworten in JSON (ADR 0018) |
+| `knorke-audio` | Mischpult ohne Gerät: Stimmen, Busse mit Ducking und Filtern, Raumklang mit Entfernung, Wänden und Laufzeit, sample-genauer Start; der Host stellt Gerät und Thread (ADR 0020) |
+| `knorke-audio-sdl` | Ausgabe von `knorke-audio` über SDL3: Standard-Ausgabegerät, Mischer im Audio-Rückruf, Commands über festen Eingang |
 | `knorke-replay` | Replays: Aufzeichnung, Verifikation mit abweichendem Tick und Modul, Sprung zu Tick, Flight Recorder, Minimierung fehlerauslösender Commands |
 | `knorke-exec` | Executoren für `Parallel` auf Host-Seite: `Rayon` (Work-Stealing, Standard), `ScopedThreads` (ohne Abhängigkeit, nur für grobe Arbeit) |
 | `knorke-contract-tests` | crate-übergreifende Vertragstests (kein Kopieren, 0 Allokationen, Layouts), nicht ausgeliefert |
@@ -33,7 +38,7 @@ Rust-first, agent-native, kompositionelle Game Engine. Fachmodule (Rendering, Be
 
 Wie Module Daten austauschen: [ADR 0006](docs/adr/0006-data-exchange.md). Debugging und Analyse: [ADR 0007](docs/adr/0007-observability.md). Events, Commands, Parallelität: [ADR 0008](docs/adr/0008-events-commands-parallelism.md). Frame-Ablauf: [ADR 0009](docs/adr/0009-frame-schedule.md). Snapshots, Replay, Fehlererkennung: [ADR 0010](docs/adr/0010-snapshot-replay-bug-detection.md). Plattformübergreifender Determinismus und abschaltbare Zusatzfeatures: [ADR 0011](docs/adr/0011-cross-platform-determinism-and-optional-features.md). Sagax-Neuschnitt: [ADR 0012](docs/adr/0012-sagax-split.md).
 
-Regeln für die Arbeit am Projekt: [`CLAUDE.md`](CLAUDE.md). Plan, Stand und Ideen-Backlog: Abschnitte 16 und 17 im Plan.
+Regeln für die Arbeit am Projekt: [`CLAUDE.md`](CLAUDE.md). Plan, Stand und Ideen-Backlog: Abschnitte 16 (Kurzstand) und 17 (Backlog) im Plan, Berichte in `docs/stand.md`.
 
 Weitere Crates entstehen erst mit Code und Verbraucher (ADR 0001 §8).
 

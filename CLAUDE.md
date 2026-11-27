@@ -4,13 +4,13 @@ Gilt für Menschen und Agenten (Claude Code, Codex, andere). `AGENTS.md` verweis
 
 ## Quellen der Wahrheit
 
-- **Plan:** `docs/plan.md`. Abschnitt 16 = umgesetzter Stand, Abschnitt 17 = Backlog (Ideen, Konzepte, vertagte Entscheidungen, Recherche).
+- **Plan:** `docs/plan.md`. Abschnitt 16 = umgesetzter Stand (eine Zeile je Baustein), Abschnitt 17 = Backlog (Ideen, Konzepte, vertagte Entscheidungen, Recherche).
 - **Entscheidungen:** `docs/adr/` ist bindend. Abweichen heißt: zuerst die ADR ändern.
 - **Bestand:** `docs/inventory/` (Sagax, Chiaro). `reference/` ist unversionierter Lesestoff – dort nichts ändern.
 
 ## Pflege
 
-- **Jede neue Idee, jedes Konzept, jede vertagte Entscheidung** kommt in Plan-Abschnitt 17 mit Status (offen / geplant / vorbereitet / erledigt / verworfen + Grund). Erledigtes zusätzlich in Abschnitt 16.
+- **Jede neue Idee, jedes Konzept, jede vertagte Entscheidung** kommt in Plan-Abschnitt 17 mit Status (offen / geplant / vorbereitet / erledigt / verworfen + Grund). Erledigtes zusätzlich in Abschnitt 16 (eine Zeile; lange Berichte mit Messwerten in `docs/stand.md`).
 - Recherche-Ergebnisse mit Quelle, Reifegrad und „belegt / nur Sekundärquelle“ in 17.11.
 - Neue Grundsatzentscheidung → neue ADR (`docs/adr/NNNN-titel.md`, Status, Datum, Kontext, Entscheidung, Konsequenzen).
 
