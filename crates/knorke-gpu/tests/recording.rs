@@ -189,10 +189,10 @@ fn render_pass_checks_pipeline_bindings_and_usage() {
             .join("tests/data")
             .join(format.pack_file_name("test"));
         let mut lib = ShaderLibrary::load(gpu, &path).unwrap();
-        // occlusion_mask.frag: one sampler, one uniform block of 32 bytes.
+        // bloom_down.frag: one sampler, one uniform block of 16 bytes.
         let programs = [ProgramDesc::new(
             "fullscreen.vert",
-            "occlusion_mask.frag",
+            "bloom_down.frag",
             Blend::Opaque,
         )];
         let mut cache = PipelineCache::new(&lib, &programs).unwrap();
@@ -254,7 +254,7 @@ fn render_pass_checks_pipeline_bindings_and_usage() {
             );
 
             let good = [SamplerBinding::new(input.texture_ref(), nearest)];
-            let params = [0u8; 32];
+            let params = [0u8; 16];
             let uniforms: [&[u8]; 1] = [&params];
             let b = Bindings {
                 vertex: StageBindings::default(),
@@ -267,7 +267,7 @@ fn render_pass_checks_pipeline_bindings_and_usage() {
             pass.bind_program(pipeline, &b).unwrap();
             pass.draw_fullscreen().unwrap();
             // Typed uniform push: any Pod value.
-            pass.push_fragment_uniform(0, &[0f32; 8]).unwrap();
+            pass.push_fragment_uniform(0, &[0f32; 4]).unwrap();
             pass.draw_instanced(3, 1).unwrap();
         }
         cmd.submit_and_wait().unwrap();

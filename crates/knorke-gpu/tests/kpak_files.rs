@@ -24,20 +24,20 @@ fn committed_test_packs_are_valid() {
         assert_eq!(
             names,
             [
-                "clear.frag",
-                "fullscreen.vert",
-                "occlusion_mask.frag",
-                "solid.frag"
+                "bloom_down.frag",
+                "bloom_up.frag",
+                "clear_height.frag",
+                "fullscreen.vert"
             ]
         );
         let vert = pack.get("fullscreen.vert").unwrap();
         assert_eq!(vert.stage, Stage::Vertex);
         assert_eq!(vert.reflection, Reflection::default());
         assert_eq!(vert.entry_point, format.default_entry_point());
-        let mask = pack.get("occlusion_mask.frag").unwrap();
-        assert_eq!(mask.stage, Stage::Fragment);
+        let down = pack.get("bloom_down.frag").unwrap();
+        assert_eq!(down.stage, Stage::Fragment);
         assert_eq!(
-            (mask.reflection.samplers, mask.reflection.uniform_buffers),
+            (down.reflection.samplers, down.reflection.uniform_buffers),
             (1, 1)
         );
         if format == ShaderFormat::Spirv {

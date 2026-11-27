@@ -39,13 +39,14 @@ fn shaders_are_created_lazily_and_released() {
         let gpu = Gpu::new(&device, &counter);
         let mut lib = library(gpu);
         assert_eq!(lib.created_count(), 0, "nothing before first use");
-        lib.require(&["fullscreen.vert", "clear.frag"]).unwrap();
+        lib.require(&["fullscreen.vert", "clear_height.frag"])
+            .unwrap();
         let a = lib.shader_by_name("fullscreen.vert").unwrap();
         let b = lib.shader_by_name("fullscreen.vert").unwrap();
         assert_eq!(a, b, "cached");
-        lib.shader_by_name("clear.frag").unwrap();
-        lib.shader_by_name("solid.frag").unwrap();
-        lib.shader_by_name("occlusion_mask.frag").unwrap();
+        lib.shader_by_name("clear_height.frag").unwrap();
+        lib.shader_by_name("bloom_up.frag").unwrap();
+        lib.shader_by_name("bloom_down.frag").unwrap();
         assert_eq!(lib.created_count(), 4);
         assert_eq!(counter.live(), 4);
         assert_eq!(
@@ -53,7 +54,7 @@ fn shaders_are_created_lazily_and_released() {
             SHADER_PACK_MISSING_PROGRAM
         );
         assert_eq!(
-            lib.require(&["clear.frag", "missing.frag"])
+            lib.require(&["clear_height.frag", "missing.frag"])
                 .unwrap_err()
                 .code,
             SHADER_PACK_MISSING_PROGRAM
@@ -97,14 +98,14 @@ fn pipeline_cache_keys_by_program_and_target_format() {
         let gpu = Gpu::new(&device, &counter);
         let mut lib = library(gpu);
         let programs = [
-            ProgramDesc::new("fullscreen.vert", "occlusion_mask.frag", Blend::Opaque),
-            ProgramDesc::new("fullscreen.vert", "solid.frag", Blend::Max),
+            ProgramDesc::new("fullscreen.vert", "bloom_down.frag", Blend::Opaque),
+            ProgramDesc::new("fullscreen.vert", "bloom_up.frag", Blend::Max),
             ProgramDesc {
                 second: Some(SecondTarget {
                     format: SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT,
                     blend: Blend::Max,
                 }),
-                ..ProgramDesc::new("fullscreen.vert", "clear.frag", Blend::Additive)
+                ..ProgramDesc::new("fullscreen.vert", "clear_height.frag", Blend::Additive)
             },
         ];
         let mut cache = PipelineCache::new(&lib, &programs).unwrap();
@@ -127,7 +128,7 @@ fn pipeline_cache_keys_by_program_and_target_format() {
         assert_eq!(counter.live(), 8);
 
         let swapped = [ProgramDesc::new(
-            "clear.frag",
+            "clear_height.frag",
             "fullscreen.vert",
             Blend::Opaque,
         )];
