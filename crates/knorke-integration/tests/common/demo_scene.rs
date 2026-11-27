@@ -50,7 +50,7 @@ use knorke_light2d::ambient_zone_store::AmbientZoneStore;
 use knorke_light2d::animation::AnimationType;
 use knorke_light2d::light::{Height, LightDesc, LightId, LightType, MaskMode};
 use knorke_light2d::mask::{MaskPreset, MaskShape};
-use knorke_light2d::medium_draw::MediumDraw;
+use knorke_light2d::medium_draw::{MediumDraw, smoke_puff};
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassRecord, SceneStores};
 use knorke_light2d::pattern_store::{PatternDesc, Sheet, SheetFormat, raw_id};
@@ -483,9 +483,24 @@ fn zone(f: &[&str]) -> AmbientZoneParams {
 }
 
 /// The eight puff shapes of `SmokePuffs.hpp` (`PuffSet::Create`: 128 x 128, white, alpha the
-/// shape), from the fixture that stacks them vertically.
+/// shape), from the fixture that stacks them vertically. [`smoke_puff`] makes the same shapes:
+/// one alpha byte of 524288 is one higher (puff 2, pixel 41, 51; probably `det::atan2` against
+/// MSVC's `atan2f`, not traced), so the scenes draw the fixture to stay bit-equal and the generator is checked here.
 fn puffs(gpu: Gpu<'_>) -> Vec<Texture<'_>> {
     let px = scene_common::fixture("medium", "puffs", (128, 8 * 128));
+    let mut made = vec![0u8; px.len()];
+    for (i, p) in made.chunks_mut(128 * 128 * 4).enumerate() {
+        smoke_puff(i as u32 * 977 + 13, 128, p);
+    }
+    let off: Vec<_> = (made.iter().zip(&px).enumerate())
+        .filter(|(_, (a, b))| a != b)
+        .map(|(i, (a, b))| (i, *a, *b))
+        .collect();
+    assert_eq!(
+        off,
+        [(157_351, 111, 110)],
+        "smoke_puff against Chiaro's puffs"
+    );
     (px.chunks(128 * 128 * 4))
         .map(|p| sampled_rgba8(gpu, 128, 128, p))
         .collect()

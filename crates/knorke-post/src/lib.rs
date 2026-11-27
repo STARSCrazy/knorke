@@ -21,7 +21,7 @@
 //!   `CHI_OutputSettings`), the settings store, the SDL error strings, the output flags or the C++
 //!   wrapper: the same checks run here on the Rust types (field names and values), the struct/flag/
 //!   error-string parts are dropped.
-//! - `MediumCloud` tests in `OutputGradeTests.cpp`: a package of their own (E112).
+//! - `MediumCloud` and its tests in `OutputGradeTests.cpp` (E112): `knorke_light2d::medium_draw`.
 //!
 //! Simulation-safe math goes through `knorke_math::det` (clippy forbids the `std` variants).
 //! Clamping uses [`clamp`], which mirrors C++ `std::clamp` and never panics, also for NaN bounds.
