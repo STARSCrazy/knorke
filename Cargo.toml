@@ -19,6 +19,7 @@ members = [
     "crates/knorke-light2d",
     "crates/knorke-integration",
     "crates/knorke-post",
+    "crates/knorke-audio",
     "tests/contracts",
     "xtask",
 ]
@@ -57,6 +58,7 @@ sdl3-sys = { version = "0.7.3", default-features = false, features = ["debug-imp
 knorke-light2d = { path = "crates/knorke-light2d", version = "0.0.1" }
 knorke-integration = { path = "crates/knorke-integration", version = "0.0.1" }
 knorke-post = { path = "crates/knorke-post", version = "0.0.1" }
+knorke-audio = { path = "crates/knorke-audio", version = "0.0.1" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
