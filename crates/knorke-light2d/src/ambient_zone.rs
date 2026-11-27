@@ -280,11 +280,6 @@ impl StoredZone {
         &self.params
     }
 
-    /// The world bounding rectangle of the outline: x0, y0, x1, y1.
-    pub fn hull(&self) -> [f32; 4] {
-        self.hull
-    }
-
     /// Cosine and sine of the rotation.
     pub(crate) fn cos_sin(&self) -> (f32, f32) {
         (self.cos_r, self.sin_r)

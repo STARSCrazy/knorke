@@ -48,7 +48,6 @@ pub struct AmbientZoneStore {
     /// Vertex texture rows in use.
     row_used: Vec<bool>,
     next_serial: u64,
-    version: u64,
     polygon_version: u64,
 }
 
@@ -59,7 +58,6 @@ impl Default for AmbientZoneStore {
             order: Vec::new(),
             row_used: Vec::new(),
             next_serial: 1,
-            version: 0,
             polygon_version: 0,
         }
     }
@@ -79,11 +77,6 @@ impl AmbientZoneStore {
     /// `true` if no zone is alive.
     pub fn is_empty(&self) -> bool {
         self.zones.is_empty()
-    }
-
-    /// Changes with every successful create, set and destroy.
-    pub fn version(&self) -> u64 {
-        self.version
     }
 
     /// Changes whenever polygon vertices are written (create or set of a polygon zone), for the
@@ -160,7 +153,6 @@ impl AmbientZoneStore {
             }
         }
         self.insert_ordered(id);
-        self.version += 1;
         if polygon {
             self.polygon_version += 1;
         }
@@ -190,7 +182,6 @@ impl AmbientZoneStore {
         // The priority may have changed; the creation number stays.
         self.order.retain(|&o| o != id);
         self.insert_ordered(id);
-        self.version += 1;
         if polygon {
             self.polygon_version += 1;
         }
@@ -207,7 +198,6 @@ impl AmbientZoneStore {
             self.free_row(row);
         }
         self.order.retain(|&o| o != id);
-        self.version += 1;
         Ok(())
     }
 

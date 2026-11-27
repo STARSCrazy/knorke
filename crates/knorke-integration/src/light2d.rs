@@ -208,11 +208,6 @@ impl<'d> Light2dRenderer<'d> {
         }
     }
 
-    /// The post pass.
-    pub fn post(&self) -> &PostRenderer<'d> {
-        &self.post
-    }
-
     /// Prepares the light and then the output of the frame.
     ///
     /// # Errors

@@ -200,8 +200,7 @@ pub struct LightList {
     pub unreachable_lights: u32,
     /// One-sided rect lights facing away from all they could reach (E51), not drawn.
     pub facing_away_lights: u32,
-    /// Visible point/spot/line/rect lights with `Height::Auto`.
-    pub auto_height_lights: u32,
+
     /// Ambient plus every enabled directional light that is not in `directional`.
     pub ambient: Vec3,
     /// The directional part of `ambient` alone (the flat directional sum), summed beside it, not
@@ -225,7 +224,7 @@ impl LightList {
         self.flat_lights = 0;
         self.unreachable_lights = 0;
         self.facing_away_lights = 0;
-        self.auto_height_lights = 0;
+
         self.directional_ambient = Vec3::ZERO;
     }
 }
@@ -638,7 +637,7 @@ pub fn collect_lights(
         if modes.normal_mode && !auto_height && z <= 0.0 {
             out.flat_lights += 1;
         }
-        out.auto_height_lights += u32::from(auto_height);
+
         animated.strength = strength; // with the area normalization (E51)
         let (mut g, profiled) = make_gpu_light(&animated, z, modes.profiles);
         let stored: &StoredLight = &animated.stored;

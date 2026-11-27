@@ -124,22 +124,17 @@ fn ambient_zone_store_handle_messages() {
 }
 
 #[test]
-fn ambient_zone_store_versions_change_only_with_changes() {
+fn ambient_zone_store_polygon_version_changes_only_with_polygons() {
     let mut store = AmbientZoneStore::new();
-    let v0 = store.version();
     let p0 = store.polygon_version();
     let boxed = store.create(box_zone(0)).expect("box");
-    assert!(store.version() > v0);
     assert_eq!(store.polygon_version(), p0);
-    let v1 = store.version();
     let _ = order(&store);
     let _ = store.find(boxed);
-    assert_eq!(store.version(), v1);
     let poly = store.create(polygon_zone()).expect("polygon");
     assert!(store.polygon_version() > p0);
     let p1 = store.polygon_version();
     store.set(boxed, box_zone(3)).expect("set box");
-    assert!(store.version() > v1);
     assert_eq!(store.polygon_version(), p1);
     store.set(poly, polygon_zone()).expect("set polygon");
     assert!(store.polygon_version() > p1);

@@ -591,7 +591,6 @@ fn lights_outside_the_scene_are_culled_and_disabled_ones_are_skipped() {
     let list = plain(&store);
     assert_eq!(list.rows.len(), 1);
     assert_eq!(list.unreachable_lights, 1);
-    assert_eq!(list.auto_height_lights, 1);
 }
 
 #[test]
