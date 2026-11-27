@@ -614,7 +614,18 @@ impl Demo<'_> {
         sprites.prepare(&mut shaders, &draws).unwrap();
         surface.prepare(&mut shaders, &scene.surface).unwrap();
         medium.prepare(&mut shaders, &media).unwrap();
-        drop(layers.clear_pass(&mut cmd, LayerSet::ALL).unwrap());
+        // A pass takes at most four layers: with material and medium layer there are five.
+        let others = (Layer::ALL.into_iter())
+            .filter(|&l| l != Layer::Medium)
+            .fold(LayerSet::NONE, LayerSet::with);
+        drop(layers.clear_pass(&mut cmd, others).unwrap());
+        if clouds {
+            drop(
+                layers
+                    .clear_pass(&mut cmd, LayerSet::of(Layer::Medium))
+                    .unwrap(),
+            );
+        }
         // Chiaro queues the helper geometry and draws it when the target changes, after the
         // figures the renderer drew in between: sprites first, geometry on top. The sprites also
         // write their colour, which the colour fixture then replaces.

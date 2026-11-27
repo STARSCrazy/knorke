@@ -119,89 +119,110 @@ fn the_plain_variant_draws_row_lights() {
 /// term, highlight, wet ground and direction sample into the same targets, in all three material
 /// modes. Next to Chiaro's lights only the order of the additive draws differs (the row lights
 /// come last), which moves a 16-bit float sum by a rounding; with the row lights alone the
-/// order is the same and so is every bit.
+/// order is the same and so is every bit. Without surface and material buffer it is Chiaro's
+/// flat light up to a rounding. Through the clouds of `t5` too (the medium world map, Chiaro's
+/// `*_medium` programs).
 #[test]
 fn row_lights_equal_chiaro_lights_without_obstacles() {
     with_chiaro_pack(|gpu, pack| {
-        iso_night::with_demo("hard", 44, "", |demo| {
-            let demo = Demo {
-                kinds: demo.kinds.with(Layer::Material),
-                ..demo
-            };
-            demo.with_frames(gpu, pack, &with_rows, &mut |f| {
-                let ids: Vec<_> = f.scene.obstacles.iter().map(|(id, _)| id).collect();
-                for id in ids {
-                    f.scene.obstacles.destroy(id).unwrap();
-                }
-                // Any bytes are a material: detail normals around "up", every exponent and
-                // specular strength.
-                let material: Vec<u8> = (0..W * H)
-                    .flat_map(|i| {
-                        let (x, y) = (i % W, i / W);
-                        [
-                            98 + ((x * 7 + y * 3) % 61) as u8,
-                            98 + ((x * 5 + y * 11) % 61) as u8,
-                            ((x * 13 + y * 7) % 256) as u8,
-                            ((x + 3 * y) % 256) as u8,
-                        ]
-                    })
-                    .collect();
-                let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
-                let fills = [(Layer::Material, &material[..])];
-                let uploads = scene_common::upload_layers(gpu, &mut cmd, f.layers, &fills);
-                cmd.submit_and_wait().unwrap();
-                drop(uploads);
-                f.settings.light.material.wetness = 0.6;
+        for variant in ["hard", "t5"] {
+            iso_night::with_demo(variant, 44, "", |demo| {
+                let demo = Demo {
+                    kinds: demo.kinds.with(Layer::Material),
+                    ..demo
+                };
+                demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                    let ids: Vec<_> = f.scene.obstacles.iter().map(|(id, _)| id).collect();
+                    for id in ids {
+                        f.scene.obstacles.destroy(id).unwrap();
+                    }
+                    // Any bytes are a material: detail normals around "up", every exponent and
+                    // specular strength.
+                    let material: Vec<u8> = (0..W * H)
+                        .flat_map(|i| {
+                            let (x, y) = (i % W, i / W);
+                            [
+                                98 + ((x * 7 + y * 3) % 61) as u8,
+                                98 + ((x * 5 + y * 11) % 61) as u8,
+                                ((x * 13 + y * 7) % 256) as u8,
+                                ((x + 3 * y) % 256) as u8,
+                            ]
+                        })
+                        .collect();
+                    let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+                    let fills = [(Layer::Material, &material[..])];
+                    let uploads = scene_common::upload_layers(gpu, &mut cmd, f.layers, &fills);
+                    cmd.submit_and_wait().unwrap();
+                    drop(uploads);
+                    f.settings.light.material.wetness = 0.6;
 
-                let spots = (f.scene.lights.iter())
-                    .filter(|(_, l)| l.desc.kind == LightType::Spot)
-                    .count();
-                assert!(spots > 0);
-                let modes = [
-                    ("exact", 1.0, LayerSet::NONE),
-                    ("direction", 0.5, LayerSet::NONE),
-                    ("none", 1.0, LayerSet::of(Layer::Material)),
-                ];
-                for (alone, (mode, light, skip)) in [false, true]
-                    .into_iter()
-                    .flat_map(|a| modes.map(|m| (a, m)))
-                {
-                    if alone {
-                        // Idempotent: the second and third mode find them gone.
-                        for &id in &f.scene.light_ids {
-                            let other = (f.scene.lights.get(id))
-                                .is_ok_and(|d| d.kind == LightType::Directional);
-                            if other {
-                                f.scene.lights.destroy(id).unwrap();
+                    let spots = (f.scene.lights.iter())
+                        .filter(|(_, l)| l.desc.kind == LightType::Spot)
+                        .count();
+                    assert!(spots > 0);
+                    let modes = [
+                        ("exact", 1.0, LayerSet::NONE),
+                        ("direction", 0.5, LayerSet::NONE),
+                        ("none", 1.0, LayerSet::of(Layer::Material)),
+                        (
+                            "flat",
+                            1.0,
+                            LayerSet::of(Layer::Material).with(Layer::Surface),
+                        ),
+                    ];
+                    for (alone, (mode, light, skip)) in [false, true]
+                        .into_iter()
+                        .flat_map(|a| modes.map(|m| (a, m)))
+                    {
+                        if alone {
+                            // Idempotent: the second and third mode find them gone.
+                            for &id in &f.scene.light_ids {
+                                let other = (f.scene.lights.get(id))
+                                    .is_ok_and(|d| d.kind == LightType::Directional);
+                                if other {
+                                    f.scene.lights.destroy(id).unwrap();
+                                }
                             }
                         }
+                        f.settings.light.quality.quality = Quality::Custom(Resolutions {
+                            light,
+                            shadow: 0.5,
+                            medium: 0.5,
+                        });
+                        f.skip = skip;
+                        let (on, off, rows) = on_and_off(f);
+                        let (max, mean, share) = diff(&on, &off);
+                        eprintln!(
+                            "{variant}, no obstacles, row lights alone {alone}, material mode \
+                         {mode}: {rows} row lights, largest difference {max}/255, mean \
+                         {mean:.5}, {share:.3} % of the pixels"
+                        );
+                        let medium = f.renderer.plan().medium_map().view().is_some();
+                        assert_eq!(medium, variant == "t5", "the medium world map");
+                        let lights = &f.renderer.plan().lights().rows;
+                        let profiled = (lights.iter())
+                            .filter(|l| !l.is_area() && l.light.profile[0] >= 0.0)
+                            .count();
+                        let area = lights.iter().filter(|l| l.is_area()).count();
+                        assert!(rows > 0 && profiled > 0, "{profiled} profiled row lights");
+                        // Without a surface buffer the lights reach the ground only: fewer are seen.
+                        let expected = if mode == "flat" { 5 } else { 8 };
+                        assert_eq!(area, expected, "the demo's line and rect lights");
+                        // The direction sums are divided in the composite, which doubles a rounding;
+                        // the clouds' transmittance and scatter on top of it add one.
+                        // The flat light's ground point is SurfaceAt's, Chiaro's the vertex's: a
+                        // rounding apart.
+                        let bound = match (alone, variant) {
+                            (true, _) if mode == "flat" => 1,
+                            (true, _) => 0,
+                            (false, "t5") => 3,
+                            (false, _) => 2,
+                        };
+                        assert!(max <= bound, "{variant}, {mode}: {max}/255");
                     }
-                    f.settings.light.quality.quality = Quality::Custom(Resolutions {
-                        light,
-                        shadow: 0.5,
-                        medium: 0.5,
-                    });
-                    f.skip = skip;
-                    let (on, off, rows) = on_and_off(f);
-                    let (max, mean, share) = diff(&on, &off);
-                    eprintln!(
-                        "no obstacles, row lights alone {alone}, material mode {mode}: {rows} \
-                         row lights, largest difference {max}/255, mean {mean:.5}, {share:.3} % \
-                         of the pixels"
-                    );
-                    let lights = &f.renderer.plan().lights().rows;
-                    let profiled = (lights.iter())
-                        .filter(|l| !l.is_area() && l.light.profile[0] >= 0.0)
-                        .count();
-                    let area = lights.iter().filter(|l| l.is_area()).count();
-                    assert!(rows > 0 && profiled > 0, "{profiled} profiled row lights");
-                    assert_eq!(area, 8, "the demo's line and rect lights");
-                    // The direction sums are divided in the composite, which doubles a rounding.
-                    let bound = if alone { 0 } else { 2 };
-                    assert!(max <= bound, "{mode}: {max}/255");
-                }
+                });
             });
-        });
+        }
     });
 }
 
@@ -209,16 +230,17 @@ fn row_lights_equal_chiaro_lights_without_obstacles() {
 /// `plain.txt`'s moon, 1 degree): the same Lambert term, highlight, wet ground and direction
 /// sample into the same targets, in all three material modes and without surface and material
 /// buffer, to the bit. The demo's moon alone; one finite box far outside the picture keeps the
-/// frame's shadows (and so the moon's) on.
+/// frame's shadows (and so the moon's) on. Through the clouds of `t5` too.
 #[test]
 fn a_sun_equals_chiaros_sun_without_obstacles() {
     with_chiaro_pack(|gpu, pack| {
-        iso_night::with_demo("hard", 44, "", |demo| {
-            let demo = Demo {
-                kinds: demo.kinds.with(Layer::Material),
-                ..demo
-            };
-            demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+        for variant in ["hard", "t5"] {
+            iso_night::with_demo(variant, 44, "", |demo| {
+                let demo = Demo {
+                    kinds: demo.kinds.with(Layer::Material),
+                    ..demo
+                };
+                demo.with_frames(gpu, pack, &with_rows, &mut |f| {
                 let ids: Vec<_> = f.scene.obstacles.iter().map(|(id, _)| id).collect();
                 for id in ids {
                     f.scene.obstacles.destroy(id).unwrap();
@@ -284,16 +306,20 @@ fn a_sun_equals_chiaros_sun_without_obstacles() {
                     let (on, with) = f.frame();
                     let (max, mean, share) = diff(&on, &off);
                     eprintln!(
-                        "the moon alone, radius {radius}, material mode {mode}: {} sun maps; largest difference \
-                         {max}/255, mean {mean:.5}, {share:.3} % of the pixels",
+                        "{variant}, the moon alone, radius {radius}, material mode {mode}: {} sun \
+                         maps; largest difference {max}/255, mean {mean:.5}, {share:.3} % of the \
+                         pixels",
                         with.lighting.row_suns
                     );
+                    let medium = f.renderer.plan().medium_map().view().is_some();
+                    assert_eq!(medium, variant == "t5", "the medium world map");
                     assert_eq!(without.lighting.row_suns, 0, "{mode}: rows off");
                     assert_eq!(with.lighting.row_suns, 1, "{mode}: the moon has a map");
-                    assert_eq!(max, 0, "radius {radius}, {mode}");
+                    assert_eq!(max, 0, "{variant}, radius {radius}, {mode}");
                 }
             });
-        });
+            });
+        }
     });
 }
 

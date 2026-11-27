@@ -139,6 +139,8 @@ fn boxed(obstacles: &mut ObstacleStore, (x, y): (f32, f32), (w, d): (f32, f32), 
 fn settings(haze: f32, half: bool) -> Light2dSettings {
     let mut light = LightSettings {
         ambient: Vec3::new(0.1, 0.1, 0.1),
+        // Chiaro's light: the scenes are compared with Chiaro's pictures.
+        light_rows: false,
         ..LightSettings::default()
     };
     light.haze.density = haze;

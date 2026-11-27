@@ -6,7 +6,8 @@
 //! every lamp four times ("last"); the line and rect lights that cast shadows (4) alone
 //! ("flächen"); the shop sign's line light alone with a post close in front of it, a third
 //! along ("linie pfosten"); the point and spot lights with the demo's two pattern fences, hard
-//! and soft ("zaun").
+//! and soft ("zaun"), and as tile grids ("gitter"); the walls in a bank of fog ("nebel", the
+//! medium world map dims every light on its way).
 //!
 //! - Today: [`Light2dRenderer`] with `light_rows` off.
 //! - New: the same with `light_rows` on.
@@ -18,9 +19,10 @@
 //! `KNORKE_PROBE_OUT=<dir>` writes `<scene>_heute.png`, `<scene>_neu.png`, `<scene>_wahr.png`,
 //! the differences times 8 and `messung.txt`; `KNORKE_PROBE_FRAMES=<n>` times n frames per run
 //! (wall clock: prepare + record + submit, in batches of [`BATCH`] frames that wait once at their
-//! end, so the GPU stays busy), `KNORKE_PROBE_RUNS` runs per case (default
-//! 5), the cases in turn: today, rows with resting lamps, rows with every lamp moved every frame
-//! (all rows built), and a frame without lights (what no light stage can save).
+//! end, so the GPU stays busy), `KNORKE_PROBE_RUNS` runs per case (default 5), the cases in
+//! turn: today, rows with resting lamps, rows with every lamp moved every frame (all rows built),
+//! and a frame without lights (what no light stage can save). `KNORKE_PROBE_ONLY=<prefix>` runs
+//! only the lamp cases whose name begins so.
 //!
 //! [`sun_map_against_chiaro_and_the_reference`] does the same for the moon of the demo with its
 //! shadow from a sun map (plan 17.13, L3).
@@ -45,6 +47,7 @@ use knorke_gpu::{
 };
 use knorke_integration::layers::{Layer, LayerSet, Layers};
 use knorke_integration::light2d::{Light2dFrame, Light2dRenderer, Light2dSettings};
+use knorke_light2d::codec::encode_medium_pixel;
 use knorke_light2d::composite::{CompositeFrame, CompositeLight, CompositeStage};
 use knorke_light2d::light::{Height, LightDesc, LightType};
 use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
@@ -301,12 +304,23 @@ fn settings(shadow: f32) -> Light2dSettings {
     s
 }
 
-/// The reference's programs: the lamps' and the hard sun's.
-const TRUTH: [ProgramDesc; 2] = [
+/// The reference's programs: the lamps' and the hard sun's, then both through the medium world
+/// map (`_medium`).
+const TRUTH: [ProgramDesc; 4] = [
     ProgramDesc::new("lightrow.vert", "lightrow_truth.frag", Blend::Additive),
     ProgramDesc::new(
         "fullscreen.vert",
         "lightrow_sun_truth.frag",
+        Blend::Additive,
+    ),
+    ProgramDesc::new(
+        "lightrow.vert",
+        "lightrow_truth_medium.frag",
+        Blend::Additive,
+    ),
+    ProgramDesc::new(
+        "fullscreen.vert",
+        "lightrow_sun_truth_medium.frag",
         Blend::Additive,
     ),
 ];
@@ -402,27 +416,33 @@ impl<'d> Truth<'d> {
         lookup.domain[3] = env("KNORKE_PROBE_POINTS", 8.0);
         let lookup = lookup.to_bytes();
         let vertex = LightSurfacePassParams::new(p, W, H, top, 0).to_bytes();
-        self.finish(gpu, frame, settings, |cmd, t, clear| {
+        self.finish(gpu, frame, settings, renderer, |cmd, t, clear| {
             cmd.copy_pass()?
                 .upload_to_buffer(&t.lamps, (count * RowLamp::SIZE) as u32)?;
             let nearest = t.samplers.sampler(Filter::Nearest);
             let occlusion = renderer.plan().occlusion();
             let patterns = renderer.plan().patterns().maps();
             let scene = frame.scene;
+            // With a medium world map (the renderer's of this frame) its map follows.
+            let medium = renderer.plan().medium_map().view();
             let textures = [
                 frame.surface.unwrap(),
                 occlusion.mask().unwrap(),
                 occlusion.height().unwrap(),
                 patterns.map_or(scene, |p| p.ids),
                 patterns.map_or(scene, |p| p.atlas),
+                medium.map_or(scene, |m| m.map),
             ]
             .map(|t| SamplerBinding::new(t, nearest));
             let lamps = t.lamps.buffer_ref().unwrap();
             let records = patterns.map_or([lamps; 3], |p| [p.obstacles, p.records, p.data]);
             let params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
+            let uniforms: [&[u8]; 4] =
+                [&surface, &lookup, &params, medium.map_or(&[], |m| m.params)];
+            let m = usize::from(medium.is_some());
             let mut pass = cmd.render_pass(&[ColorTarget::new(t.light.texture_ref(), clear)])?;
             pass.bind_program(
-                t.pipelines.pipeline(0, HALF).unwrap(),
+                t.pipelines.pipeline(2 * m, HALF).unwrap(),
                 &Bindings {
                     vertex: StageBindings {
                         storage_buffers: &[lamps],
@@ -430,9 +450,9 @@ impl<'d> Truth<'d> {
                         ..Default::default()
                     },
                     fragment: StageBindings {
-                        samplers: &textures,
+                        samplers: &textures[..5 + m],
                         storage_buffers: &records,
-                        uniforms: &[&surface, &lookup, &params],
+                        uniforms: &uniforms[..3 + m],
                         ..Default::default()
                     },
                 },
@@ -468,30 +488,36 @@ impl<'d> Truth<'d> {
         let rays: Vec<u8> = block.iter().flat_map(|v| v.to_le_bytes()).collect();
         // The stand-in for the pattern records of a frame without them.
         self.lamps.reserve(RowLamp::SIZE as u64)?;
-        self.finish(gpu, frame, settings, |cmd, t, clear| {
+        self.finish(gpu, frame, settings, renderer, |cmd, t, clear| {
             let occlusion = renderer.plan().occlusion();
             let patterns = renderer.plan().patterns().maps();
             let scene = frame.scene;
+            let medium = renderer.plan().medium_map().view();
             let textures = [
                 frame.surface.unwrap(),
                 occlusion.mask().unwrap(),
                 occlusion.height().unwrap(),
                 patterns.map_or(scene, |p| p.ids),
                 patterns.map_or(scene, |p| p.atlas),
+                medium.map_or(scene, |m| m.map),
             ]
             .map(|tex| SamplerBinding::new(tex, t.samplers.sampler(Filter::Nearest)));
             let lamps = t.lamps.buffer_ref().unwrap();
             let records = patterns.map_or([lamps; 3], |p| [p.obstacles, p.records, p.data]);
+            // `SunRays` of lightrow_sun_truth.frag holds the pattern block after the rays.
             let pattern_params = patterns.map_or(PatternParams::default().to_bytes(), |p| p.params);
+            let rays = [&rays[..], &pattern_params[..]].concat();
+            let uniforms: [&[u8]; 4] = [&surface, &params, &rays, medium.map_or(&[], |m| m.params)];
+            let m = usize::from(medium.is_some());
             let mut pass = cmd.render_pass(&[ColorTarget::new(t.light.texture_ref(), clear)])?;
             pass.bind_program(
-                t.pipelines.pipeline(1, HALF).unwrap(),
+                t.pipelines.pipeline(1 + 2 * m, HALF).unwrap(),
                 &Bindings {
                     vertex: StageBindings::default(),
                     fragment: StageBindings {
-                        samplers: &textures,
+                        samplers: &textures[..5 + m],
                         storage_buffers: &records,
-                        uniforms: &[&surface, &params, &rays, &pattern_params],
+                        uniforms: &uniforms[..3 + m],
                         ..Default::default()
                     },
                 },
@@ -501,12 +527,14 @@ impl<'d> Truth<'d> {
     }
 
     /// `draw` records the light into `self.light` (to be cleared with the load it is given, the
-    /// ambient light); then the composite stage and the post pass draw `frame` with it.
+    /// ambient light); then the composite stage and the post pass draw `frame` with it, with the
+    /// medium stage's result of `renderer` (it does not depend on how the ground is shadowed).
     fn finish(
         &mut self,
         gpu: Gpu<'_>,
         frame: &Light2dFrame<'_>,
         settings: &Light2dSettings,
+        renderer: &Light2dRenderer<'_>,
         draw: impl FnOnce(&mut CommandBuffer<'_>, &Self, Load) -> Result<(), Diagnostic>,
     ) -> Result<(), Diagnostic> {
         let light = &settings.light;
@@ -523,7 +551,7 @@ impl<'d> Truth<'d> {
                 direction: None,
                 pure_ambient: None,
             },
-            medium: None,
+            medium: renderer.plan().medium().composite_medium(frame.medium),
             projection: frame.projection,
             settings: light,
             input_space: settings.input_space(),
@@ -650,6 +678,8 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// 1.658 / 3.75, soft 1.148 / 3.71, today 2.333 / 7.31. (Part of today's distance there is
 /// Chiaro's own: a lamp beside the tower stands in a widened strip of its hollow cells, whose
 /// crossing Chiaro reads while the rows and the reference skip the obstacle a lamp stands in.)
+/// "nebel", the walls in [`fog_layer`]'s fog (the medium world map; 2026-11-27): hard
+/// 0.284 / 0.51, today 0.751 / 1.43, soft 0.485 / 1.81, today 1.195 / 3.67.
 ///
 /// Timed 2026-11-27 (240 frames, 5 runs, release, medians in us), today / rows resting / rows
 /// all built / today scrolling / rows scrolling (the camera one mask texel a frame, 30 to and
@@ -657,8 +687,10 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// last" 836 / 404 / 691 / 888 / 602, "weich normal" 310 / 219 / 410 / 364 / 438, "weich
 /// last" 900 / 564 / 992 / 940 / 789, "hart halb" 299 / 174 / 311 / 356 / 372, "zaun hart"
 /// 416 / 176 / 317 / 465 / 379, "zaun weich" 449 / 216 / 431 / 496 / 455, "gitter hart"
-/// 794 / 212 / 381 / 777 / 435, "gitter weich" 820 / 246 / 482 / 803 / 508.
-const BOUNDS: [(&str, f64, f64); 11] = [
+/// 794 / 212 / 381 / 777 / 435, "gitter weich" 820 / 246 / 482 / 803 / 508, "nebel hart"
+/// 430 / 320 / 448 / 484 / 498, "nebel weich" 448 / 368 / 556 / 496 / 581 (scrolling slower
+/// than today, as without fog: "hart normal" 345 / 357, "weich normal" 361 / 436 that day).
+const BOUNDS: [(&str, f64, f64); 13] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
     ("weich normal", 0.70, 2.55),
@@ -670,6 +702,8 @@ const BOUNDS: [(&str, f64, f64); 11] = [
     ("zaun weich", 1.63, 6.27),
     ("gitter hart", 0.90, 1.75),
     ("gitter weich", 1.27, 4.09),
+    ("nebel hart", 0.32, 0.57),
+    ("nebel weich", 0.54, 2.0),
 ];
 
 /// The facade in "zaun hart" that the spot light beside the lattice tower lights through it
@@ -720,24 +754,43 @@ fn post() -> ShapeDesc<'static> {
     }
 }
 
-/// The demo's scene, glow and surface layers, uploaded.
-fn demo_layers(gpu: Gpu<'_>) -> Layers<'_> {
-    let kinds = LayerSet::of(Layer::Surface).with(Layer::Glow);
+/// A bank of ground fog (the preset `Fog`, 3 high) over the middle of the street, densest (0.5)
+/// in its middle and thinning to its elliptic edge: the demo's own clouds (`t5`) are too thin
+/// to dim a lamp noticeably.
+fn fog_layer() -> Vec<u8> {
+    let step = settings(0.5).light.resolved_medium_height_step();
+    let mut px = vec![0u8; (W * H * 4) as usize];
+    for (i, out) in px.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        let (x, y) = ((i as u32 % W) as f32, (i as u32 / W) as f32);
+        let e = ((x - 380.0) / 230.0).powi(2) + ((y - 250.0) / 90.0).powi(2);
+        if e < 1.0 {
+            *out = encode_medium_pixel(0.5 * (1.0 - e), 0.0, 3.0, 4, step).unwrap();
+        }
+    }
+    px
+}
+
+/// The demo's scene, glow and surface layers, uploaded; with `fog` also [`fog_layer`].
+fn demo_layers(gpu: Gpu<'_>, fog: bool) -> Layers<'_> {
+    let mut kinds = LayerSet::of(Layer::Surface).with(Layer::Glow);
+    if fog {
+        kinds = kinds.with(Layer::Medium);
+    }
     let mut layers = Layers::new(gpu, W, H, kinds).unwrap();
     let fixture = |name: &str| scene_common::fixture("iso_night", name, (W, H));
     let (color, glow, surface) = (fixture("scene"), fixture("glow"), fixture("surface"));
+    let medium = fog_layer();
+    let mut fills = vec![
+        (Layer::Scene, &color[..]),
+        (Layer::Glow, &glow[..]),
+        (Layer::Surface, &surface[..]),
+    ];
+    if fog {
+        fills.push((Layer::Medium, &medium[..]));
+    }
     let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
     drop(layers.clear_pass(&mut cmd, LayerSet::ALL).unwrap());
-    let uploads = scene_common::upload_layers(
-        gpu,
-        &mut cmd,
-        &mut layers,
-        &[
-            (Layer::Scene, &color),
-            (Layer::Glow, &glow),
-            (Layer::Surface, &surface),
-        ],
-    );
+    let uploads = scene_common::upload_layers(gpu, &mut cmd, &mut layers, &fills);
     cmd.submit_and_wait().unwrap();
     drop(uploads);
     layers
@@ -769,15 +822,8 @@ fn light_rows_against_chiaro_and_the_reference() {
         let mut report = format!("{frames} frames per run\n");
         let mut full = String::new();
 
-        let layers = demo_layers(gpu);
+        let (clear, foggy) = (demo_layers(gpu, false), demo_layers(gpu, true));
         let targets = [target(gpu), target(gpu), target(gpu)];
-        let frame = |i: usize| layers.frame(targets[i].texture_ref(), &projection, LayerSet::NONE);
-        // A frame of target i seen through p (a closure cannot return the frame borrowing p).
-        macro_rules! frame_at {
-            ($i:expr, $p:expr) => {
-                layers.frame(targets[$i].texture_ref(), $p, LayerSet::NONE)
-            };
-        }
         // Frame k of the camera scrolling along x one mask texel a frame, 30 texels to and fro.
         let domain = OcclusionDomain::new(W, H, today.light.resolutions().shadow);
         let texel = 1.0 / domain.texels_per_scene[0];
@@ -805,9 +851,27 @@ fn light_rows_against_chiaro_and_the_reference() {
                 (true, 1, Fences::Patterns, "01"),
                 (false, 1, Fences::Grids, "01"),
                 (true, 1, Fences::Grids, "01"),
+            ])
+            .map(|(soft, copies, fence, kinds)| (soft, copies, fence, kinds, false))
+            .chain([
+                (false, 1, Fences::Walls(1.0), "01", true),
+                (true, 1, Fences::Walls(1.0), "01", true),
             ]);
-        for ((soft, copies, fence, kinds), bound) in scenes.zip(BOUNDS) {
+        let only = std::env::var("KNORKE_PROBE_ONLY").unwrap_or_default();
+        for ((soft, copies, fence, kinds, fog), bound) in scenes.zip(BOUNDS) {
             let name = bound.0;
+            if !name.starts_with(only.as_str()) {
+                continue;
+            }
+            let layers = if fog { &foggy } else { &clear };
+            let frame =
+                |i: usize| layers.frame(targets[i].texture_ref(), &projection, LayerSet::NONE);
+            // A frame of target i seen through p (a closure cannot return the frame borrowing p).
+            macro_rules! frame_at {
+                ($i:expr, $p:expr) => {
+                    layers.frame(targets[$i].texture_ref(), $p, LayerSet::NONE)
+                };
+            }
             let (mut base, mut obstacles, patterns) = parse(&text, false, fence, kinds);
             if kinds == "3" {
                 obstacles.create_shape(&post()).unwrap();
@@ -889,6 +953,8 @@ fn light_rows_against_chiaro_and_the_reference() {
                 // The first frame builds the rows, from then on the lamps rest.
                 let first = draw(gpu, r_rest, &frame(1), &stores, &rows, true).lighting;
                 assert_eq!(first.row_lights, all, "every lamp is a row light");
+                let medium = r_rest.plan().medium_map().view().is_some();
+                assert_eq!(medium, fog, "{name}: the medium world map");
                 assert_eq!(first.rows_built, if run == 0 { rows_all } else { 0 });
                 let rest = time(n, |wait| {
                     let record = draw(gpu, r_rest, &frame(1), &stores, &rows, wait);
@@ -1019,12 +1085,14 @@ fn light_rows_against_chiaro_and_the_reference() {
 const SUN_CAMERAS: [(&str, [f32; 2]); 2] = [("A", [18.0, 14.0]), ("B", [18.037, 14.021])];
 
 /// The fences of the sun cases: as opaque walls ("mauer"), with the demo's patterns ("zaun"), as
-/// half transparent walls ("halb"), as tile grids with patterns ("gitter"); `parse`'s `fence`.
-const SUN_FENCES: [(&str, Fences); 4] = [
-    ("mauer", Fences::Walls(1.0)),
-    ("zaun", Fences::Patterns),
-    ("halb", Fences::Walls(0.5)),
-    ("gitter", Fences::Grids),
+/// half transparent walls ("halb"), as tile grids with patterns ("gitter"), as opaque walls in
+/// [`fog_layer`]'s fog ("nebel"); `parse`'s `fence` and whether the frame has the fog.
+const SUN_FENCES: [(&str, Fences, bool); 5] = [
+    ("mauer", Fences::Walls(1.0), false),
+    ("zaun", Fences::Patterns, false),
+    ("halb", Fences::Walls(0.5), false),
+    ("gitter", Fences::Grids, false),
+    ("nebel", Fences::Walls(1.0), true),
 ];
 
 /// The most the sun map may differ from the reference (mean of 255, percent of the pixels over
@@ -1050,8 +1118,11 @@ const SUN_FENCES: [(&str, Fences); 4] = [
 /// (today 0.1682 / 0.626); soft A 0.1372 / 0.620 (today 0.2317 / 1.007), B 0.1463 / 0.619
 /// (today 0.2420 / 0.989); timed hard 362 / 110 / 1614 / 320 / 193 / 183, soft
 /// 394 / 160 / 1702 / 342 / 228 / 220. While "zaun" or "gitter" scrolls, the map is built whole in 5 of 2400
-/// frames: a fence leaves the mask and the other's record index moves.
-const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 4] = [
+/// frames: a fence leaves the mask and the other's record index moves. "nebel" (2026-11-27):
+/// hard A 0.0267 / 0.086 (today 0.0521 / 0.181), B 0.0191 / 0.069 (today 0.0405 / 0.147);
+/// soft A 0.0521 / 0.155 (today 0.1114 / 0.480), B 0.0582 / 0.139 (today 0.1139 / 0.462);
+/// timed hard 269 / 205 / 1191 / 333 / 274 / 273, soft 293 / 224 / 1360 / 349 / 286 / 290.
+const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 5] = [
     [
         [(0.046, 0.194), (0.032, 0.132)],
         [(0.076, 0.232), (0.085, 0.206)],
@@ -1067,6 +1138,10 @@ const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 4] = [
     [
         [(0.127, 0.624), (0.116, 0.589)],
         [(0.151, 0.682), (0.161, 0.681)],
+    ],
+    [
+        [(0.030, 0.095), (0.022, 0.076)],
+        [(0.058, 0.171), (0.065, 0.153)],
     ],
 ];
 
@@ -1098,7 +1173,7 @@ fn sun_map_against_chiaro_and_the_reference() {
         let today = settings(0.5);
         let mut rows = today;
         rows.light.light_rows = true;
-        let layers = demo_layers(gpu);
+        let (clear, foggy) = (demo_layers(gpu, false), demo_layers(gpu, true));
         let targets = [target(gpu), target(gpu), target(gpu)];
         let (moons, _, _) = parse(&text, false, Fences::Walls(1.0), "2");
         assert_eq!(moons.len(), 1, "the scene's moon");
@@ -1123,7 +1198,8 @@ fn sun_map_against_chiaro_and_the_reference() {
                     .zip(bounds)
                     .map(move |(moon, bounds)| (fences, moon, bounds))
             });
-        for ((fences, fence), (kind, moon), bounds) in cases {
+        for ((fences, fence, fog), (kind, moon), bounds) in cases {
+            let layers = if fog { &foggy } else { &clear };
             let (_, obstacles, patterns) = parse(&text, false, fence, "2");
             let patterns = (!matches!(fence, Fences::Walls(_))).then_some(&patterns);
             let kind = format!("{fences} {kind}");
@@ -1141,6 +1217,8 @@ fn sun_map_against_chiaro_and_the_reference() {
                 let now = draw(gpu, &mut r_rows, &frame(1), &stores, &rows, true).lighting;
                 assert_eq!(old.row_suns, 0, "today: Chiaro's moon");
                 assert_eq!((now.row_suns, now.suns_built), (1, 1), "the moon has a map");
+                let medium = r_rows.plan().medium_map().view().is_some();
+                assert_eq!(medium, fog, "{kind}: the medium world map");
                 let list = r_rows.plan().lights();
                 let (sun, rise) = (list.directional[0], list.directional_rise[0]);
                 assert_eq!(rise > 0.0, moon.source_radius > 0.0, "{kind}: rise {rise}");
@@ -1189,7 +1267,7 @@ fn sun_map_against_chiaro_and_the_reference() {
                         (moon, &obstacles, patterns),
                         (&mut r_today, &mut r_rows),
                         (&today, &rows),
-                        (&layers, &targets),
+                        (layers, &targets),
                         &projection,
                         (frames, runs),
                     );

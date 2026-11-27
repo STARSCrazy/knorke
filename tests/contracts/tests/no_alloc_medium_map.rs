@@ -1,8 +1,9 @@
 //! Contract: the medium world map of `knorke-light2d` (P29) allocates nothing on the heap in the
 //! steady state: once warm, `PassPlan::prepare` and `PassPlan::record` of an unchanged scene with
-//! a medium layer, a shadowed spot light over an obstacle and an unshadowed directional light
-//! (both drawn with `*_medium` programs) make no Rust allocation and create no GPU object
-//! (ADR 0006). Command buffer acquire and submit are the host's and stay outside.
+//! a medium layer, a shadowed spot light over an obstacle and a shadowed directional light (a row
+//! light and a sun map, ADR 0019, drawn with the `_medium` row programs) and an unshadowed
+//! directional light (Chiaro's `*_medium` program) make no Rust allocation and create no GPU
+//! object (ADR 0006). Command buffer acquire and submit are the host's and stay outside.
 //!
 //! Needs the feature `gpu` of this crate, a Vulkan device and the shader pack of
 //! `cargo xtask shaders`; skips without them (a failure with `KNORKE_REQUIRE_GPU=1`).
@@ -41,6 +42,12 @@ fn steady_state_medium_map_allocates_nothing() {
         sun.direction = Vec3::new(-0.7, 0.15, -0.7);
         sun.cast_shadows = false;
         lights.create(&sun, &NoResources).unwrap();
+        let moon = LightDesc {
+            direction: Vec3::new(0.5, 0.4, -0.75),
+            cast_shadows: true,
+            ..sun.clone()
+        };
+        lights.create(&moon, &NoResources).unwrap();
         let mut obstacles = ObstacleStore::new();
         obstacles
             .create_shape(&ShapeDesc {
@@ -81,9 +88,11 @@ fn steady_state_medium_map_allocates_nothing() {
                 let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
                 let before = allocations();
                 let prepared = plan.prepare(&frame, &stores, &settings).unwrap();
-                plan.record(&mut cmd, &frame, &settings).unwrap();
+                let record = plan.record(&mut cmd, &frame, &settings).unwrap();
                 counted += allocations() - before;
                 assert!(prepared.stages.contains(PassStages::MEDIUM_MAP));
+                let rows = (record.lighting.row_lights, record.lighting.row_suns);
+                assert_eq!(rows, (1, 1), "the spot light and the moon through the map");
                 cmd.submit_and_wait().unwrap();
             }
             counted
