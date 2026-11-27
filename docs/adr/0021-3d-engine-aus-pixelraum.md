@@ -36,6 +36,14 @@ Ein Shooter ist mit CPU-Rastern in kleiner Auflösung nicht zu machen. Ein Dunge
 
 *Geändert 2026-11-27:* Der frühere Schritt „CPU-Bild an `knorke-post` geben“ entfällt. Da Post ohnehin die GPU braucht, läuft gleich alles auf der GPU; eine Brücke CPU-Bild → GPU-Post wäre Code, der nach Schritt 3D-2 kaum noch Nutzer hätte. Der CPU-Weg bleibt ohne Post (headless, Prüfreferenz, Rechner ohne GPU).
 
+## Schnitt 3D-1 (ergänzt 2026-11-27)
+
+Entwurf: `docs/3d/3d-1-szenenmodell.md`.
+
+- **Neue Crate `knorke-scene3d`** (Render-Eingabe, kein Simulationszustand, kein `Snapshot`): Kamera, Gitter mit `GridMesh`-Cache, Meshes, Sprites, Partikel/Emitter, Backdrop-Daten, Texturen.
+- **Abhängigkeiten:** `knorke-scene3d` → nur `knorke-types`, `knorke-math` (geschlossene Liste). `knorke-render` → darf `knorke-scene3d`; nicht `knorke-lighting`, `knorke-gpu`, `knorke-post`, `knorke-light2d`, SDL/wgpu. `knorke-lighting` → nicht `knorke-scene3d` (eingefroren). Später `knorke-render3d` → `knorke-scene3d`, `knorke-gpu`, `knorke-post`; nicht `knorke-render`, `knorke-lighting`, `knorke-light2d`.
+- Alle CPU-Goldens bleiben bitgleich; die alte pixelraum-API bleibt als Hülle.
+
 ## Konsequenzen
 
 - Plan §11 „3D-Renderer noch nicht beginnen“ fällt mit der Annahme dieser ADR.
