@@ -108,7 +108,7 @@ pub struct PatternMaps<'a> {
     pub data: BufferRef<'a>,
     /// The `PatternParams` block.
     pub params: [u8; PatternParams::SIZE],
-    /// The frame's pattern obstacles in record order ([`PatternOccluders::members`]).
+    /// The frame's pattern obstacles in record order.
     pub members: &'a [(crate::obstacle::ObstacleId, u32)],
 }
 
@@ -353,17 +353,6 @@ impl<'d> PatternOccluders<'d> {
     /// `true` after a prepare that found a pattern obstacle in the domain.
     pub fn is_active(&self) -> bool {
         self.active
-    }
-
-    /// The frame's pattern obstacles (record order).
-    pub fn members(&self) -> &[(crate::obstacle::ObstacleId, u32)] {
-        &self.set.members
-    }
-
-    /// Pattern obstacles left without their pattern this frame (more than
-    /// [`MAX_PATTERN_OBSTACLES`](super::MAX_PATTERN_OBSTACLES) in the domain).
-    pub fn overflow(&self) -> u32 {
-        self.set.overflow
     }
 
     /// Records the pending uploads and, in a frame that draws the mask, the id texture.

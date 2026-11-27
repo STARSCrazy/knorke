@@ -373,12 +373,6 @@ impl<'d> OcclusionMask<'d> {
         Ok(())
     }
 
-    /// The domain parameters of the prepared frame, for the obstacle stages (the same values
-    /// [`record`](Self::record) draws them with).
-    pub fn domain_params(&self) -> &DomainParams {
-        &self.params
-    }
-
     /// Records the prepared frame into `cmd`: one copy pass (the pending uploads of `geometry`
     /// and `tiles`, the shift copy), one render pass on the mask (and height texture) that
     /// clears the changed rectangles and draws every source, and the caster class masks.

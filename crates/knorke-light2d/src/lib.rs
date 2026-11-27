@@ -15,7 +15,7 @@
 //! | [`mask`], [`mask_store`], [`light_mask`], [`resources`] | masks (gobo, window): shapes, store, placement; stores as light resources | P10 |
 //! | [`medium_table`], [`medium_culling`] | media table with presets; the lights and suns of the medium stage | P12 |
 //! | [`medium_map`] | medium world map: uniform blocks, grid, medium program layouts; `MediumMapStage` with `gpu` | P29 |
-//! | [`pattern_store`], [`pattern_geometry`] | obstacle patterns: store with shelf-packed atlas places, sampling, ray entry geometry | P15 |
+//! | [`pattern_store`] | obstacle patterns: store with shelf-packed atlas places, sampling | P15 |
 //! | [`shadow`] | occlusion domain and anchor, dirty rectangles, incremental mask update plan | P16 |
 //! | [`occluder_raster`] | obstacles into the occlusion mask: triangle buffers, tile cell textures | P22 |
 //! | [`occlusion`] | occlusion mask cache (GPU stage with `gpu`) | P23 |
@@ -79,7 +79,6 @@ pub mod obstacle;
 pub mod occluder_raster;
 pub mod occlusion;
 pub mod pass_plan;
-pub mod pattern_geometry;
 pub mod pattern_occluders;
 pub mod pattern_store;
 pub mod profile;
@@ -105,3 +104,4 @@ pub use pattern_store::{PatternError, PatternId, PatternStore};
 pub use projection::{Projection, ProjectionError};
 pub use resources::StoreResources;
 pub use triangulate::{TriangulateError, Triangulator, circle_triangles};
+

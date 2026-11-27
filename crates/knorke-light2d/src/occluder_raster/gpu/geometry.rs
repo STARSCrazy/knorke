@@ -231,11 +231,6 @@ impl<'d> OccluderGeometry<'d> {
             || self.dynamics.floats > 0
     }
 
-    /// Something to draw (after [`prepare`](Self::prepare)).
-    pub fn has_triangles(&self) -> bool {
-        self.drawing
-    }
-
     /// Records the pending uploads into `copy`. Returns the number of static triangle uploads
     /// (what Chiaro counts as `occluder_uploads`).
     ///

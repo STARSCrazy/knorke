@@ -417,11 +417,6 @@ impl<'d> RowLights<'d> {
         self.frame
     }
 
-    /// Row atlas (two targets), for inspection.
-    pub fn row_atlas(&self) -> [Option<knorke_gpu::TextureRef<'_>>; 2] {
-        [self.rows[0].texture_ref(), self.rows[1].texture_ref()]
-    }
-
     /// Decides the frame: which lamp has which row, which sun has which map, which rows and maps
     /// are built, the atlases, the pipelines and the lamp buffer. Returns the targets it
     /// (re)allocated. Call it every frame, also without row lights: a lamp keeps its row (a sun

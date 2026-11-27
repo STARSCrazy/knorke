@@ -7,15 +7,15 @@
 // must be plainly marked as such (this file is a Rust port) and this notice may not be removed or
 // altered from any source distribution. Full text: LICENSE-CHIARO-ZLIB.txt.
 
-//! Pattern obstacles on the GPU (P28, Chiaro E127): what the `*_pattern` light programs read.
+//! Pattern obstacles on the GPU (P28, Chiaro E127): what the row pattern pass and the row lights
+//! read (`lightrow_pattern.hlsli`).
 //!
 //! The pattern obstacles in the mask's domain become one [`GpuPatternObstacle`] record each,
 //! with their polygon corners and tile cells in one word buffer (`PatternData`); every live
 //! pattern becomes one [`GpuPattern`] record and its alpha a region of the R8 pattern atlas
 //! (alpha at the [`PatternStore`] place, the column means below the alpha band). An id texture
-//! at mask size holds `1 + record index` per texel; the crossing path of the shadow programs
-//! reads it, finds the obstacle's record and intersects its geometry (the HLSL twin of
-//! [`pattern_geometry`](crate::pattern_geometry)) to sample the pattern there.
+//! at mask size holds `1 + record index` per texel; the row pattern pass reads it, finds the
+//! obstacle's record and intersects its geometry to sample the pattern there.
 //!
 //! | Module | Content |
 //! |---|---|
@@ -36,7 +36,8 @@
 //! - Rotations use `det::sin_cos` in `f32` like the obstacle triangles (Chiaro: `double`). The
 //!   rotated box (30°) and polygon (17°) of `tests/gpu_patterns.rs` give mask and light buffer
 //!   bit-identical to Chiaro; other angles may differ by one ulp in the record.
-//! - The more-than-65535 warning is a counter ([`PatternSet::overflow`]) instead of a log line.
+//! - Chiaro's more-than-65535 warning (a log line) is gone; the obstacles beyond keep their mean
+//!   opacity without the pattern.
 
 #[cfg(feature = "gpu")]
 mod gpu;
@@ -313,8 +314,6 @@ pub struct PatternSet {
     pub id_values: Vec<f32>,
     /// Tile grid members and their `1 + record index`.
     pub tile_draws: Vec<(ObstacleId, u32)>,
-    /// Pattern obstacles left out in the last collect (more than [`MAX_PATTERN_OBSTACLES`]).
-    pub overflow: u32,
 }
 
 /// An active obstacle with a live pattern (Chiaro `HasPattern`).
@@ -333,7 +332,6 @@ impl PatternSet {
         a: &MaskAnchor,
     ) {
         self.members.clear();
-        self.overflow = 0;
         if !obstacles.any_pattern() {
             return;
         }
@@ -342,8 +340,7 @@ impl PatternSet {
                 continue;
             }
             if self.members.len() >= MAX_PATTERN_OBSTACLES as usize {
-                self.overflow += 1; // keeps its mean opacity, without the pattern
-                continue;
+                break; // the rest keep their mean opacity, without the pattern
             }
             self.members.push((id, o.revision));
         }

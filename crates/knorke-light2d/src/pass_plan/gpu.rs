@@ -936,11 +936,6 @@ impl<'d> PassPlan<'d> {
         &self.warnings
     }
 
-    /// The light list of the last prepared frame.
-    pub fn light_list(&self) -> &LightList {
-        &self.lights
-    }
-
     /// The light stage (its buffers, for tools and tests).
     pub fn lighting(&self) -> &LightingStage<'d> {
         &self.lighting

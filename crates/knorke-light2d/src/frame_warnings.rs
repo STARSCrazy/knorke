@@ -313,11 +313,6 @@ impl FrameWarnings {
         self.pending.0 |= w.0;
     }
 
-    /// Drops the pending findings (the call that made them failed).
-    pub fn drop_pending(&mut self) {
-        self.pending = WarningSet::EMPTY;
-    }
-
     /// The kinds of the last [`update`](Self::update).
     pub fn warnings(&self) -> WarningSet {
         self.warnings
@@ -466,7 +461,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_is_consumed_and_can_be_dropped() {
+    fn pending_is_consumed() {
         let mut w = FrameWarnings::new();
         let quiet = FrameFindings {
             checks: DebugChecks::LAYERS,
@@ -475,9 +470,6 @@ mod tests {
         w.add_pending(WarningSet::of(Warning::StaleLayers));
         assert!(w.update(&quiet).contains(Warning::StaleLayers));
         assert!(w.update(&quiet).is_empty(), "consumed");
-        w.add_pending(WarningSet::of(Warning::FlatMedium));
-        w.drop_pending();
-        assert!(w.update(&quiet).is_empty());
     }
 
     #[test]

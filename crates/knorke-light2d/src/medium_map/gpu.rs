@@ -334,11 +334,6 @@ impl<'d> MediumMapStage<'d> {
         })
     }
 
-    /// The prepared `MediumParams` block (the medium stage of P30 fills the same one).
-    pub fn medium_params(&self) -> Option<&[u8; MediumParams::SIZE]> {
-        self.layout.map(|_| &self.medium_params)
-    }
-
     /// Pipelines created so far.
     pub fn pipeline_count(&self) -> usize {
         self.pipelines.len()
