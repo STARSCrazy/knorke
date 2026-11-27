@@ -742,6 +742,29 @@ pub(crate) struct DemoFrames<'a, 'd> {
 impl DemoFrames<'_, '_> {
     /// Prepares, records and submits one frame; the target's pixels and what was recorded.
     pub(crate) fn frame(&mut self) -> (Vec<u8>, PassRecord) {
+        let record = self.submit(true);
+        (read_texture(self.gpu, self.target), record)
+    }
+
+    /// Median wall-clock microseconds per frame of `runs` runs of `frames` frames each, the
+    /// target not read back; it waits for the GPU every 100 frames (`gpu_lightrow_probe.rs`).
+    /// The host times frames: wall clock is a host tool.
+    #[allow(clippy::disallowed_methods)]
+    pub(crate) fn time_frames(&mut self, frames: usize, runs: usize) -> f64 {
+        let mut times: Vec<f64> = (0..runs)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                for k in 1..=frames {
+                    self.submit(k.is_multiple_of(100) || k == frames);
+                }
+                start.elapsed().as_secs_f64() * 1e6 / frames as f64
+            })
+            .collect();
+        times.sort_by(f64::total_cmp);
+        times[runs / 2]
+    }
+
+    fn submit(&mut self, wait: bool) -> PassRecord {
         let mut frame = (self.layers).frame(self.target, &self.projection, self.skip);
         frame.overlay = self.overlay;
         frame.time = self.time;
@@ -754,8 +777,12 @@ impl DemoFrames<'_, '_> {
         let record = (self.renderer)
             .record(&mut cmd, &frame, &self.settings, prepared)
             .unwrap();
-        cmd.submit_and_wait().unwrap();
-        (read_texture(self.gpu, self.target), record)
+        if wait {
+            cmd.submit_and_wait().unwrap();
+        } else {
+            cmd.submit().unwrap();
+        }
+        record
     }
 
     /// The picture a new renderer (shader pack `pack`) gives for the same frame: nothing kept

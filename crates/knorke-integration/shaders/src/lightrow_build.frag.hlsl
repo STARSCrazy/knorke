@@ -30,7 +30,7 @@ struct RowOutput
     float4 second : SV_Target1; // runs 2 and 3
 };
 
-static const int kMaxSteps = 1200;
+static const int kMaxSteps = 4096; // WIDE_REACH / MARCH_STEP of knorke-light2d
 
 static const float3 kNothing = float3(1.0, -1.0, 0.0);
 
@@ -231,8 +231,10 @@ RowOutput main(SurfaceLightVaryings i)
         pass[2] *= pass[3];
     }
     RowOutput o;
-    o.first = float4(PackRun(runs[0], HeightCode), PackRun(runs[1], HeightCode));
-    o.second = float4(PackRun(runs[2], HeightCode), partial ? PackPasses(pass[0], pass[1], pass[2]) : PackRun(runs[3], HeightCode));
+    float scale = RowScale(ROW_SLOT(i));
+    o.first = float4(PackRun(runs[0], HeightCode, scale), PackRun(runs[1], HeightCode, scale));
+    o.second = float4(PackRun(runs[2], HeightCode, scale),
+                      partial ? PackPasses(pass[0], pass[1], pass[2]) : PackRun(runs[3], HeightCode, scale));
     o.first.x = partial ? -1.0 - o.first.x : o.first.x;
     return o;
 }

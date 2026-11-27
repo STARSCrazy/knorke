@@ -20,10 +20,11 @@ mod iso_night;
 
 use demo_scene::{Demo, DemoFrames, H, OUT, Scene, W};
 use knorke_gpu::CommandBuffer;
-use knorke_gpu::test_support::{sampled_rgba8, with_chiaro_pack};
+use knorke_gpu::test_support::{half_to_f32, read_texture, sampled_rgba8, with_chiaro_pack};
 use knorke_integration::layers::{Layer, LayerSet};
 use knorke_integration::light2d::Light2dSettings;
 use knorke_light2d::NoResources;
+use knorke_light2d::frame_warnings::Warning;
 use knorke_light2d::light::{LightDesc, LightType, MaskMode, ShadowFilter};
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc, TileGridDesc};
 use knorke_light2d::settings::{Quality, Resolutions};
@@ -341,42 +342,58 @@ fn a_sun_equals_chiaros_sun_without_obstacles() {
     });
 }
 
-/// The whole demo with opaque obstacles: row lights and Chiaro's lights (a lamp reaching beyond
-/// `MAX_REACH`) in one frame and the same targets.
+/// The whole demo with opaque obstacles: every light is a row light, also a lamp reaching farther
+/// than `MAX_REACH` (its row has 2048 angles); one reaching farther than `WIDE_REACH` is drawn
+/// without shadow and warns (`unshadowed_lights`).
 #[test]
-fn row_lights_and_chiaro_lights_share_a_frame() {
+fn every_light_is_a_row_light_and_one_beyond_a_rows_reach_warns() {
     with_chiaro_pack(|gpu, pack| {
         iso_night::with_demo("hard", 44, "", |demo| {
             demo.with_frames(gpu, pack, &with_rows, &mut |f| {
                 drop_patterns(&mut f.scene);
-                // Every lamp of the demo is a row light; a reach beyond `MAX_REACH` mask texels
-                // keeps one with Chiaro's programs.
                 f.frame();
                 let key = (f.renderer.plan().lights().rows.iter())
                     .find(|l| l.shadowed)
-                    .map(|l| (l.key >> 2) as u32)
+                    .map(|l| l.key)
                     .unwrap();
                 let id = *(f.scene.light_ids.iter())
-                    .find(|id| id.index() == key)
+                    .find(|id| u64::from(id.index()) == key >> 2)
                     .unwrap();
-                f.scene.change_light(id, |d| d.radius = 1000.0);
-                f.settings.light.light_rows = false;
-                let (off, without) = f.frame();
-                f.settings.light.light_rows = true;
-                let (on, with) = f.frame();
-                let (max, mean, share) = diff(&on, &off);
-                let l = with.lighting;
-                eprintln!(
-                    "iso_night_hard, opaque: {} of {} lights are row lights, {} rows built; \
-                     against rows off: largest difference {max}/255, mean {mean:.4}, \
-                     {share:.2} % of the pixels",
-                    l.row_lights, l.lights_drawn, l.rows_built
-                );
-                assert_eq!(l.lights_drawn, without.lighting.lights_drawn);
-                assert!(l.row_lights > 0 && l.row_lights < l.lights_drawn);
-                assert!(l.rows_built > 0 && l.rows_built <= l.row_lights);
-                // Hard shadows of two methods: they differ along the shadow edges only.
-                assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
+                let lamp = |f: &DemoFrames<'_, '_>| {
+                    *(f.renderer.plan().lights().rows.iter())
+                        .find(|l| l.key == key)
+                        .unwrap()
+                };
+                let mut wide = 0.0;
+                for (radius, shadowed) in [(1000.0, false), (0.0, true)] {
+                    // The second radius: 1200 mask texels (reach is radius / texel + 1 + span).
+                    let r = if radius > 0.0 { radius } else { wide };
+                    f.scene.change_light(id, |d| d.radius = r);
+                    f.settings.light.light_rows = false;
+                    let (off, without) = f.frame();
+                    f.settings.light.light_rows = true;
+                    let (on, with) = f.frame();
+                    let row = lamp(f);
+                    wide = 1200.0 * 1000.0 / (row.reach - 1.0);
+                    let (max, mean, share) = diff(&on, &off);
+                    let l = with.lighting;
+                    eprintln!(
+                        "iso_night_hard, opaque, a lamp of radius {r} (reach {} texels): {} of {} \
+                         lights are row lights; against rows off: largest difference {max}/255, \
+                         mean {mean:.4}, {share:.2} % of the pixels",
+                        row.reach, l.row_lights, l.lights_drawn
+                    );
+                    assert_eq!(l.lights_drawn, without.lighting.lights_drawn);
+                    assert_eq!(l.row_lights, l.lights_drawn, "radius {r}");
+                    assert_eq!(row.shadowed, shadowed, "radius {r}");
+                    assert!(row.wide(), "radius {r}");
+                    let warned = with.warnings.contains(Warning::UnshadowedLights);
+                    assert_eq!(warned, !shadowed, "radius {r}");
+                    if shadowed {
+                        // Hard shadows of two methods: they differ along the shadow edges only.
+                        assert!(mean < 1.0 && share < 10.0, "mean {mean}, {share} %");
+                    }
+                }
             });
         });
     });
@@ -814,6 +831,87 @@ fn the_field_is_built_only_for_chiaros_shadows() {
             });
         });
     });
+}
+
+/// Light rows (plan 17.13 L7, part 1b): in every variant of the demo as it is, also panned by a
+/// mask texel, no frame builds the distance field and no light or sun takes a Chiaro shadow
+/// program; the medium stage reads its shaft rows and sun heights from the rows and maps
+/// (`gpu_lightrow_probe.rs` counts the same over its cases). Prints how far the medium's
+/// filtered scatter buffer moves against rows off, where Chiaro marches the field, and with
+/// `KNORKE_PROBE_FRAMES` set the frame times of both (5 runs, median).
+#[test]
+fn rows_build_no_field_and_draw_no_chiaro_shadow() {
+    let frames: usize = std::env::var("KNORKE_PROBE_FRAMES").map_or(0, |v| v.parse().unwrap());
+    let variants = [
+        ("plain", 45, ""),
+        ("hard", 44, ""),
+        ("t5", 44, ""),
+        ("cutaway", 44, "_cutaway"),
+        ("grade_crt", 44, ""),
+    ];
+    with_chiaro_pack(|gpu, pack| {
+        for (variant, hud, suffix) in variants {
+            iso_night::with_demo(variant, hud, suffix, |demo| {
+                demo.with_frames(gpu, pack, &with_rows, &mut |f| {
+                    let scatter = |f: &mut DemoFrames<'_, '_>| {
+                        let (_, record) = f.frame();
+                        let t = f.renderer.plan().medium().filtered();
+                        (record, t.map(|t| read_texture(f.gpu, t)))
+                    };
+                    let (record, on) = scatter(f);
+                    let (shafts, blocks) = (record.medium.shaft_rows, record.medium.sun_blocks);
+                    // And panned by a mask texel.
+                    f.projection.origin = At::new(f.projection.origin.raw() + Vec2::new(2.0, 0.0));
+                    let panned = f.frame().1;
+                    for (i, record) in [record, panned].into_iter().enumerate() {
+                        let (field, chiaro) = (record.mask.field_texels, record.lighting.field_lights);
+                        let (rows, suns) = (record.lighting.row_lights, record.lighting.row_suns);
+                        let m = record.medium;
+                        let (shafts, blocks) = (m.shaft_rows, m.sun_blocks);
+                        eprintln!("iso_night_{variant} frame {i}: {field} field texels, {chiaro} Chiaro shadows, {rows} row lights, {suns} sun maps, {shafts} shaft rows, {blocks} sun blocks");
+                        assert_eq!((field, chiaro), (0, 0), "{variant} frame {i}");
+                    }
+                    let Some(on) = on else { return };
+                    f.projection = demo_projection();
+                    if frames > 0 {
+                        let rows = f.time_frames(frames, 5);
+                        f.settings.light.light_rows = false;
+                        let off = f.time_frames(frames, 5);
+                        eprintln!("iso_night_{variant}: {frames} frames, median us per frame: rows {rows:.1}, rows off {off:.1}");
+                    }
+                    f.settings.light.light_rows = false;
+                    let _ = f.frame();
+                    let (record, off) = scatter(f);
+                    let m = record.medium;
+                    assert_eq!((m.shaft_rows, m.sun_blocks), (shafts, blocks), "{variant}");
+                    let (on, off) = (halves(&on), halves(&off.unwrap()));
+                    let diff: f64 = on.iter().zip(&off).map(|(a, b)| f64::from((a - b).abs())).sum();
+                    let sum: f64 = off.iter().map(|v| f64::from(v.abs())).sum();
+                    let max = on.iter().zip(&off).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+                    let (share, mean) = (100.0 * diff / sum, sum / off.len() as f64);
+                    eprintln!("iso_night_{variant}: filtered scatter, rows against rows off: mean difference {share:.3} % of the mean, largest {max:.4} (mean {mean:.4})");
+                });
+            });
+        }
+    });
+}
+
+/// The demo's camera (`iso_night::with_demo`).
+fn demo_projection() -> knorke_light2d::Projection {
+    knorke_light2d::Projection::iso(At::new(Vec2::new(18.0, 14.0)), 10.0, 1.0, W, H)
+}
+
+/// The rgb halves of an RGBA16F texture as floats.
+fn halves(bytes: &[u8]) -> Vec<f32> {
+    let h = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|b| half_to_f32(u16::from_le_bytes(*b)));
+    h.enumerate()
+        .filter(|(i, _)| i % 4 != 3)
+        .map(|(_, v)| v)
+        .collect()
 }
 
 /// The demo as it is: its moon takes its shadow from a map with the two pattern fences in it

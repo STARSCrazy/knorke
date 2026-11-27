@@ -10,7 +10,8 @@
 //! medium world map dims every light on its way); every obstacle three times as tall, beyond
 //! the rows' old height limit ("hoch"); every lamp 20 times, 260 rows ("viele"); every lamp on a
 //! mast it stands in (`inside_obstacle`, "mast"); every lamp's shadow from the static obstacles
-//! alone, which are all of them (a caster filter, "filter").
+//! alone, which are all of them (a caster filter, "filter"); every lamp reaching 1200 mask
+//! texels, its row of 2048 angles ("weit").
 //!
 //! - Today: [`Light2dRenderer`] with `light_rows` off.
 //! - New: the same with `light_rows` on.
@@ -52,7 +53,7 @@ use knorke_integration::layers::{Layer, LayerSet, Layers};
 use knorke_integration::light2d::{Light2dFrame, Light2dRenderer, Light2dSettings};
 use knorke_light2d::codec::encode_medium_pixel;
 use knorke_light2d::composite::{CompositeFrame, CompositeLight, CompositeStage};
-use knorke_light2d::light::{Height, LightDesc, LightType, ShadowFilter};
+use knorke_light2d::light::{Height, LightDesc, LightId, LightType, ShadowFilter};
 use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
 use knorke_light2d::lighting::{
     LightSurfacePassParams, ShadowDomain, SurfaceParams, ambient_clear, height_tolerance,
@@ -582,7 +583,9 @@ impl<'d> Truth<'d> {
     }
 }
 
-/// Prepares, records and submits one frame of `renderer`.
+/// Prepares, records and submits one frame of `renderer`. With light rows (plan 17.13 L7) no
+/// frame builds the distance field and no light takes a Chiaro shadow program: every probe frame
+/// counts both.
 fn draw(
     gpu: Gpu<'_>,
     renderer: &mut Light2dRenderer<'_>,
@@ -600,6 +603,10 @@ fn draw(
         cmd.submit_and_wait().unwrap();
     } else {
         cmd.submit().unwrap();
+    }
+    if settings.light.light_rows {
+        let (field, chiaro) = (record.mask.field_texels, record.lighting.field_lights);
+        assert_eq!((field, chiaro), (0, 0), "field texels and Chiaro shadows");
     }
     record
 }
@@ -693,7 +700,9 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// 0.683 / 2.35, today 1.719 / 4.77; "mast", every lamp on a mast 0.8 thick up to 1 above it
 /// and marked `inside_obstacle` (E147), hard 0.360 / 0.72, today 1.629 / 2.49, soft
 /// 0.626 / 2.30, today 3.924 / 14.69; "filter", every lamp static-only (E53) and every obstacle
-/// static: the rows as "normal", today as there too (2026-11-27).
+/// static: the rows as "normal", today as there too (2026-11-27). "weit", each lamp reaching
+/// about 1200 mask texels (2048 angles in half texels, `WIDE_REACH`; 2026-11-27): hard
+/// 0.257 / 1.29, today 0.874 / 4.07, soft 1.040 / 3.56, today 1.325 / 5.45.
 ///
 /// Timed 2026-11-27 (240 frames, 5 runs, release, medians in us), today / rows resting / rows
 /// all built / today scrolling / rows scrolling (the camera one mask texel a frame, 30 to and
@@ -711,7 +720,7 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// 386 / 221 / 419 / 432 / 236 (today: the class field). Before (1.9 of 13 rows rebuilt a
 /// frame, the field kept), rows scrolling: "hart normal" 356, "weich normal" 438, "nebel weich"
 /// 581.
-const BOUNDS: [(&str, f64, f64); 19] = [
+const BOUNDS: [(&str, f64, f64); 21] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
     ("weich normal", 0.70, 2.55),
@@ -731,7 +740,13 @@ const BOUNDS: [(&str, f64, f64); 19] = [
     ("mast weich", 0.69, 2.53),
     ("filter hart", 0.39, 0.73),
     ("filter weich", 0.70, 2.55),
+    ("weit hart", 0.28, 1.42),
+    ("weit weich", 1.14, 3.92),
 ];
+
+/// The lamps' radius in "weit" (world units): 1200 mask texels at the probe's shadow
+/// resolution, beyond `MAX_REACH`.
+const WIDE_RADIUS: f32 = 170.0;
 
 /// The facade in "zaun hart" that the spot light beside the lattice tower lights through it
 /// (output pixels x, y, width, height), and the most the rows may differ from the reference
@@ -911,6 +926,8 @@ fn light_rows_against_chiaro_and_the_reference() {
                 (true, 1, Fences::Walls(1.0), "01m", false),
                 (false, 1, Fences::Walls(1.0), "01s", false),
                 (true, 1, Fences::Walls(1.0), "01s", false),
+                (false, 1, Fences::Walls(1.0), "01w", false),
+                (true, 1, Fences::Walls(1.0), "01w", false),
             ]);
         let only = std::env::var("KNORKE_PROBE_ONLY").unwrap_or_default();
         for ((soft, copies, fence, kinds, fog), bound) in scenes.zip(BOUNDS) {
@@ -938,6 +955,13 @@ fn light_rows_against_chiaro_and_the_reference() {
                     d.inside_obstacle = true;
                 }
             }
+            if kinds.ends_with('w') {
+                // Every lamp reaching 1200 mask texels (rows of 2048 angles), a sixth as bright.
+                for d in &mut base {
+                    d.radius = WIDE_RADIUS;
+                    d.intensity /= 6.0;
+                }
+            }
             if kinds.ends_with('s') {
                 // Every lamp's shadow from the static obstacles alone (E53): all of the probe's.
                 for d in &mut base {
@@ -954,7 +978,7 @@ fn light_rows_against_chiaro_and_the_reference() {
                 }
             }
             let (expected, supports) = match kinds {
-                "01" | "01m" | "01s" => (13, 1),
+                "01" | "01m" | "01s" | "01w" => (13, 1),
                 "34" => (4, SUPPORTS),
                 _ => (1, SUPPORTS),
             };
@@ -1237,6 +1261,32 @@ const SUN_LOW_BOUNDS: [[(f64, f64); 2]; 5] = [
     [(0.010, 0.029), (0.009, 0.025)],
 ];
 
+/// As [`SUN_BOUNDS`] for the hard moon as the third sun of its frame ("spät"), per fences and
+/// camera: every sun has a map of the full grid.
+const SUN_LATE_BOUNDS: [[(f64, f64); 2]; 5] = [
+    [(0.045, 0.194), (0.031, 0.132)],
+    [(0.046, 0.188), (0.043, 0.162)],
+    [(0.042, 0.161), (0.034, 0.162)],
+    [(0.126, 0.624), (0.115, 0.589)],
+    [(0.029, 0.095), (0.021, 0.076)],
+];
+
+/// The moon of a sun case in `lights`; `late` ("spät") behind two suns too dim to change a
+/// pixel, so that it is the third sun of its frame.
+fn sky(lights: &mut LightStore, moon: &LightDesc, late: bool) -> LightId {
+    if late {
+        for x in [0.6, -0.6] {
+            let dim = LightDesc {
+                direction: Vec3::new(x, 0.3, -0.75),
+                intensity: 1e-6,
+                ..moon.clone()
+            };
+            lights.create(&dim, &NoResources).unwrap();
+        }
+    }
+    lights.create(moon, &NoResources).unwrap()
+}
+
 /// Radians the moon of the timed case "maps rebuilt" turns to and fro between frames.
 const TURN: f32 = 0.002;
 
@@ -1287,12 +1337,14 @@ fn sun_map_against_chiaro_and_the_reference() {
             direction: Vec3::new(d.x, d.y, 0.2 * d.z.abs()),
             ..hard.clone()
         };
-        let cases = (SUN_FENCES.into_iter().zip(SUN_BOUNDS).zip(SUN_LOW_BOUNDS)).flat_map(
-            |((fences, [hard_bounds, soft_bounds]), low_bounds)| {
+        let fenced = SUN_FENCES.into_iter().zip(SUN_BOUNDS).zip(SUN_LOW_BOUNDS);
+        let cases = fenced.zip(SUN_LATE_BOUNDS).flat_map(
+            |(((fences, [hard_bounds, soft_bounds]), low_bounds), late_bounds)| {
                 [
                     (("hart", &hard), hard_bounds),
                     (("weich", &soft), soft_bounds),
                     (("unten", &low), low_bounds),
+                    (("spät", &hard), late_bounds),
                 ]
                 .map(move |(moon, bounds)| (fences, moon, bounds))
             },
@@ -1302,9 +1354,11 @@ fn sun_map_against_chiaro_and_the_reference() {
             let (_, obstacles, patterns) = parse(&text, false, fence, "2");
             let patterns =
                 (!matches!(fence, Fences::Walls(_) | Fences::Tall(_))).then_some(&patterns);
+            let late = kind == "spät";
             let kind = format!("{fences} {kind}");
             let mut lights = LightStore::new();
-            lights.create(moon, &NoResources).unwrap();
+            sky(&mut lights, moon, late);
+            let suns = if late { 3 } else { 1 };
             for ((camera, [x, y]), (mean_bound, over_bound)) in SUN_CAMERAS.into_iter().zip(bounds)
             {
                 let projection = Projection::iso(At::new(Vec2::new(x, y)), 10.0, 1.0, W, H);
@@ -1316,11 +1370,16 @@ fn sun_map_against_chiaro_and_the_reference() {
                 let old = draw(gpu, &mut r_today, &frame(0), &stores, &today, true).lighting;
                 let now = draw(gpu, &mut r_rows, &frame(1), &stores, &rows, true).lighting;
                 assert_eq!(old.row_suns, 0, "today: Chiaro's moon");
-                assert_eq!((now.row_suns, now.suns_built), (1, 1), "the moon has a map");
+                assert_eq!(
+                    (now.row_suns, now.suns_built),
+                    (suns, suns),
+                    "every sun a map"
+                );
                 let medium = r_rows.plan().medium_map().view().is_some();
                 assert_eq!(medium, fog, "{kind}: the medium world map");
                 let list = r_rows.plan().lights();
-                let (sun, rise) = (list.directional[0], list.directional_rise[0]);
+                let last = list.directional.len() - 1;
+                let (sun, rise) = (list.directional[last], list.directional_rise[last]);
                 assert_eq!(rise > 0.0, moon.source_radius > 0.0, "{kind}: rise {rise}");
                 let params = SunParams::new(
                     &sun,
@@ -1364,7 +1423,7 @@ fn sun_map_against_chiaro_and_the_reference() {
                 if frames > 0 && camera == "A" {
                     let (timed, rebuilt) = time_sun(
                         gpu,
-                        (moon, &obstacles, patterns),
+                        (moon, late, &obstacles, patterns),
                         (&mut r_today, &mut r_rows),
                         (&today, &rows),
                         (layers, &targets),
@@ -1389,6 +1448,43 @@ fn sun_map_against_chiaro_and_the_reference() {
                     );
                 }
                 results.push((name, numbers[0], numbers[1], (mean_bound, over_bound)));
+            }
+        }
+        if frames > 0 {
+            // Suns without a map (the sun programs draw them plain): without shadow, and straight
+            // overhead, over the walls from camera A.
+            let (_, obstacles, _) = parse(&text, false, Fences::Walls(1.0), "2");
+            let flat = LightDesc {
+                cast_shadows: false,
+                ..hard.clone()
+            };
+            let overhead = LightDesc {
+                direction: Vec3::new(0.0, 0.0, -1.0),
+                ..hard.clone()
+            };
+            let [x, y] = SUN_CAMERAS[0].1;
+            let projection = Projection::iso(At::new(Vec2::new(x, y)), 10.0, 1.0, W, H);
+            let frame =
+                |i: usize| clear.frame(targets[i].texture_ref(), &projection, LayerSet::NONE);
+            for (kind, moon) in [("ohne Schatten", &flat), ("senkrecht", &overhead)] {
+                let mut lights = LightStore::new();
+                lights.create(moon, &NoResources).unwrap();
+                let stores = stores_of(&lights, &obstacles, None);
+                let new = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
+                let (mut r_today, mut r_rows) = (new(), new());
+                let (mut old, mut now) = (Vec::new(), Vec::new());
+                for _ in 0..runs {
+                    old.push(time(frames, |wait| {
+                        draw(gpu, &mut r_today, &frame(0), &stores, &today, wait);
+                    }));
+                    now.push(time(frames, |wait| {
+                        let r = draw(gpu, &mut r_rows, &frame(1), &stores, &rows, wait).lighting;
+                        assert_eq!((r.row_suns, r.suns_built), (1, 0), "{kind}: no map");
+                    }));
+                }
+                for (case, list) in [("today", &old), ("rows", &now)] {
+                    let _ = writeln!(report, "{}", summary(&format!("sonne {kind}"), case, list));
+                }
             }
         }
         eprint!("{report}");
@@ -1464,7 +1560,7 @@ fn disc(
 /// how many scrolling frames the map was built whole instead of updated in part.
 fn time_sun(
     gpu: Gpu<'_>,
-    (moon, obstacles, patterns): (&LightDesc, &ObstacleStore, Option<&PatternStore>),
+    (moon, late, obstacles, patterns): (&LightDesc, bool, &ObstacleStore, Option<&PatternStore>),
     (r_today, r_rows): (&mut Light2dRenderer<'_>, &mut Light2dRenderer<'_>),
     (today, rows): (&Light2dSettings, &Light2dSettings),
     (layers, targets): (&Layers<'_>, &[Texture<'_>; 3]),
@@ -1478,10 +1574,11 @@ fn time_sun(
         };
     }
     let mut lights = LightStore::new();
-    lights.create(moon, &NoResources).unwrap();
+    sky(&mut lights, moon, late);
     let stores = stores_of(&lights, obstacles, patterns);
     let mut moving = LightStore::new();
-    let turning = moving.create(moon, &NoResources).unwrap();
+    let turning = sky(&mut moving, moon, late);
+    let suns = if late { 3 } else { 1 };
     let mut step = 0u32;
     let mut timed: [Vec<(f64, f64)>; 6] = Default::default();
     let mut rebuilt = 0;
@@ -1500,7 +1597,7 @@ fn time_sun(
         });
         let rest = time(frames, |wait| {
             let r = draw(gpu, r_rows, &frame!(1, projection), &stores, rows, wait);
-            assert_eq!((r.lighting.row_suns, r.lighting.suns_built), (1, 0));
+            assert_eq!((r.lighting.row_suns, r.lighting.suns_built), (suns, 0));
         });
         let built = time(frames, |wait| {
             step += 1;
@@ -1514,7 +1611,7 @@ fn time_sun(
             moving.update(turning, &desc, &NoResources).unwrap();
             let stores = stores_of(&moving, obstacles, patterns);
             let r = draw(gpu, r_rows, &frame!(1, projection), &stores, rows, wait);
-            assert_eq!((r.lighting.row_suns, r.lighting.suns_built), (1, 1));
+            assert_eq!((r.lighting.row_suns, r.lighting.suns_built), (suns, 1));
         });
         if !step.is_multiple_of(2) {
             // Back to the resting moon, untimed.
@@ -1540,7 +1637,7 @@ fn time_sun(
                 let p = scrolled(k, sign);
                 let f = frame!(1, &p);
                 let r = draw(gpu, r_rows, &f, &stores, rows, wait).lighting;
-                assert_eq!((r.row_suns, r.suns_built + r.suns_updated), (1, 1));
+                assert_eq!((r.row_suns, r.suns_built + r.suns_updated), (suns, suns));
                 rebuilt += r.suns_built;
             });
             // Back, untimed (a jump that far builds the map whole).

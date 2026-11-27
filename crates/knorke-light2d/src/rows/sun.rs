@@ -2,7 +2,8 @@
 //! built once instead of Chiaro's march per pixel through the distance field.
 //!
 //! The map lies over the occlusion mask turned to the sun: a texel is [`SUN_ALONG`] mask texels
-//! long toward the sun and [`SUN_ACROSS`] across. Per texel it holds the receiver heights a ray
+//! long toward the sun and [`SUN_ACROSS`] across, coarser for masks whose map would exceed
+//! [`MAX_SUN_TEXELS`] ([`SunGrid::steps`]). Every sun of a frame has a map. Per texel it holds the receiver heights a ray
 //! toward the sun from the texel's middle finds shadowed, merged into two intervals (more are
 //! hulled); a pixel reads the nearest texel and moves its height exactly along the light, so only
 //! the offset across the light (at most an eighth of a texel) is an error. Measured against an
@@ -36,16 +37,19 @@ use crate::gpu_light::GpuDirectional;
 use crate::light_culling::Casters;
 use crate::shadow::DirtyRectList;
 
-/// Most suns with a map per frame; further ones stay with Chiaro's programs.
-pub const MAX_SUNS: usize = 2;
-/// Mask texels a map texel spans toward the sun.
+/// Mask texels a map texel spans toward the sun (the least).
 pub const SUN_ALONG: f32 = 1.0;
-/// Mask texels a map texel spans across the sun's direction.
+/// Mask texels a map texel spans across the sun's direction (the least).
 pub const SUN_ACROSS: f32 = 0.25;
-/// Longest side of a map in texels (the map spans the mask's diagonal both ways); larger masks
-/// keep their suns with Chiaro's programs. The build marches at most 4096 texels
-/// (`kMaxSteps` in `lightrow_sun_build.frag`), more than such a mask's width plus height.
-pub const MAX_SUN_MAP: u32 = 8192;
+/// Most texels of a map: a mask whose map would hold more takes texels twice as wide across
+/// until it fits. With every target (a soft sun's ends and partly transparent runs) a texel is
+/// 56 bytes: at most 448 MiB a map, 128 MiB for a hard sun over opaque obstacles. Masks up to
+/// 1000 x 1000 keep the full grid; the demo's (480 x 340) needs 1.39 M texels, 21 MiB hard.
+pub const MAX_SUN_TEXELS: u64 = 1 << 23;
+/// Longest side of a map in texels (the longest texture side D3D12 guarantees): a longer map
+/// takes texels twice as long toward the sun. The build marches at most 32768 mask texels
+/// (`kMaxSteps` in `lightrow_sun_build.frag`), more than any mask's width plus height.
+pub const MAX_SUN_SIDE: u32 = 16384;
 /// Texels before the receiver that do not count as occluders (Chiaro's trace: 1).
 const SUN_RECEIVER_GAP: f32 = 1.0;
 
@@ -85,20 +89,39 @@ pub fn mask_offset(snapped: [i32; 2]) -> [i32; 2] {
 }
 
 impl SunGrid {
-    /// Map size for a mask of `mask` texels: its diagonal along and across, and a texel on
-    /// each side for the lattice not being centred.
-    pub fn size_of(mask: [u32; 2]) -> [u32; 2] {
+    /// Mask texels a map texel spans along and across over a mask of `mask` texels:
+    /// [`SUN_ALONG`] and [`SUN_ACROSS`], doubled until the map fits [`MAX_SUN_SIDE`] and
+    /// [`MAX_SUN_TEXELS`].
+    pub fn steps(mask: [u32; 2]) -> [f32; 2] {
+        let budget = MAX_SUN_TEXELS;
+        let mut steps = [SUN_ALONG, SUN_ACROSS];
+        loop {
+            let [w, h] = Self::size_of(mask, steps);
+            if w > MAX_SUN_SIDE {
+                steps[0] *= 2.0;
+            } else if h > MAX_SUN_SIDE || u64::from(w) * u64::from(h) > budget {
+                steps[1] *= 2.0;
+            } else {
+                return steps;
+            }
+        }
+    }
+
+    /// Map size for a mask of `mask` texels with texels of `steps` ([`steps`](Self::steps)):
+    /// its diagonal along and across, and a texel on each side for the lattice not being centred.
+    pub fn size_of(mask: [u32; 2], steps: [f32; 2]) -> [u32; 2] {
         let [w, h] = mask.map(|v| v as f32);
         let diagonal = (w * w + h * h).sqrt();
-        [SUN_ALONG, SUN_ACROSS].map(|step| (diagonal / step).ceil() as u32 + 2)
+        steps.map(|step| (diagonal / step).ceil() as u32 + 2)
     }
 
     /// The grid over a mask of `mask` texels anchored at `snapped` for the unit direction `d`
-    /// toward the sun (mask texels).
-    pub fn new(mask: [u32; 2], d: [f32; 2], snapped: [i32; 2]) -> Self {
-        let size = Self::size_of(mask);
-        let a = [d[0] * SUN_ALONG, d[1] * SUN_ALONG];
-        let b = [-d[1] * SUN_ACROSS, d[0] * SUN_ACROSS];
+    /// toward the sun (mask texels), with texels of `steps`.
+    pub fn new(mask: [u32; 2], d: [f32; 2], snapped: [i32; 2], steps: [f32; 2]) -> Self {
+        let size = Self::size_of(mask, steps);
+        let [along, across] = steps;
+        let a = [d[0] * along, d[1] * along];
+        let b = [-d[1] * across, d[0] * across];
         let (a64, b64) = (a.map(f64::from), b.map(f64::from));
         let offset = mask_offset(snapped);
         // The mask's middle in world texels, in lattice coordinates.
@@ -154,7 +177,8 @@ uniform_block! {
         /// The bits of `i32`s: xy [`SunGrid::corner`], zw [`SunGrid::offset`].
         pub lattice: [f32; 4],
         /// x 1: the map keeps partly transparent runs (the build reads the mask's opacity), y 1:
-        /// the build reads the pattern ids too ([`SunParams::with_partial`]).
+        /// the build reads the pattern ids too ([`SunParams::with_partial`]); zw the grid's
+        /// [`SunGrid::steps`] (not read by the shaders).
         pub partial: [f32; 4],
     }
 }
@@ -172,7 +196,8 @@ impl SunParams {
         top: f32,
     ) -> Self {
         let [x, y, slope, _] = light.dir_slope;
-        let g = SunGrid::new(mask, [x, y], snapped);
+        let steps = SunGrid::steps(mask);
+        let g = SunGrid::new(mask, [x, y], snapped, steps);
         let bits = |v: i32| f32::from_bits(v as u32);
         Self {
             light: *light,
@@ -187,30 +212,31 @@ impl SunParams {
             // slope. A ray that does not rise walks until it leaves the mask.
             build: [
                 SUN_RECEIVER_GAP,
-                -slope.abs() * SUN_ALONG - 0.1,
+                -slope.abs() * steps[0] - 0.1,
                 rise,
                 det::max(slope - rise, 0.5 * slope),
             ],
             lattice: [g.corner[0], g.corner[1], g.offset[0], g.offset[1]].map(bits),
-            partial: [0.0; 4],
+            partial: [0.0, 0.0, steps[0], steps[1]],
         }
     }
 
     /// The block for a mask with partly transparent obstacles (`partial`) and pattern obstacles
     /// (`patterns`, only with `partial`).
     pub fn with_partial(mut self, partial: bool, patterns: bool) -> Self {
-        self.partial = [
-            f32::from(u8::from(partial)),
-            f32::from(u8::from(partial && patterns)),
-            0.0,
-            0.0,
-        ];
+        self.partial[0] = f32::from(u8::from(partial));
+        self.partial[1] = f32::from(u8::from(partial && patterns));
         self
     }
 
     /// The map keeps partly transparent runs: its build draws two more targets.
     pub fn partial(&self) -> bool {
         self.partial[0] > 0.0
+    }
+
+    /// The grid's [`SunGrid::steps`].
+    pub fn steps(&self) -> [f32; 2] {
+        [self.partial[2], self.partial[3]]
     }
 
     /// Mask texels a ray from a map texel walks at most toward the sun: until it rises above the
@@ -245,6 +271,8 @@ pub struct SunSource {
     partial: f32,
     /// Whose heights (E53): another class builds the map anew.
     casters: Casters,
+    /// [`SunGrid::steps`]: other steps build the map anew.
+    steps: [f32; 2],
 }
 
 impl SunSource {
@@ -258,6 +286,7 @@ impl SunSource {
             heights: [params.domain[2], params.domain[3]],
             partial: params.partial[0],
             casters: Casters::All,
+            steps: params.steps(),
         }
     }
 
@@ -272,7 +301,10 @@ impl Source for SunSource {
     /// everywhere or too many redrawn rectangles build the map anew; a pan or redrawn rectangles
     /// update it.
     fn refresh(&self, now: &Self, change: MaskChange<'_>) -> Refresh<Self> {
-        let same = self.aim == now.aim && self.size == now.size && self.heights == now.heights;
+        let same = self.aim == now.aim
+            && self.size == now.size
+            && self.heights == now.heights
+            && self.steps == now.steps;
         if !same || self.partial != now.partial || self.casters != now.casters {
             return Refresh::Build;
         }
@@ -357,8 +389,8 @@ pub fn sun_bands(
     out.area = 0.0;
     let [x, y, _, _] = now.light.dir_slope;
     let mask = after.size;
-    let g = SunGrid::new(mask, [x, y], after.snapped);
-    let old = SunGrid::new(mask, [x, y], before.snapped);
+    let g = SunGrid::new(mask, [x, y], after.snapped, after.steps);
+    let old = SunGrid::new(mask, [x, y], before.snapped, after.steps);
     let size = g.size.map(f64::from);
 
     // Lattice texels new to the map: the strips the shift of the corner uncovered.
@@ -537,15 +569,41 @@ mod tests {
         assert!(!sun_plain(&sun(1.0, 0.0, 0.0)), "on the horizon");
     }
 
+    const FINE: [f32; 2] = [SUN_ALONG, SUN_ACROSS];
+
+    #[test]
+    fn large_masks_take_coarser_grids_within_the_budget() {
+        for mask in [[480, 340], [1000, 1000]] {
+            assert_eq!(SunGrid::steps(mask), FINE, "{mask:?}: the full grid");
+        }
+        for mask in [[1100, 1100], [4096, 2304], [16384, 16384]] {
+            let steps = SunGrid::steps(mask);
+            let [w, h] = SunGrid::size_of(mask, steps);
+            assert!(w <= MAX_SUN_SIDE && h <= MAX_SUN_SIDE, "{mask:?} {steps:?}");
+            assert!(
+                u64::from(w) * u64::from(h) <= MAX_SUN_TEXELS,
+                "{mask:?} {steps:?}"
+            );
+            // No coarser than needed: half as wide across would not fit.
+            let finer = SunGrid::size_of(mask, [steps[0], steps[1] * 0.5]);
+            assert!(
+                steps[1] > SUN_ACROSS
+                    && (finer[1] > MAX_SUN_SIDE
+                        || u64::from(finer[0]) * u64::from(finer[1]) > MAX_SUN_TEXELS),
+                "{mask:?} {steps:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_grid_is_fixed_in_the_world_and_covers_the_mask() {
         let mask = [480, 340];
         let d = sun(3.0, -4.0, 1.0).dir_slope;
         for snapped in [[0, 0], [37, -5], [-1000, 77]] {
-            let g = SunGrid::new(mask, [d[0], d[1]], snapped);
+            let g = SunGrid::new(mask, [d[0], d[1]], snapped, FINE);
             assert_eq!(g.size, [591, 2355]);
             assert_eq!(
-                SunGrid::size_of(mask),
+                SunGrid::size_of(mask, FINE),
                 g.size,
                 "independent of the direction"
             );
@@ -576,8 +634,8 @@ mod tests {
         // The lattice stays in the world: a pan moves the corner by whole lattice texels and the
         // origin by the pan.
         let (g, h) = (
-            SunGrid::new(mask, [d[0], d[1]], [0, 0]),
-            SunGrid::new(mask, [d[0], d[1]], [37, -5]),
+            SunGrid::new(mask, [d[0], d[1]], [0, 0], FINE),
+            SunGrid::new(mask, [d[0], d[1]], [37, -5], FINE),
         );
         let shift = [h.corner[0] - g.corner[0], h.corner[1] - g.corner[1]];
         for k in 0..2 {
@@ -675,7 +733,7 @@ mod tests {
         };
         let (params, before) = at([0, 0]);
         let total = {
-            let s = SunGrid::size_of(mask);
+            let s = SunGrid::size_of(mask, FINE);
             u64::from(s[0]) * u64::from(s[1])
         };
         let mut out = SunBands::default();

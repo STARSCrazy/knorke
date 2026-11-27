@@ -31,7 +31,7 @@ use crate::light_culling::{Casters, LightModes};
 use crate::light_program::{LightSampler, LightStorage, LightUniform};
 use crate::lighting::{Resources, ShadowMaps, bind_named, height_tolerance};
 use crate::medium_culling::{
-    MediumLightList, MediumSun, collect_medium_lights, collect_medium_suns,
+    MediumLightList, MediumSun, Shafts, collect_medium_lights, collect_medium_suns,
 };
 use crate::medium_map::{
     MediumMapParams, MediumMapView, MediumParams, MediumProgram, medium_layout_of, medium_params,
@@ -39,6 +39,7 @@ use crate::medium_map::{
 use crate::medium_table::MediumTable;
 use crate::profile_store::ProfileStore;
 use crate::projection::Projection;
+use crate::rows::RowLights;
 use crate::settings::LightSettings;
 
 /// Recording without a prepare of the frame, or a target or pipeline is missing after it.
@@ -131,6 +132,9 @@ pub struct MediumStageFrame<'a> {
     pub pure_ambient: Option<TextureRef<'a>>,
     /// The flat directional sum of the zones.
     pub zone_directional: Vec3,
+    /// With light rows: the light pass's rows and sun maps (prepared, and recorded before this
+    /// stage), which the shaft rows and sun heights are read from instead of the distance field.
+    pub rows: Option<&'a RowLights<'a>>,
 }
 
 /// The lights of a frame's medium stage, read by [`MediumStage::prepare`] only.
@@ -193,6 +197,8 @@ pub struct MediumStage<'d> {
     base_zones: bool,
     /// `Some` after a prepare of a frame that runs the stage.
     prepared: Option<Prepared>,
+    /// The prepared frame reads its shaft rows and sun heights from the light rows.
+    from_rows: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -259,6 +265,7 @@ impl<'d> MediumStage<'d> {
             sizes: [0.0; 4],
             base_zones: false,
             prepared: None,
+            from_rows: false,
         })
     }
 
@@ -306,6 +313,7 @@ impl<'d> MediumStage<'d> {
         atlases: &mut LightAtlases<'d>,
     ) -> Result<u32, Diagnostic> {
         self.prepared = None;
+        self.from_rows = frame.is_some_and(|f| f.rows.is_some());
         let Some(f) = frame.filter(|f| medium_runs(f.settings, f.layer.is_some())) else {
             self.release();
             return Ok(0);
@@ -428,7 +436,11 @@ impl<'d> MediumStage<'d> {
             return Ok(0);
         }
         let has_field = |c: Casters| c.filter_index().is_none_or(|i| s.casters[i].is_some());
-        plan_shafts(&self.shafts, has_field, &mut self.rows);
+        let traced = |sh: &Shafts| match f.rows {
+            Some(rows) => rows.row_of(sh.key).is_some(),
+            None => has_field(sh.casters),
+        };
+        plan_shafts(&self.shafts, traced, &mut self.rows);
         for r in 0..self.rows.len() {
             let light = self.rows[r].light as usize;
             self.light_mut(light).shadow[0] = (r + 1) as f32; // row + 1 (medium_light.vert)
@@ -439,11 +451,13 @@ impl<'d> MediumStage<'d> {
         // Rows grow, never shrink: a frame with fewer shaft lights keeps the atlas.
         let height = self.polar.height().max(self.rows.len() as u32);
         let created = u32::from(self.polar.ensure(POLAR_ANGLES, height, POLAR_FORMAT)?);
-        self.pipelines.get(
-            shaders,
-            index(MediumProgram::Polar),
-            format_of(MediumProgram::Polar),
-        )?;
+        if f.rows.is_none() {
+            self.pipelines.get(
+                shaders,
+                index(MediumProgram::Polar),
+                format_of(MediumProgram::Polar),
+            )?;
+        }
         let [x, y] = mask_rows(f.projection, &s.domain, s.remainder);
         self.query = PolarQueryParams {
             mask_x: [x[0], x[1], x[2], 0.0],
@@ -485,12 +499,15 @@ impl<'d> MediumStage<'d> {
         let shafts = f.settings.haze.shafts
             && f.shadows
                 .is_some_and(|s| s.height_mode && s.scene_max_top > 0.0);
-        let has_heights = |c: Casters| {
-            c.filter_index().is_none_or(|i| {
+        let has_heights = |sun: &MediumSun| {
+            let class = sun.casters.filter_index().is_none_or(|i| {
                 f.shadows
                     .and_then(|s| s.casters[i])
                     .is_some_and(|m| m.height.is_some())
-            })
+            });
+            // With rows: from its map, or straight overhead from the heights.
+            let overhead = sun.to_light.x == 0.0 && sun.to_light.y == 0.0;
+            class && f.rows.is_none_or(|r| overhead || r.has_sun_map(sun.key))
         };
         self.block = plan_suns(
             &self.suns,
@@ -512,11 +529,13 @@ impl<'d> MediumStage<'d> {
             .height()
             .max(self.block.1 * self.blocks.len() as u32);
         let created = u32::from(self.sun_heights.ensure(width, height, SUN_HEIGHT_FORMAT)?);
-        self.pipelines.get(
-            shaders,
-            index(MediumProgram::SunHeight),
-            format_of(MediumProgram::SunHeight),
-        )?;
+        if f.rows.is_none() {
+            self.pipelines.get(
+                shaders,
+                index(MediumProgram::SunHeight),
+                format_of(MediumProgram::SunHeight),
+            )?;
+        }
         finish_suns(
             &mut self.sun_params,
             mask_rows(f.projection, &s.domain, s.remainder),
@@ -532,9 +551,10 @@ impl<'d> MediumStage<'d> {
         self.prepared.is_some()
     }
 
-    /// The prepared frame reads the occlusion field: it builds shaft rows or sun shadow heights.
+    /// The prepared frame reads the occlusion field: it builds shaft rows or sun shadow heights
+    /// without light rows.
     pub fn reads_field(&self) -> bool {
-        self.is_active() && !(self.rows.is_empty() && self.blocks.is_empty())
+        self.is_active() && !self.from_rows && !(self.rows.is_empty() && self.blocks.is_empty())
     }
 
     /// The composite's input of the prepared frame; `None` if the stage does not run.
@@ -622,7 +642,7 @@ impl<'d> MediumStage<'d> {
             out.draws += self.record_shafts(cmd, samplers, frame, s)?;
         }
         if let (Some(s), false) = (frame.shadows, self.blocks.is_empty()) {
-            out.draws += self.record_sun_heights(cmd, samplers, s)?;
+            out.draws += self.record_sun_heights(cmd, samplers, s, frame.rows)?;
         }
         let scene = frame.scene;
         let no_map = MediumMapParams::default().to_bytes();
@@ -820,6 +840,16 @@ impl<'d> MediumStage<'d> {
             .texture_ref()
             .ok_or_else(|| missing("the polar atlas"))?;
         let mut pass = cmd.render_pass(&[ColorTarget::new(polar, Load::DontCare)])?;
+        if let Some(rows) = frame.rows {
+            for (r, row) in self.rows.iter().enumerate() {
+                let light = self.light(row.light as usize);
+                let length = polar_row(&self.query, light, false)[3];
+                pass.set_viewport(&viewport(0.0, r as f32, POLAR_ANGLES as f32, 1.0));
+                let height = light.position_radius[2];
+                rows.record_polar(&mut pass, samplers, row.shafts.key, height, length)?;
+            }
+            return Ok(self.rows.len() as u32);
+        }
         let program = MediumProgram::Polar;
         let pipeline = self.pipeline(program)?;
         let layout = medium_layout_of(program);
@@ -870,12 +900,22 @@ impl<'d> MediumStage<'d> {
         cmd: &mut CommandBuffer<'_>,
         samplers: &Samplers<'_>,
         s: &ShadowMaps<'_>,
+        rows: Option<&RowLights<'_>>,
     ) -> Result<u32, Diagnostic> {
         let target = self
             .sun_heights
             .texture_ref()
             .ok_or_else(|| missing("the sun height atlas"))?;
         let mut pass = cmd.render_pass(&[ColorTarget::new(target, Load::DontCare)])?;
+        let (bw, bh) = self.block;
+        if let Some(rows) = rows {
+            for (b, block) in self.blocks.iter().enumerate() {
+                pass.set_viewport(&viewport(0.0, (b as u32 * bh) as f32, bw as f32, bh as f32));
+                let key = self.suns[block.sun as usize].key;
+                rows.record_sun_height(&mut pass, samplers, s, key, block.casters)?;
+            }
+            return Ok(self.blocks.len() as u32);
+        }
         let program = MediumProgram::SunHeight;
         let pipeline = self.pipeline(program)?;
         let layout = medium_layout_of(program);
@@ -893,8 +933,8 @@ impl<'d> MediumStage<'d> {
             ],
         };
         let mut res = Resources::new(SamplerBinding::new(s.mask, nearest));
-        let (bw, bh) = self.block;
         for (b, block) in self.blocks.iter().enumerate() {
+            pass.set_viewport(&viewport(0.0, (b as u32 * bh) as f32, bw as f32, bh as f32));
             let maps = s.maps(block.casters)?;
             let height = maps
                 .height
@@ -904,7 +944,6 @@ impl<'d> MediumStage<'d> {
             res.set(LightSampler::OcclusionHeight, Some(height), nearest);
             params.march = block.march;
             let bytes = params.to_bytes();
-            pass.set_viewport(&viewport(0.0, (b as u32 * bh) as f32, bw as f32, bh as f32));
             let extra = Some((LightUniform::SunHeight, &bytes[..]));
             bind_named(&mut pass, pipeline, &program, &layout, &res, None, extra)?;
             pass.draw_fullscreen()?;

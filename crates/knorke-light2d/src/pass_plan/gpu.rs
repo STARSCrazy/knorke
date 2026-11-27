@@ -381,6 +381,7 @@ fn medium_frame<'a>(
             None
         },
         zone_directional: lit.zone_directional,
+        rows: frame_suits(settings).then(|| lighting.rows()),
     }
 }
 
@@ -893,6 +894,7 @@ impl<'d> PassPlan<'d> {
             unreachable_lights: self.lights.unreachable_lights,
             facing_away_lights: self.lights.facing_away_lights,
             thin_obstacles: self.thin_obstacles,
+            unshadowed_lights: self.lights.shadowless_rows,
             zone_height_spans: if frame.surface.is_some() {
                 0
             } else {

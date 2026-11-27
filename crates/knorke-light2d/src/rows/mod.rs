@@ -16,8 +16,8 @@
 //! This is the transition of plan 17.13: with [`LightSettings::light_rows`] the pass plan draws
 //! every light [`light_suits`] accepts in a frame [`frame_suits`] accepts with the row
 //! programs, and every directional light with the sun programs: from a map, or without one if
-//! [`sun_plain`]; the lights beyond the rows' limits ([`MAX_REACH`], [`MAX_ROWS`], [`MAX_SUNS`])
-//! stay with Chiaro's programs in the same pass and targets.
+//! [`sun_plain`]. A light beyond what a row reaches ([`WIDE_REACH`]) or the atlas's slots
+//! ([`MAX_ROWS`]) is drawn without shadow; nothing stays with Chiaro's programs.
 //!
 //! | Part | Content |
 //! |---|---|
@@ -35,8 +35,8 @@ mod sun;
 #[cfg(feature = "gpu")]
 pub use gpu::{ROWS_INPUT_MISSING, RowLights, RowsRecord};
 pub use sun::{
-    MAX_SUN_BANDS, MAX_SUN_MAP, MAX_SUNS, SUN_ACROSS, SUN_ALONG, SunBands, SunGrid, SunParams,
-    SunSource, mask_offset, sun_bands, sun_plain,
+    MAX_SUN_BANDS, MAX_SUN_SIDE, MAX_SUN_TEXELS, SUN_ACROSS, SUN_ALONG, SunBands, SunGrid,
+    SunParams, SunSource, mask_offset, sun_bands, sun_plain,
 };
 
 use knorke_math::uniform_block;
@@ -55,12 +55,24 @@ use crate::shadow::{DirtyRectList, OcclusionDomain};
 pub const ROW_ANGLES: u32 = 1024;
 /// Step of the row build's march in mask texels.
 pub const MARCH_STEP: f32 = 0.5;
-/// Longest reach of a row lamp in mask texels: the build marches at most 1200 steps
-/// (`kMaxSteps` in `lightrow_build.frag`), and a row stores distances up to 1023.75.
+/// Longest reach of a row lamp with [`ROW_ANGLES`] in mask texels (a step of 2π / 1024 at 600
+/// texels is 3.7 texels across). A lamp reaching farther has [`WIDE_ANGLES`].
 pub const MAX_REACH: f32 = 600.0;
-/// Most rows of the atlas (its height: the longest texture side D3D12 guarantees), so most
-/// shadow-casting row lights of a frame (line and rect lights take [`SUPPORTS`]); further ones
-/// stay with Chiaro's programs. The atlas grows to the rows a frame needs.
+/// Angles of the row of a lamp reaching farther than [`MAX_REACH`] (ADR 0019: by reach). Its row
+/// fills a whole line of the atlas (two slots) and stores distances in half texels.
+pub const WIDE_ANGLES: u32 = 2048;
+/// Longest reach of a row lamp in mask texels: a wide row stores distances up to 2047.5, the
+/// build marches at most 4096 steps (`kMaxSteps` in `lightrow_build.frag`). A lamp reaching
+/// farther casts no shadow ([`light_suits`], [`UNSHADOWED`](crate::frame_warnings::Warning)).
+pub const WIDE_REACH: f32 = 2047.0;
+/// Width of the row, edge and crossing atlases in texels: two slots of [`ROW_ANGLES`] a line.
+pub const ATLAS_WIDTH: u32 = 2048;
+/// Added to a wide lamp's slot in [`RowLamp::row`] and a line or rect light's profile
+/// (`kWideSlot` in `lightrow.hlsli`).
+pub const WIDE_SLOT: f32 = 32768.0;
+/// Most slots of the atlas (two a line of [`ATLAS_WIDTH`]), so most shadow-casting row lights of
+/// a frame (line and rect lights take [`SUPPORTS`], wide lamps two each); further ones cast no
+/// shadow. The atlas grows to the slots a frame needs.
 pub const MAX_ROWS: u32 = 16384;
 /// Obstacle tops from here on (world units) are infinitely tall to a row whose heights are in
 /// hundredths, 12-bit numbers (`PackRun` in `lightrow.hlsli`); taller frames take a coarser
@@ -126,16 +138,17 @@ const SUPPORT_TS: [[[f32; 2]; 4]; 2] = [
     [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]],
 ];
 
-/// Whether a light can be a row light in a frame [`frame_suits`] accepts: a point, spot, line or
-/// rect light (masks only point and spot lights have); if it casts shadows with a reach
-/// ([`RowLight::reach`]) of at most [`MAX_REACH`] mask texels.
+/// Whether a row light's shadow fits a row: a point, spot, line or rect light (masks only point
+/// and spot lights have) with a reach ([`RowLight::reach`]) of at most [`WIDE_REACH`] mask texels.
+/// One that does not, and one beyond the atlas's [`MAX_ROWS`], is drawn without shadow (warning
+/// `unshadowed_lights`).
 /// Animation, flicker, a turning cone, a profile and a mask change nothing a row holds. A caster
 /// filter (E53) builds the row from its class's mask, which changes only where the mask of all
 /// casters does. A lamp in an obstacle (E147, `inside_obstacle`) is one too: every row skips the
 /// obstacle a lamp's height lies in, as far as it reaches (Chiaro's marked light at most 64
 /// texels).
 pub fn light_suits(d: &LightDesc, reach: f32) -> bool {
-    d.kind != LightType::Directional && (!d.cast_shadows || reach <= MAX_REACH)
+    d.kind != LightType::Directional && (!d.cast_shadows || reach <= WIDE_REACH)
 }
 
 /// The ground plane as the rows see it: mask texels to world units.
@@ -249,6 +262,16 @@ impl RowLight {
         }
     }
 
+    /// Its rows have [`WIDE_ANGLES`]: it reaches farther than [`MAX_REACH`].
+    pub fn wide(&self) -> bool {
+        self.reach > MAX_REACH
+    }
+
+    /// Atlas slots it needs this frame: its rows, two each if [`wide`](Self::wide).
+    pub fn slots(&self) -> u32 {
+        self.rows() << u32::from(self.wide())
+    }
+
     /// The lamp whose row is the `k`-th of this light: itself, or for a line or rect light a
     /// hard lamp at support point `k`, reaching [`row_span`] farther (its own key, ground point,
     /// height and radius, so the cache tells its row apart).
@@ -318,6 +341,29 @@ uniform_block! {
 }
 
 uniform_block! {
+    /// `cbuffer PolarRowsParams` of `lightrow_polar.frag` (a medium shaft row read from a row).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct PolarRowsParams[48] {
+        /// y rows of the atlas.
+        pub row_size: [f32; 4],
+        /// [`height_code`].
+        pub heights: [f32; 4],
+        /// x the lamp's row (slot code), y its height, z the march length in mask texels.
+        pub lamp: [f32; 4],
+    }
+}
+
+uniform_block! {
+    /// `cbuffer SunHeightRowsParams` of `lightrow_sun_height.frag` (medium sun heights read from
+    /// a sun map).
+    #[derive(Clone, Copy, Debug, Default, PartialEq)]
+    pub struct SunHeightRowsParams[16] {
+        /// x 1: straight overhead, from the heights (no map); yz the mask size in texels.
+        pub column: [f32; 4],
+    }
+}
+
+uniform_block! {
     /// `cbuffer LookupParams` of `lightrow_surface.hlsli`.
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
     pub struct RowLookupParams[64] {
@@ -355,7 +401,7 @@ impl RowEdgeParams {
     /// ([`height_code`]).
     pub fn new(space: &RowSpace, rows: u32, heights: [f32; 4]) -> Self {
         Self {
-            row_size: [ROW_ANGLES as f32, rows as f32, EDGE_WIDTH, 0.0],
+            row_size: [ATLAS_WIDTH as f32, rows as f32, EDGE_WIDTH, 0.0],
             near: [
                 space.shortest * core::f32::consts::TAU / ROW_ANGLES as f32,
                 EDGE_NEAR,
@@ -378,7 +424,7 @@ impl RowLookupParams {
         heights: [f32; 4],
     ) -> Self {
         Self {
-            row_size: [ROW_ANGLES as f32, rows as f32, RECEIVER_GAP, tolerance],
+            row_size: [ATLAS_WIDTH as f32, rows as f32, RECEIVER_GAP, tolerance],
             domain: [mask[0] as f32, mask[1] as f32, 0.0, 0.0],
             world_from_mask: space.world_from_mask,
             heights,
@@ -491,6 +537,8 @@ struct Slot<S> {
 }
 
 const FREE: u64 = u64::MAX;
+/// Marks the second slot of a wide owner: its key with this bit.
+const PARTNER: u64 = 1 << 62;
 
 /// Which owner has which slot and whether the slot is still right: the rows of the row atlas
 /// ([`RowCache`]) and the maps of the suns ([`SunCache`]).
@@ -511,7 +559,7 @@ pub struct SlotCache<S> {
 
 /// Which lamp has which row of the atlas (at most [`MAX_ROWS`]).
 pub type RowCache = SlotCache<RowSource>;
-/// Which sun has which shadow map (at most [`MAX_SUNS`]).
+/// Which sun has which shadow map (any number).
 pub type SunCache = SlotCache<SunSource>;
 
 impl<S> SlotCache<S> {
@@ -536,7 +584,7 @@ impl Default for RowCache {
 
 impl Default for SunCache {
     fn default() -> Self {
-        Self::new(MAX_SUNS)
+        Self::new(usize::MAX)
     }
 }
 
@@ -574,30 +622,60 @@ impl<S: Source> SlotCache<S> {
         }
     }
 
-    /// The slot of owner `key` this frame and what it needs to hold `now`. An owner keeps its
-    /// slot from one frame to the next; a frame it sat out may have changed the mask unseen, so
-    /// its slot is built anew then. A new owner takes a slot never used, else the one unused for
-    /// longest. `None` if all slots are taken by owners of this frame.
-    fn take(&mut self, key: u64, now: S, change: MaskChange<'_>) -> Option<(u32, Refresh<S>)> {
+    /// The slot of owner `key` this frame and what it needs to hold `now`; a `wide` owner takes
+    /// an even slot and the next one too. An owner keeps its slot from one frame to the next; a
+    /// frame it sat out may have changed the mask unseen, so its slot is built anew then. A new
+    /// owner takes a slot never used, else the one (pair) unused for longest. `None` if all slots
+    /// are taken by owners of this frame.
+    fn take(
+        &mut self,
+        key: u64,
+        now: S,
+        change: MaskChange<'_>,
+        wide: bool,
+    ) -> Option<(u32, Refresh<S>)> {
         let frame = self.frame;
-        let at = match self.find(key) {
+        let width = 1 + usize::from(wide);
+        let fits = |slots: &[Slot<S>], at: usize| {
+            at.is_multiple_of(width)
+                && (!wide || slots.get(at + 1).is_some_and(|p| p.key == key | PARTNER))
+        };
+        let found = self.find(key);
+        let at = match found.filter(|&at| fits(&self.slots, at)) {
             Some(at) => at,
-            None if self.slots.len() < self.capacity => {
-                self.slots.push(Slot {
-                    key: FREE,
-                    built: None,
-                    used: 0,
-                });
-                self.slots.len() - 1
-            }
             None => {
-                let (at, oldest) = self.slots.iter().enumerate().min_by_key(|(_, s)| s.used)?;
-                if oldest.used == frame {
-                    return None;
+                if let Some(old) = found {
+                    self.slots[old].key = FREE; // its width changed
                 }
-                at
+                let start = self.slots.len().next_multiple_of(width);
+                if start + width <= self.capacity {
+                    let fresh = || Slot {
+                        key: FREE,
+                        built: None,
+                        used: 0,
+                    };
+                    self.slots.resize_with(start + width, fresh);
+                    start
+                } else {
+                    let used =
+                        |at: usize| (self.slots[at..at + width].iter()).map(|s| s.used).max();
+                    let (at, oldest) = (0..self.slots.len() + 1 - width)
+                        .step_by(width)
+                        .map(|at| (at, used(at).unwrap_or(0)))
+                        .min_by_key(|&(_, u)| u)?;
+                    if oldest == frame {
+                        return None;
+                    }
+                    at
+                }
             }
         };
+        if wide {
+            let partner = &mut self.slots[at + 1];
+            partner.key = key | PARTNER;
+            partner.built = None;
+            partner.used = frame;
+        }
         let slot = &mut self.slots[at];
         if slot.key != key || slot.used + 1 != frame {
             // Another owner's slot, a frame sat out, or asked twice in a frame: nothing to keep.
@@ -609,7 +687,7 @@ impl<S: Source> SlotCache<S> {
         slot.built = Some(now);
         slot.key = key;
         slot.used = frame;
-        self.next = at + 1;
+        self.next = at + width;
         Some((at as u32, refresh))
     }
 
@@ -623,21 +701,22 @@ impl RowCache {
     /// The row of `light` this frame and whether it must be built (see `take`); `None` if all
     /// [`MAX_ROWS`] rows are taken by lamps of this frame.
     pub fn assign(&mut self, light: &RowLight, mask: &RowMask<'_>) -> Option<(u32, bool)> {
-        let (row, refresh) = self.take(light.key, RowSource::new(light, mask), mask.change)?;
+        let now = RowSource::new(light, mask);
+        let (row, refresh) = self.take(light.key, now, mask.change, light.wide())?;
         Some((row, refresh != Refresh::Keep))
     }
 }
 
 impl SunCache {
     /// The map of sun `key` this frame and what it needs to hold `now` (see `take`); `None` if
-    /// all [`MAX_SUNS`] maps are taken by suns of this frame.
+    /// all maps are taken by suns of this frame (never: there are as many as suns).
     pub fn assign(
         &mut self,
         key: u64,
         now: SunSource,
         change: MaskChange<'_>,
     ) -> Option<(u32, Refresh<SunSource>)> {
-        self.take(key, now, change)
+        self.take(key, now, change, false)
     }
 }
 
@@ -693,7 +772,8 @@ mod tests {
 
         let point = LightDesc::new(LightType::Point);
         assert!(light_suits(&point, 100.0));
-        assert!(!light_suits(&point, MAX_REACH + 1.0), "reach");
+        assert!(light_suits(&point, WIDE_REACH), "wide");
+        assert!(!light_suits(&point, WIDE_REACH + 1.0), "reach");
         let spot = LightDesc {
             kind: LightType::Spot,
             flicker: 0.5,
@@ -736,7 +816,7 @@ mod tests {
             cast_shadows: false,
             ..point
         };
-        assert!(light_suits(&unshadowed, MAX_REACH + 1.0));
+        assert!(light_suits(&unshadowed, WIDE_REACH + 1.0));
     }
 
     #[test]

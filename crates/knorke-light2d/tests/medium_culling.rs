@@ -196,7 +196,8 @@ fn shaft_entries_follow_the_lights_and_the_list_keeps_its_capacity() {
             None,
             Some(Shafts {
                 casters: Casters::Static,
-                inside: true
+                inside: true,
+                key: 4, // the second light's row key
             }),
             None
         ]
@@ -270,7 +271,8 @@ fn masked_lights_go_to_their_own_list_and_windows_get_no_shafts() {
         [
             Some(Shafts {
                 casters: Casters::All,
-                inside: false
+                inside: false,
+                key: 0,
             }),
             None
         ]

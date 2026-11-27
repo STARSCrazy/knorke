@@ -28,7 +28,7 @@ cbuffer SurfaceParams : register(b0, space3)
 // `RowLookupParams` of knorke-light2d.
 cbuffer LookupParams : register(b1, space3)
 {
-    float4 RowSize;       // x angles, y rows of the row atlas, z texels before the receiver that do not count
+    float4 RowSize;       // y lines of the row atlas, z texels before the receiver that do not count
                           // (Chiaro: 1), w tolerance below a top (Chiaro's HeightParams.y)
     float4 Domain;        // xy mask size in texels, w lightrow_truth.frag: lamp points per axis
     float4 WorldFromMask; // world = (dot(xy, m), dot(zw, m)) for a vector m in mask texels

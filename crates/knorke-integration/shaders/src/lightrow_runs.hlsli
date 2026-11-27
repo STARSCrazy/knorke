@@ -1,5 +1,5 @@
 // Light rows (ADR 0019): reading a lamp's row. The including program declares RowFirst, RowSecond
-// with their samplers, RowSize (x angles, y lamps) and HeightCode (lightrow.hlsli) before.
+// with their samplers, RowSize (y lines of the atlas) and HeightCode (lightrow.hlsli) before.
 #ifndef KNORKE_LIGHTROW_RUNS_HLSLI
 #define KNORKE_LIGHTROW_RUNS_HLSLI
 
@@ -7,16 +7,16 @@
 // PackPasses in lightrow.hlsli). No extra read: the mark rides in the two texels.
 void Runs(float a, float row, out float4 runs[kRuns], out float4 pass)
 {
-    a -= RowSize.x * floor(a / RowSize.x);
-    float2 uv = float2((a + 0.5) / RowSize.x, (row + 0.5) / RowSize.y);
+    float2 uv = RowUV(a, row, RowSize.y);
+    float scale = RowScale(row);
     float4 first = RowFirst.SampleLevel(RowFirstSampler, uv, 0.0);
     float4 second = RowSecond.SampleLevel(RowSecondSampler, uv, 0.0);
     bool partial = first.x < 0.0;
     first.x = partial ? -1.0 - first.x : first.x;
-    runs[0] = UnpackRun(first.xy, HeightCode);
-    runs[1] = UnpackRun(first.zw, HeightCode);
-    runs[2] = UnpackRun(second.xy, HeightCode);
-    runs[3] = partial ? float4(0.0, 0.0, 0.0, 0.0) : UnpackRun(second.zw, HeightCode);
+    runs[0] = UnpackRun(first.xy, HeightCode, scale);
+    runs[1] = UnpackRun(first.zw, HeightCode, scale);
+    runs[2] = UnpackRun(second.xy, HeightCode, scale);
+    runs[3] = partial ? float4(0.0, 0.0, 0.0, 0.0) : UnpackRun(second.zw, HeightCode, scale);
     float b = second.z;
     pass = partial ? float4(fmod(b, 256.0), fmod(floor(b / 256.0), 256.0), floor(b / 65536.0), 0.0) / 255.0
                    : float4(0.0, 0.0, 0.0, 0.0);

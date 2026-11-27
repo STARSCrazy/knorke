@@ -22,7 +22,7 @@ StructuredBuffer<uint> PatternData : register(t4, space2);
 // `RowLookupParams` of knorke-light2d.
 cbuffer LookupParams : register(b0, space3)
 {
-    float4 RowSize; // x angles, y rows of the atlas
+    float4 RowSize; // y lines of the atlas
     float4 Domain;  // xy mask size in texels
     float4 WorldFromMask;
     float4 HeightCode; // how the rows store heights (PackRun in lightrow.hlsli)
@@ -42,8 +42,9 @@ cbuffer PatternParams : register(b1, space3)
 
 float4 main(SurfaceLightVaryings i) : SV_Target0
 {
-    float a = floor(i.scene.x * RowSize.x);
-    float angle = (a + 0.5) / RowSize.x * kTwoPi; // as the build's ray
+    float angles = RowAngles(ROW_SLOT(i));
+    float a = floor(i.scene.x * angles);
+    float angle = (a + 0.5) / angles * kTwoPi; // as the build's ray
     float2 dir = float2(cos(angle), sin(angle));
     float2 lamp = ROW_GROUND(i);
     float4 runs[kRuns];

@@ -17,8 +17,8 @@ SamplerState RowSecondSampler : register(s1, space2); // nearest
 
 cbuffer EdgeParams : register(b0, space3)
 {
-    float4 RowSize; // x angles, y lamps, z most angles walked to each side (below kEdgeFar)
-    float4 Near;    // x lamp size (world) per angle of penumbra behind an obstacle one texel away, y the distance
+    float4 RowSize; // y lines of the atlas, z most angles walked to each side (below kEdgeFar)
+    float4 Near;    // x lamp size (world) per angle of 1024 of penumbra behind an obstacle one texel away, y the distance
                     // in texels from which on a penumbra is whole: nearer obstacles get theirs cut
     float4 HeightCode; // how the row stores heights (PackRun in lightrow.hlsli)
 };
@@ -33,7 +33,8 @@ struct EdgeOutput
 
 EdgeOutput main(SurfaceLightVaryings i)
 {
-    float a = floor(i.scene.x * RowSize.x);
+    float angles = RowAngles(ROW_SLOT(i));
+    float a = floor(i.scene.x * angles);
     float4 own[kRuns];
     float4 pass;
     Runs(a, ROW_SLOT(i), own, pass);
@@ -47,7 +48,7 @@ EdgeOutput main(SurfaceLightVaryings i)
     // A lamp point at the lamp's rim sees past an outline d texels away size / d off the middle ray: no penumbra
     // reaches farther across. A run is followed that far; a run this angle does not hold is looked for as far as
     // one Near.y texels away would matter.
-    float reach = ROW_SIZE(i) / Near.x;
+    float reach = ROW_SIZE(i) / (Near.x * 1024.0 / angles);
     int width = int(min(RowSize.z, ceil(reach / Near.y)));
     float same[2][kRuns];
     float where = 0.0;
@@ -114,6 +115,7 @@ EdgeOutput main(SurfaceLightVaryings i)
     o.first = float4(same[0][0] + 64.0 * same[1][0] + 4096.0 * (same[0][1] + 64.0 * same[1][1]),
                      same[0][2] + 64.0 * same[1][2] + 4096.0 * (same[0][3] + 64.0 * same[1][3]),
                      away[0] + 64.0 * away[1], where);
-    o.second = float4(PackRun(strange[0], HeightCode), PackRun(strange[1], HeightCode));
+    float scale = RowScale(ROW_SLOT(i));
+    o.second = float4(PackRun(strange[0], HeightCode, scale), PackRun(strange[1], HeightCode, scale));
     return o;
 }

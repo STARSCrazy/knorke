@@ -82,11 +82,15 @@ pub enum Warning {
     AmbientZoneHeights,
     /// Circle obstacles thinner than one occlusion mask texel.
     ThinObstacles,
+    /// Shadow-casting lights drawn without shadow: reaching farther than a light row
+    /// (`rows::WIDE_REACH`) or beyond the row atlas's slots (`rows::MAX_ROWS`). Reported
+    /// whatever the debug checks.
+    UnshadowedLights,
 }
 
 impl Warning {
     /// Every kind, in the order of [`WarningSet::iter`].
-    pub const ALL: [Warning; 9] = [
+    pub const ALL: [Warning; 10] = [
         Self::StaleLayers,
         Self::HalfAlpha,
         Self::BlownOutHighlights,
@@ -96,6 +100,7 @@ impl Warning {
         Self::FacingAwayLights,
         Self::AmbientZoneHeights,
         Self::ThinObstacles,
+        Self::UnshadowedLights,
     ];
 
     const fn bit(self) -> u16 {
@@ -114,6 +119,7 @@ impl Warning {
             Self::FacingAwayLights => "knorke.light2d.warning.facing_away_lights",
             Self::AmbientZoneHeights => "knorke.light2d.warning.ambient_zone_heights",
             Self::ThinObstacles => "knorke.light2d.warning.thin_obstacles",
+            Self::UnshadowedLights => "knorke.light2d.warning.unshadowed_lights",
         })
     }
 
@@ -128,12 +134,18 @@ impl Warning {
             | Self::FacingAwayLights
             | Self::AmbientZoneHeights => DebugChecks::LIGHTS,
             Self::ThinObstacles => DebugChecks::OBSTACLES,
+            Self::UnshadowedLights => DebugChecks::NONE,
         }
     }
 
     /// What is wrong and what to do about it.
     pub const fn message(self) -> &'static str {
         match self {
+            Self::UnshadowedLights => {
+                "shadow-casting lights were drawn without shadow: they reach farther than 2047 \
+                 occlusion mask texels, or the frame needs more than 16384 light rows; lower \
+                 their radius, the shadow resolution or the number of shadowed lights"
+            }
             Self::StaleLayers => {
                 "layers were rendered without being cleared since the last frame, so they hold \
                  the previous frame's content; clear them every frame"
@@ -254,6 +266,8 @@ pub struct FrameFindings {
     pub thin_obstacles: u32,
     /// Visible ambient zones with a height span in a frame without a surface buffer.
     pub zone_height_spans: u32,
+    /// Shadow-casting lights drawn without shadow (`LightList::shadowless_rows`).
+    pub unshadowed_lights: u32,
 }
 
 /// Turns the findings of frames into [`WarningSet`]s and remembers which kinds were seen.
@@ -340,6 +354,9 @@ impl FrameWarnings {
                 w.insert(Warning::ThinObstacles);
             }
         }
+        if f.unshadowed_lights > 0 {
+            w.insert(Warning::UnshadowedLights);
+        }
         self.pending = WarningSet::EMPTY;
         self.warnings = w;
         self.new = w.without(self.reported);
@@ -391,7 +408,7 @@ mod tests {
         for (checks, expect) in [
             (DebugChecks::LAYERS, &Warning::ALL[..4]),
             (DebugChecks::LIGHTS, &Warning::ALL[4..8]),
-            (DebugChecks::OBSTACLES, &Warning::ALL[8..]),
+            (DebugChecks::OBSTACLES, &Warning::ALL[8..9]),
         ] {
             f.checks = checks;
             f.gpu_findings = Warning::ALL[..4].iter().copied().collect();
@@ -476,6 +493,8 @@ mod tests {
         codes.dedup();
         assert_eq!(codes.len(), Warning::ALL.len());
         assert!(Warning::ALL.iter().all(|w| !w.message().is_empty()));
-        assert!(Warning::ALL.iter().all(|w| w.check().any()));
+        // Every kind but the unshadowed lights (always reported) follows a check.
+        let unchecked = Warning::ALL.iter().filter(|w| !w.check().any());
+        assert!(unchecked.eq([&Warning::UnshadowedLights]));
     }
 }

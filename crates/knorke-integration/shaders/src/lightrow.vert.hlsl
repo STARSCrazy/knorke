@@ -1,5 +1,6 @@
 // Light rows (ADR 0019): one instance per lamp for every row program.
-//   AtlasRows > 0  row build and edge pass: the lamp's row of the atlas, scene.x the angle as a fraction of the turn
+//   AtlasRows > 0  row build and edge pass: the lamp's row of the atlas (lightrow.hlsli: RowTexel), scene.x the angle
+//                  as a fraction of the turn
 //   AtlasRows = 0  light: the scene rectangle the lamp can reach, scene the scene pixel
 // CHI_LIGHT_MASK (lightrow_mask.vert, with CHI_POINT_LIGHTS as Chiaro's `_mask` programs): the mask instead of the
 // area light fields.
@@ -19,7 +20,7 @@ cbuffer LightRowPass : register(b0, space1)
     float4 YAxisSceneSize; // xy y axis, zw scene size in pixels
     float4 ZAxisMaxHeight; // xy z axis, z highest height a lit pixel can have
     uint InstanceOffset;   // index of this draw's first lamp in Lamps
-    uint AtlasRows;        // height of the row atlas in texels; 0 draws the light
+    uint AtlasRows;        // lines of the row atlas; 0 draws the light
     uint2 Pad;
 };
 
@@ -63,7 +64,9 @@ VSOutput main(uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID)
         o.areaMask = lamp.windowV;
 #endif
         o.scene = corner;
-        o.position = float4(corner.x * 2.0 - 1.0, 1.0 - 2.0 * (lamp.row.x + corner.y) / float(AtlasRows), 0.0, 1.0);
+        float2 first = RowTexel(0.0, lamp.row.x); // the row's first texel; its angles follow to the right
+        float x = first.x + corner.x * RowAngles(lamp.row.x);
+        o.position = float4(x / kAtlasWidth * 2.0 - 1.0, 1.0 - 2.0 * (first.y + corner.y) / float(AtlasRows), 0.0, 1.0);
         return o;
     }
     float g = light.spotCos.z;

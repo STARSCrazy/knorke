@@ -89,8 +89,7 @@ float4 Crossings(float a, float row, float4 pass)
     if (PatternAtlasSize.z <= 0.0 || all(pass <= 0.0)) {
         return float4(0.0, 0.0, 0.0, 0.0);
     }
-    a -= RowSize.x * floor(a / RowSize.x);
-    return RowCross.SampleLevel(RowCrossSampler, float2((a + 0.5) / RowSize.x, (row + 0.5) / RowSize.y), 0.0);
+    return RowCross.SampleLevel(RowCrossSampler, RowUV(a, row, RowSize.y), 0.0);
 }
 
 // slope: the ray's height at distance q from the lamp is zl - slope * q.
@@ -241,9 +240,10 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
     float through = Through(runs, pass, Crossings(a, ROW_SLOT(l), pass), ROW_GROUND(l), toPlace / r, zl, (zl - z) / r,
                             r, false);
     OpaqueOnly(runs, pass);
-    float2 uv = float2((a + 0.5) / RowSize.x, (ROW_SLOT(l) + 0.5) / RowSize.y);
+    float2 uv = RowUV(a, ROW_SLOT(l), RowSize.y);
     float4 first = EdgeFirst.SampleLevel(EdgeFirstSampler, uv, 0.0);
-    float angle = kTwoPi / RowSize.x;
+    float angle = kTwoPi / RowAngles(ROW_SLOT(l));
+    float scale = RowScale(ROW_SLOT(l));
     float left[kRuns];
     float right[kRuns];
     float share[kRuns];
@@ -274,13 +274,13 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
         float2 middle = float2(0.5, 0.5);
         if (away.x > 0.0) {
             float2 angles = float2(-kFar, (1.0 - away.x - f) * angle);
-            float3 part = Part(Clip(UnpackRun(second.xy, HeightCode), from), angles, middle, zl, size, wide, z, r);
+            float3 part = Part(Clip(UnpackRun(second.xy, HeightCode, scale), from), angles, middle, zl, size, wide, z, r);
             begin.x = -part.y;
             other.x = part.z;
         }
         if (away.y > 0.0) {
             float2 angles = float2((away.y - f) * angle, kFar);
-            float3 part = Part(Clip(UnpackRun(second.zw, HeightCode), from), angles, middle, zl, size, wide, z, r);
+            float3 part = Part(Clip(UnpackRun(second.zw, HeightCode, scale), from), angles, middle, zl, size, wide, z, r);
             begin.y = part.x;
             other.y = part.z;
         }
@@ -306,7 +306,7 @@ float HardSight(float2 ground, float zl, float row, float2 start, float z, float
     if (r < 1e-3) {
         return 1.0;
     }
-    float a = floor(frac(atan2(d.y, d.x) / kTwoPi) * RowSize.x);
+    float a = floor(frac(atan2(d.y, d.x) / kTwoPi) * RowAngles(row));
     float4 runs[kRuns];
     float4 pass;
     Runs(a, row, runs, pass);
@@ -330,7 +330,7 @@ float Sight(SurfaceLightVaryings l, float2 start, float z, float r, float from)
     }
 #endif
     float2 d = start - ROW_GROUND(l);
-    float turn = frac(atan2(d.y, d.x) / kTwoPi) * RowSize.x; // texel a holds the ray at a + 0.5
+    float turn = frac(atan2(d.y, d.x) / kTwoPi) * RowAngles(ROW_SLOT(l)); // texel a holds the ray at a + 0.5
     if (ROW_SIZE(l) > 0.0) {
         return SoftSight(l, d, turn, z, r, from);
     }

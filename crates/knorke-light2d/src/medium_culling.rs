@@ -34,6 +34,7 @@ use crate::light_culling::{
 use crate::light_mask::{make_gpu_mask, make_mask_placement};
 use crate::light_math::{SceneQuad, ground_radius, quad_intersects_scene};
 use crate::mask::mask_atlas_blocks;
+use crate::rows::row_key;
 use crate::{LightStore, Projection};
 use knorke_math::{At, Screen, Vec2, Vec3, det};
 
@@ -44,6 +45,8 @@ pub struct Shafts {
     pub casters: Casters,
     /// The light sits inside an obstacle (E147).
     pub inside: bool,
+    /// Its [`row_key`]: with light rows its shaft row is read from its row.
+    pub key: u64,
 }
 
 /// The lights of one medium stage, the ground-side lists parallel to the shaft entries.
@@ -181,6 +184,7 @@ pub fn collect_medium_lights(
         let shafts = Shafts {
             casters: casters_of(d),
             inside: d.inside_obstacle,
+            key: row_key(light_ref),
         };
         if let Some(block) = mask_block {
             let Some(placement) = make_mask_placement(stored, z) else {
@@ -208,6 +212,8 @@ pub struct MediumSun {
     pub shadows: bool,
     /// Which obstacles cast its shadow (E53); [`Casters::All`] without `shadows`.
     pub casters: Casters,
+    /// Its [`row_key`]: with light rows its shadow heights are read from its sun map.
+    pub key: u64,
 }
 
 /// Fills `out` with every enabled directional light with `haze > 0` that its animation does not
@@ -243,6 +249,7 @@ pub fn collect_medium_suns(
             to_light: -animated.stored.direction,
             shadows,
             casters: if shadows { casters_of(d) } else { Casters::All },
+            key: row_key(light_ref),
         });
     }
 }

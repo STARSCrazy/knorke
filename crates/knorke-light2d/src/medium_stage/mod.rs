@@ -201,17 +201,18 @@ pub struct ShaftRow {
     pub shafts: Shafts,
 }
 
-/// The shaft rows of a frame (Chiaro `PrepareShafts`): one per light with [`Shafts`] whose
-/// caster class has a field this frame (`has_field`), in light order. The light of row `r`
+/// The shaft rows of a frame (Chiaro `PrepareShafts`): one per light with [`Shafts`] that can
+/// be traced this frame (`traced`: its caster class has a field, or with light rows the light a
+/// row), in light order. The light of row `r`
 /// then carries `shadow[0] = r + 1` (`medium_light.vert`); the others scatter unshaded.
 pub fn plan_shafts<'a>(
     shafts: impl IntoIterator<Item = &'a Option<Shafts>>,
-    has_field: impl Fn(Casters) -> bool,
+    traced: impl Fn(&Shafts) -> bool,
     rows: &mut Vec<ShaftRow>,
 ) {
     rows.clear();
     for (i, s) in shafts.into_iter().enumerate() {
-        if let Some(s) = s.filter(|s| has_field(s.casters)) {
+        if let Some(s) = s.filter(|s| traced(s)) {
             rows.push(ShaftRow {
                 light: i as u32,
                 shafts: s,
@@ -263,7 +264,7 @@ pub fn plan_suns(
     settings: &LightSettings,
     shadows: Option<&SunShadows>,
     shafts: bool,
-    has_heights: impl Fn(Casters) -> bool,
+    has_heights: impl Fn(&MediumSun) -> bool,
     params: &mut Vec<SunParams>,
     blocks: &mut Vec<SunBlock>,
 ) -> (u32, u32) {
@@ -291,7 +292,7 @@ pub fn plan_suns(
             to_light: [s.to_light.x, s.to_light.y, s.to_light.z, top],
             ..Default::default()
         };
-        if s.shadows && blocks.len() < max_blocks && has_heights(s.casters) {
+        if s.shadows && blocks.len() < max_blocks && has_heights(s) {
             // Like the directional light (E24): moving 1 toward the light moves the ground
             // point by (lx, ly) in the world and by m in the mask; the ray rises lz / |m| per
             // mask texel.
@@ -386,6 +387,7 @@ mod tests {
         Some(Shafts {
             casters,
             inside: false,
+            key: 0,
         })
     }
 
@@ -398,7 +400,7 @@ mod tests {
             shafts(Casters::Static),
         ];
         let mut rows = Vec::new();
-        plan_shafts(&entries, |c| c != Casters::Dynamic, &mut rows);
+        plan_shafts(&entries, |s| s.casters != Casters::Dynamic, &mut rows);
         assert_eq!(rows.iter().map(|r| r.light).collect::<Vec<_>>(), [0, 3]);
     }
 
@@ -423,6 +425,7 @@ mod tests {
             to_light: Vec3::new(0.6, 0.0, z),
             shadows,
             casters,
+            key: 0,
         }
     }
 
@@ -453,7 +456,7 @@ mod tests {
             &settings,
             Some(&s),
             true,
-            |c| c != Casters::Dynamic,
+            |s| s.casters != Casters::Dynamic,
             &mut params,
             &mut blocks,
         );

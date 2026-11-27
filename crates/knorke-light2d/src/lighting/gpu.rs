@@ -249,8 +249,12 @@ pub struct LightingRecord {
     pub row_lights: u32,
     /// Light rows built this frame; 0 while lamps and obstacles rest.
     pub rows_built: u32,
-    /// Directional lights drawn with a sun map (not in `lights_drawn`, as Chiaro's).
+    /// Directional lights drawn by the sun programs, with a map or without one
+    /// (`rows::sun_plain`); not in `lights_drawn`, as Chiaro's.
     pub row_suns: u32,
+    /// Lights and suns drawn by a Chiaro program that traces its shadow through the distance
+    /// field; none in a row frame (`LightSettings::light_rows`).
+    pub field_lights: u32,
     /// Sun maps built whole this frame; 0 while suns and obstacles rest.
     pub suns_built: u32,
     /// Sun maps updated in part this frame (a pan, redrawn rectangles).
@@ -620,6 +624,12 @@ impl<'d> LightingStage<'d> {
     /// Whether the prepared frame draws a light with a program that reads the occlusion field:
     /// Chiaro's, not the row lights or a sun map.
     pub fn reads_field(&self) -> bool {
+        self.field_lights() > 0
+    }
+
+    /// The lights and suns of the prepared frame that a program reading the occlusion field
+    /// draws ([`LightingRecord::field_lights`]).
+    fn field_lights(&self) -> u32 {
         let reads = |p: Option<LightProgram>| {
             p.is_some_and(|p| {
                 light_layout_of(p)
@@ -628,9 +638,17 @@ impl<'d> LightingStage<'d> {
             })
         };
         let rows = self.rows.frame();
-        let chiaro_suns = self.draws.directional > rows.suns + rows.plain_suns;
-        (self.draws.draws().iter()).any(|d| d.count > 0 && reads(self.programs[slot(d.program)]))
-            || (chiaro_suns && reads(self.programs[DIRECTIONAL]))
+        let chiaro_suns = (self.draws.directional).saturating_sub(rows.suns + rows.plain_suns);
+        let lights = (self.draws.draws().iter())
+            .filter(|d| reads(self.programs[slot(d.program)]))
+            .map(|d| d.count)
+            .sum::<u32>();
+        lights
+            + if reads(self.programs[DIRECTIONAL]) {
+                chiaro_suns
+            } else {
+                0
+            }
     }
 
     /// The program the prepared frame uses for `p`, if it draws any.
@@ -915,6 +933,7 @@ impl<'d> LightingStage<'d> {
         self.record_rings(cmd, samplers, frame, light, true, &mut record)?;
         record.lights_drawn = count + rows.lights;
         record.shadow_lights = d.shadow_lights();
+        record.field_lights = self.field_lights();
         Ok(record)
     }
 

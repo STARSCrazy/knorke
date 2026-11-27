@@ -35,7 +35,7 @@ cbuffer SunParams : register(b0, space3)
 };
 
 static const int kSlots = 2;
-static const int kMaxSteps = 4096; // above mask width plus height (MAX_SUN_MAP in knorke-light2d)
+static const int kMaxSteps = 32768; // above any mask's width plus height (MAX_SUN_SIDE in knorke-light2d)
 
 struct MapOutput
 {
