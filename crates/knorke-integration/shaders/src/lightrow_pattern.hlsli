@@ -60,10 +60,20 @@ struct GpuPatternObstacle
 #if defined(ROW_PATTERN_GEOMETRY) && !defined(KNORKE_LIGHTROW_PATTERN_GEOMETRY)
 #define KNORKE_LIGHTROW_PATTERN_GEOMETRY
 
-float2 PatternToLocal(GpuPatternObstacle o, float2 mask)
+// The world ground point of mask point p, and the world vector of mask vector d.
+float2 PatternWorld(float2 p)
 {
-    float2 d = float2(dot(PatternMaskToWorldX.xyz, float3(mask, 1.0)), dot(PatternMaskToWorldY.xyz, float3(mask, 1.0)))
-               - o.transform.xy;
+    return float2(dot(PatternMaskToWorldX.xyz, float3(p, 1.0)), dot(PatternMaskToWorldY.xyz, float3(p, 1.0)));
+}
+
+float2 PatternWorldStep(float2 d)
+{
+    return float2(dot(PatternMaskToWorldX.xy, d), dot(PatternMaskToWorldY.xy, d));
+}
+
+float2 PatternToLocal(GpuPatternObstacle o, float2 world)
+{
+    float2 d = world - o.transform.xy;
     return float2(o.transform.z * d.x + o.transform.w * d.y, -o.transform.w * d.x + o.transform.z * d.y);
 }
 
@@ -146,18 +156,19 @@ void PatternCellPiece(bool whole, int k, float2 lo, float2 hi, float2 w, out flo
     }
 }
 
-// Where the ray lamp + dir * q (mask texels) enters obstacle `id` (1 + index into PatternObstacles) coming back from
+// Where the ray lamp + step * q (world ground points; q in mask texels, `step` the world vector of one along the
+// ray: PatternWorld, PatternWorldStep) enters obstacle `id` (1 + index into PatternObstacles) coming back from
 // qFar towards qNear, as Chiaro's ray from a receiver beyond does: (q of that point, u along the outline, the
 // entered cell of a tile grid as a float, else 0). Without an entry (the piece starts inside, or the mask's texels
 // hold more than the outline), u of the outline point nearest to qNear and qNear, as Chiaro's fallback. A grid's
 // cells are sought within half the piece of its middle (at most kPatternGridReach cells to each side; with cells
 // far smaller than a texel the nearest found stands in, as in Chiaro); a whole cell reads u along the entered side
 // as a box does, an x strip u = y and a y strip u = x, in grid coordinates.
-float3 PatternExit(uint id, float2 lamp, float2 dir, float qNear, float qFar)
+float3 PatternExit(uint id, float2 lamp, float2 step, float qNear, float qFar)
 {
     GpuPatternObstacle o = PatternObstacles[id - 1u];
-    float2 a = PatternToLocal(o, lamp + dir * qFar);
-    float2 b = PatternToLocal(o, lamp + dir * qNear);
+    float2 a = PatternToLocal(o, lamp + step * qFar);
+    float2 b = PatternToLocal(o, lamp + step * qNear);
     float2 d = b - a;
     float t = 2.0; // above 1: no entry
     float u = 0.0;
@@ -280,27 +291,64 @@ bool PatternIsFinite(float x)
     return (asuint(x) & 0x7F800000u) != 0x7F800000u;
 }
 
-// SamplePattern on the atlas: u, v in repeats; without height the column mean at u. [0, 1].
-float SamplePatternAtlas(GpuPattern p, float u, float v, bool hasHeight)
+static const float kPatternReach = 2.5; // widest filter half-width in texels: at most 6 x 6 reads
+
+// The part of texel i (covering [i, i + 1)) inside the box [x - h, x + h].
+float PatternBoxWeight(int i, float x, float h)
 {
-    float fu = PatternIsFinite(u) ? u - floor(u) : 0.0;
-    int w = int(p.rect.z);
-    int x = clamp(int(fu * float(w)), 0, w - 1);
-    if (!hasHeight) {
-        return FetchTexel(PatternAtlas, PatternAtlasSampler, int2(p.mean.xy) + int2(x, 0), PatternAtlasSize.xy).r;
+    return max(min(float(i + 1), x + h) - max(float(i), x - h), 0.0);
+}
+
+// i wrapped into [0, n).
+int PatternWrap(int i, int n)
+{
+    return i - n * int(floor(float(i) / float(n)));
+}
+
+// SamplePattern on the atlas: u, v in repeats; without height the column mean at u. [0, 1]. Chiaro reads the nearest
+// texel, whose cells stand out as steps where a shadow magnifies them; this is the box mean of the texels over
+// [u - blur.x, u + blur.x] x [v - blur.y, v + blur.y] (blur in repeats), widened to at least one texel: with blur 0
+// exactly the bilinear interpolation. Its half-width sqrt(blur^2 + 1/4) texels keeps the spread of a box of the blur
+// seen through that interpolation, as the reference's lamp points each interpolating. u wraps with the repeat, v
+// too where the pattern repeats upright, else it stops at the obstacle's ends. A box that covers the whole repeat
+// height is the column mean; narrower ones are cut to kPatternReach (less blurred, never banded). The wrap steps
+// along instead of taking remainders: integer division is slow on GPUs and this runs per pattern crossing.
+float SamplePatternAtlas(GpuPattern p, float u, float v, bool hasHeight, float2 blur)
+{
+    int2 size = int2(p.rect.zw);
+    float2 h = sqrt(blur * blur * float2(size * size) + 0.25);
+    hasHeight = hasHeight && 2.0 * h.y < float(size.y);
+    h = min(h, kPatternReach);
+    float2 at = float2(PatternIsFinite(u) ? u - floor(u) : 0.0, PatternIsFinite(v) ? v - floor(v) : 0.0)
+                * float2(size);
+    int2 lo = int2(floor(at - h));
+    int2 n = int2(floor(at + h)) - lo + 1;
+    n.y = hasHeight ? n.y : 1;
+    int2 first = int2(PatternWrap(lo.x, size.x), PatternWrap(lo.y, size.y));
+    float sum = 0.0;
+    int y = first.y;
+    [loop] for (int j = 0; j < n.y; ++j) {
+        float wy = hasHeight ? PatternBoxWeight(lo.y + j, at.y, h.y) : 1.0;
+        int fromBottom = p.repeat.y > 0.0 ? y : clamp(lo.y + j, 0, size.y - 1);
+        int2 row = hasHeight ? int2(p.rect.xy) + int2(0, size.y - 1 - fromBottom) : int2(p.mean.xy);
+        int x = first.x;
+        [loop] for (int i = 0; i < n.x; ++i) {
+            sum += wy * PatternBoxWeight(lo.x + i, at.x, h.x)
+                   * FetchTexel(PatternAtlas, PatternAtlasSampler, row + int2(x, 0), PatternAtlasSize.xy).r;
+            x = x + 1 == size.x ? 0 : x + 1;
+        }
+        y = y + 1 == size.y ? 0 : y + 1;
     }
-    float fv = PatternIsFinite(v) ? v - floor(v) : 0.0;
-    int h = int(p.rect.w);
-    int fromBottom = clamp(int(fv * float(h)), 0, h - 1);
-    return FetchTexel(PatternAtlas, PatternAtlasSampler, int2(p.rect.xy) + int2(x, h - 1 - fromBottom),
-                      PatternAtlasSize.xy).r;
+    return sum / (2.0 * h.x * (hasHeight ? 2.0 * h.y : 1.0)); // the box's area
 }
 
 // The share of the light a crossing of obstacle `id` at `u` along its outline lets through, for a ray at height z
 // there; `pass` (the mask's) where nothing patterns it. A tile grid's `cell` (PatternExit) picks pattern (its index
 // byte: 0 the grid's, else an entry of the grid's table), opacity (the obstacle's times the cell's byte) and, with
-// a level height, the heights bottom .. value levels, as Chiaro's PatternCrossingOpacity.
-float PatternPass(uint id, float u, uint cell, float z, float pass)
+// a level height, the heights bottom .. value levels, as Chiaro's PatternCrossingOpacity. `blur` (world units, 0 for
+// one ray) is the half-width of the patch of the pattern a lamp with a size shines through towards the receiver,
+// along the outline and upright alike.
+float PatternPass(uint id, float u, uint cell, float z, float pass, float blur)
 {
     GpuPatternObstacle o = PatternObstacles[id - 1u];
     uint pattern = o.kind.z;
@@ -326,12 +374,14 @@ float PatternPass(uint id, float u, uint cell, float z, float pass)
     GpuPattern p = Patterns[pattern - 1u];
     bool hasHeight = finite && top > base;
     float v = 0.0;
+    float span = p.repeat.y > 0.0 ? p.repeat.y : top - base; // world height of one repeat
     if (hasHeight) {
         // A ray that enters through the top (or bottom) reads the pattern at the edge it passes.
         float h = clamp(z, base, top) - base;
         v = p.repeat.y > 0.0 ? h / p.repeat.y : min(h / (top - base), kPatternBelowOne);
     }
-    return 1.0 - SamplePatternAtlas(p, u / p.repeat.x, v, hasHeight) * opacity;
+    float2 b = blur / float2(p.repeat.x, hasHeight ? span : 1.0);
+    return 1.0 - SamplePatternAtlas(p, u / p.repeat.x, v, hasHeight, b) * opacity;
 }
 
 #endif

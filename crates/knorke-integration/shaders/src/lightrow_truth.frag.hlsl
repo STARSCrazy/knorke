@@ -68,8 +68,8 @@ float Crossing(float2 lamp, float2 dir, float q1, float zl, float z, float r, fl
     if (id == 0u) { // HLSL's ?: would run both sides
         return 1.0 - o;
     }
-    float3 exit = PatternExit(id, lamp, dir, q1 - 1.0, q1 + 1.0);
-    return PatternPass(id, exit.y, uint(exit.z), lerp(zl, z, exit.x / r), 1.0 - o);
+    float3 exit = PatternExit(id, PatternWorld(lamp), PatternWorldStep(dir), q1 - 1.0, q1 + 1.0);
+    return PatternPass(id, exit.y, uint(exit.z), lerp(zl, z, exit.x / r), 1.0 - o, 0.0);
 }
 
 // The share of the light from the lamp point (mask texels, height zl) that reaches the place `start` at height z.

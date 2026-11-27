@@ -23,7 +23,8 @@ void Runs(float a, float row, out float4 runs[kRuns], out float4 pass)
 }
 
 // Empties the partly transparent runs: the penumbra (edge pass, SoftSight) knows opaque obstacles only, a partly
-// transparent one darkens along the ray to the lamp's middle (Through in lightrow_light.hlsli).
+// transparent one darkens along the ray to the lamp's middle (Through in lightrow_light.hlsli; a pattern there is
+// blurred over the patch the lamp shines through).
 void OpaqueOnly(inout float4 runs[kRuns], float4 pass)
 {
     for (int k = 0; k < kRuns; ++k) {

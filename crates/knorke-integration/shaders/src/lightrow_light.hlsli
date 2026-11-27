@@ -7,7 +7,10 @@
 // is the smaller of it and the opaque runs' sight, as Chiaro's min(visibility, transmittance): Chiaro's thin fringe
 // outside such a shadow (opening narrowed by the opacity) is left out, its edge stays hard.
 // A pattern obstacle is such a run; where the pattern pass found its crossing, the pattern at the height of this
-// pixel's ray there takes the place of the run's transmittance (lightrow_pattern.hlsli), as Chiaro's crossing.
+// pixel's ray there takes the place of the run's transmittance (lightrow_pattern.hlsli), as Chiaro's crossing. For a
+// lamp with a size it is the pattern's mean over the patch the lamp's square shines through towards the receiver
+// (half-width size (r - q) / r at a crossing q from the lamp), so the pattern's shadow blurs as the lamp's many rays
+// would blur it, and not on that one ray's verdict alone.
 // lightrow_light.frag, lightrow_light_exact.frag and lightrow_light_direction.frag are this file for the three
 // target layouts of the light pass (surface_light.hlsli); lightrow_light_flat.frag for a frame without surface and
 // material buffer (KNORKE_FLAT in lightrow_surface.hlsli).
@@ -132,16 +135,18 @@ void ClipRuns(inout float4 runs[kRuns], float from)
 }
 
 // What the blocking runs let through: all of them (`hard`), or the partly transparent ones only. A run with a
-// crossing reads its pattern at the height the ray has there. A ray that leaves the run's interval before that
-// crossing (rising out through the top, falling out through the bottom) never reaches it: coming from the receiver
-// it enters where it leaves, so for a hard lamp its entry is sought around the last quarter texel still inside, on
-// this ray (`ground`, `dir`), as Chiaro and lightrow_truth.frag do. A lamp with a size keeps the stored crossing:
-// its one ray stands for many that blur the pattern, and the sharper entry measured worse there (probe "zaun weich").
-// A tile grid's crossing does not store the entered cell, so every lamp seeks it on its own ray around the stored
-// crossing.
+// crossing reads its pattern at the height the ray has there. A hard lamp seeks the entry on its own ray (`ground`,
+// `dir`) around the stored crossing, which is that of the angle's middle ray: the interpolated pattern shows the
+// difference (probe "zaun hart"). A ray that leaves the run's interval before that crossing (rising out through the
+// top, falling out through the bottom) never reaches it: coming from the receiver it enters where it leaves, so a
+// hard lamp seeks its entry around the last quarter texel still inside, as Chiaro and lightrow_truth.frag do. A lamp
+// with a size keeps the stored crossing: its one ray stands for many that blur the pattern, and the sharper entry
+// measured worse there (probe "zaun weich"). A tile grid's crossing does not store the entered cell, so every lamp
+// seeks it. `size`: the lamp's (0: a hard lamp).
 float Through(float4 runs[kRuns], float4 pass, float4 crossings, float2 ground, float2 dir, float zl, float slope,
-              float r, bool hard)
+              float r, float size)
 {
+    bool hard = size <= 0.0;
     float through = 1.0;
     for (int k = 0; k < kRuns; ++k) {
         if ((hard || pass[k] > 0.0) && Blocks(runs[k], zl, slope, r)) {
@@ -157,12 +162,12 @@ float Through(float4 runs[kRuns], float4 pass, float4 crossings, float2 ground, 
                     float top = runs[k].w - RowSize.w;
                     if (hard && (h >= top || h < runs[k].z)) {
                         float leave = (zl - (h >= top ? top : runs[k].z)) / slope;
-                        float last = (ceil(leave * 4.0) - 1.0) * 0.25;
-                        exit = PatternExit(id, ground, dir, last - 1.0, last + 1.0);
-                    } else if (PatternObstacles[id - 1u].kind.x == kPatternTileGrid) {
-                        exit = PatternExit(id, ground, dir, q - 1.0, q + 1.0); // the cell is not stored
+                        q = (ceil(leave * 4.0) - 1.0) * 0.25;
                     }
-                    open = PatternPass(id, exit.y, uint(exit.z), zl - slope * exit.x, open);
+                    if (hard || PatternObstacles[id - 1u].kind.x == kPatternTileGrid) {
+                        exit = PatternExit(id, PatternWorld(ground), PatternWorldStep(dir), q - 1.0, q + 1.0);
+                    }
+                    open = PatternPass(id, exit.y, uint(exit.z), zl - slope * exit.x, open, size * (r - exit.x) / r);
                 }
             }
             through *= open;
@@ -238,7 +243,7 @@ float SoftSight(SurfaceLightVaryings l, float2 toPlace, float turn, float z, flo
     Runs(a, ROW_SLOT(l), runs, pass);
     ClipRuns(runs, from);
     float through = Through(runs, pass, Crossings(a, ROW_SLOT(l), pass), ROW_GROUND(l), toPlace / r, zl, (zl - z) / r,
-                            r, false);
+                            r, size);
     OpaqueOnly(runs, pass);
     float2 uv = RowUV(a, ROW_SLOT(l), RowSize.y);
     float4 first = EdgeFirst.SampleLevel(EdgeFirstSampler, uv, 0.0);
@@ -311,7 +316,7 @@ float HardSight(float2 ground, float zl, float row, float2 start, float z, float
     float4 pass;
     Runs(a, row, runs, pass);
     ClipRuns(runs, from);
-    return Through(runs, pass, Crossings(a, row, pass), ground, d / r, zl, (zl - z) / r, r, true);
+    return Through(runs, pass, Crossings(a, row, pass), ground, d / r, zl, (zl - z) / r, r, 0.0);
 }
 
 float Sight(SurfaceLightVaryings l, float2 start, float z, float r, float from)

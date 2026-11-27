@@ -677,9 +677,13 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 /// over 8): what was measured on 2026-11-26 (Vulkan, RX 6700 XT) plus a tenth. Measured:
 /// 0.348 / 0.66, 0.626 / 1.59, 0.631 / 2.31, 0.856 / 3.03; "hart halb", the fences as 50 %
 /// walls: 0.250 / 0.88; "flächen" 0.002 / 0.01 (bound rounded up: a tenth of so little is below
-/// what a driver may change); "zaun", the fences with their patterns, hard 0.554 / 1.25, soft
-/// 1.395 / 5.62; "gitter", the fences as tile grids with patterns ([`fence_grid`], 2026-11-27),
-/// hard 0.817 / 1.59, soft 1.148 / 3.71. "nebel", the walls in [`fog_layer`]'s fog (the medium
+/// what a driver may change); "zaun", the fences with their patterns, hard 0.454 / 1.34, soft
+/// 0.777 / 3.05; "gitter", the fences as tile grids with patterns ([`fence_grid`]), hard
+/// 0.763 / 2.13, soft 0.882 / 2.89 (both 2026-11-27 with the pattern interpolated, a lamp with
+/// a size blurring it, a hard lamp seeking each crossing on its own ray; before: "zaun" hard
+/// 0.554 / 1.25, soft 1.395 / 5.62, "gitter" hard 0.817 / 1.59, soft 1.148 / 3.71: the nearest
+/// pattern texel matched exactly or missed by a lot, the interpolated one misses by a little
+/// more often). "nebel", the walls in [`fog_layer`]'s fog (the medium
 /// world map; 2026-11-27): hard 0.284 / 0.51, soft 0.485 / 1.81. "hoch", the walls three times
 /// as tall (tops to 60, so the rows store heights in fiftieths), hard 0.364 / 0.71; "viele",
 /// every lamp 20 times (260 rows) as bright as four, hard 0.683 / 2.35; "mast", every lamp on a
@@ -696,10 +700,10 @@ const BOUNDS: [(&str, f64, f64); 21] = [
     ("hart halb", 0.35, 1.38),
     ("flächen", 0.004, 0.02),
     ("linie pfosten", 0.014, 0.03),
-    ("zaun hart", 0.75, 1.69),
-    ("zaun weich", 1.63, 6.27),
-    ("gitter hart", 0.90, 1.75),
-    ("gitter weich", 1.27, 4.09),
+    ("zaun hart", 0.50, 1.47),
+    ("zaun weich", 0.85, 3.36),
+    ("gitter hart", 0.84, 2.34),
+    ("gitter weich", 0.97, 3.18),
     ("nebel hart", 0.32, 0.57),
     ("nebel weich", 0.54, 2.0),
     ("hoch hart", 0.41, 0.79),
@@ -722,9 +726,10 @@ const WIDE_RADIUS: f32 = 170.0;
 /// leave it, not at its far side; reading the far side lost the top of the lattice's shadow
 /// there. Where the light's ray grazes the tower, the mask's staircase splits it in two runs;
 /// hulling the low building and the facade behind them instead blackened the facade's south
-/// end (the build joins the pieces then, `Squeeze`). Measured 1.316 (2026-11-26, Vulkan,
-/// RX 6700 XT), hulled 1.951, at the far side 2.625; plus a tenth.
-const FACADE: ([usize; 4], f64) = ([560, 170, 160, 160], 1.45);
+/// end (the build joins the pieces then, `Squeeze`). Measured 1.039 (2026-11-27, Vulkan,
+/// RX 6700 XT; the pattern interpolated, each crossing sought on the pixel's own ray), before
+/// 1.316, hulled 1.951, at the far side 2.625; plus a tenth.
+const FACADE: ([usize; 4], f64) = ([560, 170, 160, 160], 1.14);
 
 /// Mean absolute difference of two pictures over the colour channels within `rect`.
 fn region_mean(a: &[u8], b: &[u8], [x, y, w, h]: [usize; 4]) -> f64 {
@@ -1122,10 +1127,13 @@ const SUN_FENCES: [(&str, Fences, bool); 5] = [
 /// 8), per fences ([`SUN_FENCES`]), moon (hard, soft) and camera: what was measured plus a
 /// tenth. Measured on 2026-11-26 (Vulkan, RX 6700 XT): "mauer" hard A 0.0413 / 0.176, B
 /// 0.0284 / 0.120; soft (bilinear, the ends widened) A 0.0692 / 0.211, B 0.0769 / 0.187. "zaun"
-/// hard A 0.0417 / 0.171, B 0.0393 / 0.147; soft A 0.1107 / 0.424, B 0.1279 / 0.477. "halb"
+/// hard A 0.0432 / 0.188, B 0.0385 / 0.158; soft A 0.0889 / 0.259, B 0.1027 / 0.314. "halb"
 /// hard A 0.0380 / 0.146, B 0.0305 / 0.147; soft A 0.0708 / 0.165, B 0.0780 / 0.159. "gitter"
-/// (the fences as tile grids with patterns, 2026-11-27): hard A 0.1147 / 0.567, B
-/// 0.1048 / 0.535; soft A 0.1372 / 0.620, B 0.1463 / 0.619. While "zaun" or "gitter" scrolls,
+/// (the fences as tile grids with patterns): hard A 0.1058 / 0.555, B 0.0970 / 0.530; soft A
+/// 0.1270 / 0.569, B 0.1369 / 0.578. "zaun" and "gitter" measured 2026-11-27 with the pattern
+/// interpolated; before (nearest texel) "zaun" hard A 0.0417 / 0.171, B 0.0393 / 0.147, soft
+/// A 0.1107 / 0.424, B 0.1279 / 0.477; "gitter" hard A 0.1147 / 0.567, B 0.1048 / 0.535, soft
+/// A 0.1372 / 0.620, B 0.1463 / 0.619. While "zaun" or "gitter" scrolls,
 /// the map is built whole in 5 of 2400 frames: a fence leaves the mask and the other's record
 /// index moves. "nebel" (2026-11-27): hard A 0.0267 / 0.086, B 0.0191 / 0.069; soft A
 /// 0.0521 / 0.155, B 0.0582 / 0.139. Chiaro's light was 1.2 to 2.2 times as far from the
@@ -1136,16 +1144,16 @@ const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 5] = [
         [(0.076, 0.232), (0.085, 0.206)],
     ],
     [
-        [(0.046, 0.189), (0.044, 0.162)],
-        [(0.122, 0.467), (0.141, 0.525)],
+        [(0.048, 0.207), (0.042, 0.174)],
+        [(0.098, 0.285), (0.113, 0.345)],
     ],
     [
         [(0.042, 0.161), (0.034, 0.162)],
         [(0.078, 0.182), (0.086, 0.175)],
     ],
     [
-        [(0.127, 0.624), (0.116, 0.589)],
-        [(0.151, 0.682), (0.161, 0.681)],
+        [(0.116, 0.611), (0.107, 0.583)],
+        [(0.140, 0.626), (0.151, 0.636)],
     ],
     [
         [(0.030, 0.095), (0.022, 0.076)],
@@ -1155,15 +1163,16 @@ const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 5] = [
 
 /// As [`SUN_BOUNDS`] for the hard moon from below the horizon ("unten"), per fences and camera.
 /// Measured on 2026-11-27 (Vulkan, RX 6700 XT): "mauer" A 0.0168 / 0.042, B 0.0087 / 0.022;
-/// "zaun" A 0.0198 / 0.048, B 0.0215 / 0.051; "halb" A 0.0209 / 0.071, B 0.0179 / 0.079;
-/// "gitter" A 0.0782 / 0.328, B 0.0762 / 0.335; "nebel" A 0.0082 / 0.026, B 0.0081 / 0.022 (a
+/// "zaun" A 0.0216 / 0.062, B 0.0211 / 0.060; "halb" A 0.0209 / 0.071, B 0.0179 / 0.079;
+/// "gitter" A 0.0776 / 0.326, B 0.0749 / 0.336; "nebel" A 0.0082 / 0.026, B 0.0081 / 0.022 (a
 /// ray that does not rise walks the whole mask: a map built every frame costs more than from
-/// above).
+/// above). "zaun" and "gitter" with the pattern interpolated; before "zaun" A 0.0198 / 0.048,
+/// B 0.0215 / 0.051, "gitter" A 0.0782 / 0.328, B 0.0762 / 0.335.
 const SUN_LOW_BOUNDS: [[(f64, f64); 2]; 5] = [
     [(0.019, 0.047), (0.010, 0.025)],
-    [(0.022, 0.053), (0.024, 0.057)],
+    [(0.024, 0.068), (0.023, 0.066)],
     [(0.023, 0.079), (0.020, 0.087)],
-    [(0.087, 0.361), (0.084, 0.369)],
+    [(0.085, 0.359), (0.082, 0.370)],
     [(0.010, 0.029), (0.009, 0.025)],
 ];
 
@@ -1171,9 +1180,9 @@ const SUN_LOW_BOUNDS: [[(f64, f64); 2]; 5] = [
 /// camera: every sun has a map of the full grid.
 const SUN_LATE_BOUNDS: [[(f64, f64); 2]; 5] = [
     [(0.045, 0.194), (0.031, 0.132)],
-    [(0.046, 0.188), (0.043, 0.162)],
+    [(0.048, 0.207), (0.042, 0.174)],
     [(0.042, 0.161), (0.034, 0.162)],
-    [(0.126, 0.624), (0.115, 0.589)],
+    [(0.116, 0.611), (0.107, 0.583)],
     [(0.029, 0.095), (0.021, 0.076)],
 ];
 

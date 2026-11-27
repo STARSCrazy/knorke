@@ -67,7 +67,9 @@ float4 main(SurfaceLightVaryings i) : SV_Target0
         if (id == 0u) {
             continue;
         }
-        float2 exit = PatternExit(id, lamp, dir, run.y - 2.0, run.y + 1.0).xy;
+        // From the lamp's world position, not its mask point: a row and its crossings outlive camera pans, and u
+        // must come out as a new plan's would, to the last bit (the light interpolates the pattern at u).
+        float2 exit = PatternExit(id, i.positionRadius.xy, PatternWorldStep(dir), run.y - 2.0, run.y + 1.0).xy;
         float dq = clamp(run.y - exit.x, -1.0, 2.9375); // (dq + 1) / 4 below 1 after rounding
         o[2 * n] = float(id) + 65536.0 * float(k) + (dq + 1.0) * 0.25;
         o[2 * n + 1] = exit.y;

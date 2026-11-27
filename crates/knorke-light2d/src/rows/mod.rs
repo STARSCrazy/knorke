@@ -265,7 +265,8 @@ impl RowLight {
 
     /// The lamp whose row is the `k`-th of this light: itself, or for a line or rect light a
     /// hard lamp at support point `k`, reaching [`row_span`] farther (its own key, ground point,
-    /// height and radius, so the cache tells its row apart).
+    /// height and radius, so the cache tells its row apart). Its world position is the support
+    /// point's too: the crossing pass reads patterns from there (`lightrow_pattern.frag`).
     pub fn support(&self, k: u32) -> RowLight {
         if !self.is_area() {
             return *self;
@@ -274,9 +275,12 @@ impl RowLight {
         let g = &mut s.light;
         let [t, v] = SUPPORT_TS[usize::from(g.direction_type[3] > 2.5)][k as usize];
         let m = g.area_mask;
+        let c = across(g);
         g.shadow[2] += t * m[0] + v * m[2];
         g.shadow[3] += t * m[1] + v * m[3];
-        g.position_radius[2] += t * g.area[2] + v * across(g).z;
+        g.position_radius[0] += t * g.area[0] + v * c.x;
+        g.position_radius[1] += t * g.area[1] + v * c.y;
+        g.position_radius[2] += t * g.area[2] + v * c.z;
         g.position_radius[3] += row_span(g);
         s.key += u64::from(k);
         s.size = 0.0;
@@ -891,6 +895,11 @@ mod tests {
         assert_eq!(s.key, rect.key + 3);
         assert_eq!([s.light.shadow[2], s.light.shadow[3]], [53.0, 50.0]);
         assert!((s.light.position_radius[2] - 1.75).abs() < 1e-6, "{s:?}");
+        assert_eq!(
+            &s.light.position_radius[..2],
+            [0.6, 0.0],
+            "the support's world point"
+        );
         assert_eq!(s.light.position_radius[3], 5.0 + 2.4);
         assert_eq!(light(1, [0.0, 0.0]).support(0), light(1, [0.0, 0.0]));
         // Every support point keeps its own row.
