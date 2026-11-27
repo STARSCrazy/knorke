@@ -20,8 +20,8 @@ use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, load_png_rgba8,
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 };
-use knorke_gpu::test_support::{sampled_rgba8, texture, vulkan_device_with_pack, workspace_root};
-use knorke_gpu::{CommandBuffer, DownloadBuffer, Gpu, LiveCounter};
+use knorke_gpu::test_support::{sampled_rgba8, texture, with_chiaro_pack, workspace_root};
+use knorke_gpu::{CommandBuffer, DownloadBuffer};
 use knorke_integration::light2d::{
     Light2dFrame, Light2dRenderer, Light2dSettings, post_projection,
 };
@@ -119,95 +119,91 @@ fn scenes() -> [Scene; 2] {
 
 #[test]
 fn ring_lights_match_chiaro() {
-    let Some((device, pack_bytes)) = vulkan_device_with_pack() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    let gpu = Gpu::new(&device, &counter);
-    let mut renderer = Light2dRenderer::new(gpu, pack_bytes).unwrap();
-    let out = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
-    let color = sampled_rgba8(gpu, W, H, &checker());
-    let target = texture(
-        gpu,
-        (W, H),
-        SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-        None,
-    );
-    let settings = Light2dSettings {
-        light: LightSettings {
-            ambient: Vec3::new(0.1, 0.1, 0.1),
-            ..LightSettings::default()
-        },
-        post: PostSettings::default(),
-    };
-    let obstacles = ObstacleStore::new();
-    let mut download = DownloadBuffer::new(gpu, W * H * 4).unwrap();
-    let mut failures = Vec::new();
-
-    for scene in scenes() {
-        let mut list = ShockwaveList::default();
-        list.set(&scene.waves).unwrap();
-        let post = post_projection(&scene.projection);
-        let mut waves = ShockwaveFrame::default();
-        collect_shockwaves(&list, &post, W, H, &mut waves);
-        let frame = Light2dFrame {
-            shockwaves: Some((&post, &waves)),
-            ..Light2dFrame::new(color.texture_ref(), target.texture_ref(), &scene.projection)
+    with_chiaro_pack(|gpu, pack_bytes| {
+        let mut renderer = Light2dRenderer::new(gpu, pack_bytes.to_vec()).unwrap();
+        let out = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
+        let color = sampled_rgba8(gpu, W, H, &checker());
+        let target = texture(
+            gpu,
+            (W, H),
+            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+            None,
+        );
+        let settings = Light2dSettings {
+            light: LightSettings {
+                ambient: Vec3::new(0.1, 0.1, 0.1),
+                ..LightSettings::default()
+            },
+            post: PostSettings::default(),
         };
-        let mut lights = LightStore::new();
-        if let Some(l) = &scene.light {
-            lights.create(l, &NoResources).unwrap();
-        }
-        let stores = SceneStores::new(&lights, &obstacles);
+        let obstacles = ObstacleStore::new();
+        let mut download = DownloadBuffer::new(gpu, W * H * 4).unwrap();
+        let mut failures = Vec::new();
 
-        let prepared = renderer.prepare(&frame, &stores, &settings).unwrap();
-        assert_eq!(
-            prepared.light.stages.contains(PassStages::LIGHTS),
-            scene.light.is_some(),
-            "{}",
-            scene.name
-        );
-        assert!(prepared.light.lighting.light_buffer, "{}", scene.name);
-        let mut cmd = CommandBuffer::acquire(&device).unwrap();
-        let record = renderer
-            .record(&mut cmd, &frame, &settings, prepared)
-            .unwrap();
-        assert_eq!(
-            record.lighting.rings_drawn as usize,
-            scene
-                .waves
-                .iter()
-                .filter(|w| w.light_intensity > 0.0)
-                .count(),
-            "{}: one instance per wave with light",
-            scene.name
-        );
-        cmd.copy_pass()
-            .unwrap()
-            .download_texture(frame.target, &download)
-            .unwrap();
-        cmd.submit_and_wait().unwrap();
-        let mut pixels = vec![0u8; (W * H * 4) as usize];
-        download.read(&mut pixels).unwrap();
+        for scene in scenes() {
+            let mut list = ShockwaveList::default();
+            list.set(&scene.waves).unwrap();
+            let post = post_projection(&scene.projection);
+            let mut waves = ShockwaveFrame::default();
+            collect_shockwaves(&list, &post, W, H, &mut waves);
+            let frame = Light2dFrame {
+                shockwaves: Some((&post, &waves)),
+                ..Light2dFrame::new(color.texture_ref(), target.texture_ref(), &scene.projection)
+            };
+            let mut lights = LightStore::new();
+            if let Some(l) = &scene.light {
+                lights.create(l, &NoResources).unwrap();
+            }
+            let stores = SceneStores::new(&lights, &obstacles);
 
-        let reference = load_png_rgba8(
-            &workspace_root().join(format!("tests/golden/chiaro/ring_light/{}.png", scene.name)),
-            W,
-            H,
-        );
-        let strict = compare_rgba8(&pixels, &reference, W, H, &[], &ParityBudget::STRICT).unwrap();
-        strict.print(scene.name, "STRICT");
-        if !strict.within(&ParityBudget::STRICT) {
-            failures.push(format!("{}: {strict:?}", scene.name));
+            let prepared = renderer.prepare(&frame, &stores, &settings).unwrap();
+            assert_eq!(
+                prepared.light.stages.contains(PassStages::LIGHTS),
+                scene.light.is_some(),
+                "{}",
+                scene.name
+            );
+            assert!(prepared.light.lighting.light_buffer, "{}", scene.name);
+            let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+            let record = renderer
+                .record(&mut cmd, &frame, &settings, prepared)
+                .unwrap();
+            assert_eq!(
+                record.lighting.rings_drawn as usize,
+                scene
+                    .waves
+                    .iter()
+                    .filter(|w| w.light_intensity > 0.0)
+                    .count(),
+                "{}: one instance per wave with light",
+                scene.name
+            );
+            cmd.copy_pass()
+                .unwrap()
+                .download_texture(frame.target, &download)
+                .unwrap();
+            cmd.submit_and_wait().unwrap();
+            let mut pixels = vec![0u8; (W * H * 4) as usize];
+            download.read(&mut pixels).unwrap();
+
+            let reference = load_png_rgba8(
+                &workspace_root()
+                    .join(format!("tests/golden/chiaro/ring_light/{}.png", scene.name)),
+                W,
+                H,
+            );
+            let strict =
+                compare_rgba8(&pixels, &reference, W, H, &[], &ParityBudget::STRICT).unwrap();
+            strict.print(scene.name, "STRICT");
+            if !strict.within(&ParityBudget::STRICT) {
+                failures.push(format!("{}: {strict:?}", scene.name));
+            }
+            if let Some(dir) = &out {
+                std::fs::create_dir_all(dir).unwrap();
+                save_png_rgba8(&dir.join(format!("{}.rust.png", scene.name)), &pixels, W, H);
+            }
         }
-        if let Some(dir) = &out {
-            std::fs::create_dir_all(dir).unwrap();
-            save_png_rgba8(&dir.join(format!("{}.rust.png", scene.name)), &pixels, W, H);
-        }
-    }
-    drop(renderer);
-    drop((color, target, download));
-    assert_eq!(counter.live(), 0, "GPU objects leaked");
-    assert!(failures.is_empty(), "STRICT parity missed: {failures:#?}");
+        assert!(failures.is_empty(), "STRICT parity missed: {failures:#?}");
+    });
 }

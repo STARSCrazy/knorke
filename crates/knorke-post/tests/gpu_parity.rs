@@ -25,11 +25,10 @@ use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
     SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUTextureFormat,
 };
-use knorke_gpu::test_support::{texture, vulkan_device};
+use knorke_gpu::test_support::{texture, with_vulkan};
 use knorke_gpu::{
-    Bindings, Blend, ColorTarget, CommandBuffer, DownloadBuffer, Filter, Gpu, LiveCounter, Load,
-    PipelineCache, ProgramDesc, RenderTarget, SamplerBinding, Samplers, ShaderLibrary,
-    StageBindings, TextureRef,
+    Bindings, Blend, ColorTarget, CommandBuffer, DownloadBuffer, Filter, Gpu, Load, PipelineCache,
+    ProgramDesc, RenderTarget, SamplerBinding, Samplers, ShaderLibrary, StageBindings, TextureRef,
 };
 use knorke_math::Vec2;
 use knorke_post::output_rect::ScaleMode;
@@ -303,197 +302,187 @@ fn pack() -> Vec<u8> {
 
 #[test]
 fn post_pass_matches_chiaro() {
-    let Some(device) = vulkan_device() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    let gpu = Gpu::new(&device, &counter);
-    let mut renderer = PostRenderer::new(gpu, pack()).unwrap();
-    let mut composer = Composer::new(gpu, pack());
-    let out = std::env::var("KNORKE_POST_OUT").ok().map(PathBuf::from);
-    let mut failures = Vec::new();
+    with_vulkan(|gpu| {
+        let mut renderer = PostRenderer::new(gpu, pack()).unwrap();
+        let mut composer = Composer::new(gpu, pack());
+        let out = std::env::var("KNORKE_POST_OUT").ok().map(PathBuf::from);
+        let mut failures = Vec::new();
 
-    let sampled = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-    let scene_tex = texture(
-        gpu,
-        (SW, SH),
-        SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        sampled,
-        Some(&scene_pixels()),
-    );
-
-    for scene in scenes() {
-        let (w, h) = scene.target;
-        let overlay = texture(
+        let sampled = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        let scene_tex = texture(
             gpu,
-            scene.target,
-            scene.overlay_format,
+            (SW, SH),
+            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
             sampled,
-            Some(&overlay_pixels(w, h)),
+            Some(&scene_pixels()),
         );
-        let target = texture(
-            gpu,
-            scene.target,
-            scene.target_format,
-            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-            None,
-        );
-        // The wave of post_ref.c under the identity projection.
-        let projection = Projection {
-            origin: Vec2::new(0.0, 0.0),
-            x_axis: Vec2::new(1.0, 0.0),
-            y_axis: Vec2::new(0.0, 1.0),
-            z_axis: Vec2::new(0.0, 0.0),
-        };
-        let mut waves = ShockwaveFrame::default();
-        if scene.wave {
-            let mut list = ShockwaveList::default();
-            list.set(&[Shockwave {
-                x: 96.0,
-                y: 64.0,
-                radius: 30.0,
-                width: 24.0,
-                strength: 5.0,
-                ..Shockwave::default()
-            }])
-            .unwrap();
-            collect_shockwaves(&list, &projection, SW, SH, &mut waves);
-            assert_eq!(waves.distortion_count, 1);
-        }
 
-        // Frame 1 records HDR, bloom and output into the host's command buffer.
-        let mut download = DownloadBuffer::new(gpu, w * h * 4).unwrap();
-        let mut run = |renderer: &mut PostRenderer<'_>, read: Option<&DownloadBuffer<'_>>| {
-            let mut cmd = CommandBuffer::acquire(&device).unwrap();
-            composer.compose(
-                &mut cmd,
-                scene_tex.texture_ref(),
-                scene.ambient,
-                scene.settings.output.scene_color_space == ColorSpace::Srgb,
+        for scene in scenes() {
+            let (w, h) = scene.target;
+            let overlay = texture(
+                gpu,
+                scene.target,
+                scene.overlay_format,
+                sampled,
+                Some(&overlay_pixels(w, h)),
             );
-            let frame = PostFrame {
-                hdr: composer.hdr(),
-                overlay: Some(overlay.texture_ref()),
-                target: target.texture_ref(),
-                shockwaves: scene.wave.then_some((&projection, &waves)),
+            let target = texture(
+                gpu,
+                scene.target,
+                scene.target_format,
+                SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+                None,
+            );
+            // The wave of post_ref.c under the identity projection.
+            let projection = Projection {
+                origin: Vec2::new(0.0, 0.0),
+                x_axis: Vec2::new(1.0, 0.0),
+                y_axis: Vec2::new(0.0, 1.0),
+                z_axis: Vec2::new(0.0, 0.0),
             };
-            let prepared = renderer.prepare(&frame, &scene.settings).unwrap();
-            renderer
-                .record(&mut cmd, &frame, &scene.settings, prepared)
+            let mut waves = ShockwaveFrame::default();
+            if scene.wave {
+                let mut list = ShockwaveList::default();
+                list.set(&[Shockwave {
+                    x: 96.0,
+                    y: 64.0,
+                    radius: 30.0,
+                    width: 24.0,
+                    strength: 5.0,
+                    ..Shockwave::default()
+                }])
                 .unwrap();
-            if let Some(d) = read {
-                cmd.copy_pass()
-                    .unwrap()
-                    .download_texture(target.texture_ref(), d)
-                    .unwrap();
+                collect_shockwaves(&list, &projection, SW, SH, &mut waves);
+                assert_eq!(waves.distortion_count, 1);
             }
-            cmd.submit_and_wait().unwrap();
-            prepared
-        };
-        let prepared = run(&mut renderer, Some(&download));
-        let allocations = renderer.bloom_allocations();
-        let mut pixels = vec![0u8; (w * h * 4) as usize];
-        download.read(&mut pixels).unwrap();
-        // Frame 2 with the same size allocates no bloom level again.
-        run(&mut renderer, None);
-        assert_eq!(renderer.bloom_allocations(), allocations, "{}", scene.name);
-        eprintln!(
-            "{}: {} bloom levels",
-            scene.name,
-            prepared.bloom_plan().map_or(0, |p| p.levels)
-        );
 
-        let reference = load_png_rgba8(&golden_dir().join(format!("{}.png", scene.name)), w, h);
-        let strict = compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::STRICT).unwrap();
-        strict.print(scene.name, "STRICT");
-        if !strict.within(&ParityBudget::STRICT) {
-            let loose =
-                compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::LOOSE).unwrap();
-            loose.print(scene.name, "LOOSE");
-            failures.push(format!("{}: {strict:?}", scene.name));
+            // Frame 1 records HDR, bloom and output into the host's command buffer.
+            let mut download = DownloadBuffer::new(gpu, w * h * 4).unwrap();
+            let mut run = |renderer: &mut PostRenderer<'_>, read: Option<&DownloadBuffer<'_>>| {
+                let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+                composer.compose(
+                    &mut cmd,
+                    scene_tex.texture_ref(),
+                    scene.ambient,
+                    scene.settings.output.scene_color_space == ColorSpace::Srgb,
+                );
+                let frame = PostFrame {
+                    hdr: composer.hdr(),
+                    overlay: Some(overlay.texture_ref()),
+                    target: target.texture_ref(),
+                    shockwaves: scene.wave.then_some((&projection, &waves)),
+                };
+                let prepared = renderer.prepare(&frame, &scene.settings).unwrap();
+                renderer
+                    .record(&mut cmd, &frame, &scene.settings, prepared)
+                    .unwrap();
+                if let Some(d) = read {
+                    cmd.copy_pass()
+                        .unwrap()
+                        .download_texture(target.texture_ref(), d)
+                        .unwrap();
+                }
+                cmd.submit_and_wait().unwrap();
+                prepared
+            };
+            let prepared = run(&mut renderer, Some(&download));
+            let allocations = renderer.bloom_allocations();
+            let mut pixels = vec![0u8; (w * h * 4) as usize];
+            download.read(&mut pixels).unwrap();
+            // Frame 2 with the same size allocates no bloom level again.
+            run(&mut renderer, None);
+            assert_eq!(renderer.bloom_allocations(), allocations, "{}", scene.name);
+            eprintln!(
+                "{}: {} bloom levels",
+                scene.name,
+                prepared.bloom_plan().map_or(0, |p| p.levels)
+            );
+
+            let reference = load_png_rgba8(&golden_dir().join(format!("{}.png", scene.name)), w, h);
+            let strict =
+                compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::STRICT).unwrap();
+            strict.print(scene.name, "STRICT");
+            if !strict.within(&ParityBudget::STRICT) {
+                let loose =
+                    compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::LOOSE).unwrap();
+                loose.print(scene.name, "LOOSE");
+                failures.push(format!("{}: {strict:?}", scene.name));
+            }
+            if let Some(dir) = &out {
+                std::fs::create_dir_all(dir).unwrap();
+                save_png_rgba8(&dir.join(format!("{}.rust.png", scene.name)), &pixels, w, h);
+                let diff: Vec<u8> = pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(reference.as_chunks::<4>().0)
+                    .flat_map(|(a, b)| {
+                        let m = (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap();
+                        let v = m.saturating_mul(32);
+                        let g = if m > 2 { 0 } else { v };
+                        [v, g, g, 255]
+                    })
+                    .collect();
+                save_png_rgba8(&dir.join(format!("{}.diff.png", scene.name)), &diff, w, h);
+            }
         }
-        if let Some(dir) = &out {
-            std::fs::create_dir_all(dir).unwrap();
-            save_png_rgba8(&dir.join(format!("{}.rust.png", scene.name)), &pixels, w, h);
-            let diff: Vec<u8> = pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .zip(reference.as_chunks::<4>().0)
-                .flat_map(|(a, b)| {
-                    let m = (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap();
-                    let v = m.saturating_mul(32);
-                    let g = if m > 2 { 0 } else { v };
-                    [v, g, g, 255]
-                })
-                .collect();
-            save_png_rgba8(&dir.join(format!("{}.diff.png", scene.name)), &diff, w, h);
-        }
-    }
-    drop((renderer, composer));
-    assert!(failures.is_empty(), "STRICT parity missed: {failures:#?}");
-    // Textures of the scenes are gone with the loop; the scene texture dies here.
-    drop(scene_tex);
-    assert_eq!(counter.live(), 0, "post pass leaked GPU objects");
+        assert!(failures.is_empty(), "STRICT parity missed: {failures:#?}");
+    });
 }
 
 #[test]
 fn prepare_refuses_bad_settings_and_unsupported_targets() {
-    let Some(device) = vulkan_device() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    let gpu = Gpu::new(&device, &counter);
-    {
-        let mut renderer = PostRenderer::new(gpu, pack()).unwrap();
-        let hdr = texture(
-            gpu,
-            (16, 16),
-            Composer::HDR,
-            SDL_GPU_TEXTUREUSAGE_SAMPLER,
-            None,
-        );
-        let target = texture(
-            gpu,
-            (16, 16),
-            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-            None,
-        );
-        let frame = PostFrame {
-            hdr: hdr.texture_ref(),
-            overlay: None,
-            target: target.texture_ref(),
-            shockwaves: None,
-        };
-        // Settings are checked first, with the stable code of the field.
-        let mut bad = PostSettings::default();
-        bad.bloom.radius = 0.5;
-        let e = renderer.prepare(&frame, &bad).unwrap_err();
-        assert!(
-            e.code.as_str().starts_with("knorke.post.settings."),
-            "{e:?}"
-        );
-        // A target format the output shader cannot encode for.
-        let depth = texture(
-            gpu,
-            (16, 16),
-            knorke_gpu::sys::gpu::SDL_GPU_TEXTUREFORMAT_R8_UNORM,
-            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-            None,
-        );
-        let frame = PostFrame {
-            target: depth.texture_ref(),
-            ..frame
-        };
-        let e = renderer
-            .prepare(&frame, &PostSettings::default())
-            .unwrap_err();
-        assert_eq!(e.code, POST_UNSUPPORTED_TARGET);
-        // Without bloom no level texture is ever created.
-        assert_eq!(renderer.bloom_allocations(), 0);
-    }
-    assert_eq!(counter.live(), 0);
+    with_vulkan(|gpu| {
+        {
+            let mut renderer = PostRenderer::new(gpu, pack()).unwrap();
+            let hdr = texture(
+                gpu,
+                (16, 16),
+                Composer::HDR,
+                SDL_GPU_TEXTUREUSAGE_SAMPLER,
+                None,
+            );
+            let target = texture(
+                gpu,
+                (16, 16),
+                SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+                None,
+            );
+            let frame = PostFrame {
+                hdr: hdr.texture_ref(),
+                overlay: None,
+                target: target.texture_ref(),
+                shockwaves: None,
+            };
+            // Settings are checked first, with the stable code of the field.
+            let mut bad = PostSettings::default();
+            bad.bloom.radius = 0.5;
+            let e = renderer.prepare(&frame, &bad).unwrap_err();
+            assert!(
+                e.code.as_str().starts_with("knorke.post.settings."),
+                "{e:?}"
+            );
+            // A target format the output shader cannot encode for.
+            let depth = texture(
+                gpu,
+                (16, 16),
+                knorke_gpu::sys::gpu::SDL_GPU_TEXTUREFORMAT_R8_UNORM,
+                SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+                None,
+            );
+            let frame = PostFrame {
+                target: depth.texture_ref(),
+                ..frame
+            };
+            let e = renderer
+                .prepare(&frame, &PostSettings::default())
+                .unwrap_err();
+            assert_eq!(e.code, POST_UNSUPPORTED_TARGET);
+            // Without bloom no level texture is ever created.
+            assert_eq!(renderer.bloom_allocations(), 0);
+        }
+    });
 }
 
 #[test]

@@ -25,9 +25,9 @@ use knorke_gpu::sys::gpu::{
 };
 use knorke_gpu::test_support::{
     expected_bytes, golden_bytes, queue_download, read_download, rgba16f_diff, sampled_rgba8,
-    texture, vulkan_device_with_pack,
+    texture, with_chiaro_pack,
 };
-use knorke_gpu::{CommandBuffer, Gpu, LiveCounter, ShaderLibrary, TextureRef};
+use knorke_gpu::{CommandBuffer, Gpu, ShaderLibrary, TextureRef};
 use knorke_integration::layers::{Layer, LayerSet, Layers};
 use knorke_integration::light2d::{
     Light2dFrame, Light2dRenderer, Light2dSettings, post_projection,
@@ -393,171 +393,165 @@ fn diff(got: &[u8], want: &[u8], half: bool) -> (usize, f32) {
 
 #[test]
 fn medium_scenes_match_chiaro() {
-    let Some((device, pack)) = vulkan_device_with_pack() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    let gpu = Gpu::new(&device, &counter);
-    // One renderer per scene: the reference renders each scene as the first frame of a new
-    // context, and the occlusion heights of an earlier frame must not help.
-    let fresh = || Light2dRenderer::new(gpu, pack.clone()).unwrap();
-    let mut renderer = fresh();
-    let out_dir = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
-    let bench = std::env::var("KNORKE_SCENE_BENCH")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|&n| n > 0);
-    let color = sampled_rgba8(gpu, W, H, &checker());
-    let target = texture(
-        gpu,
-        (W, H),
-        SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-        None,
-    );
-    let mut failures = Vec::new();
-    let shape = sampled_rgba8(gpu, 16, 16, &puff());
-    let mut shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
-    let mut batch = MediumBatch::new(gpu, &shaders).unwrap();
-    let kinds = LayerSet::of(Layer::Scene).with(Layer::Medium);
-    for s in [shafts(), sun(), ring(), smoke()] {
-        renderer = fresh();
-        let mut layers = None;
-        if s.smoke {
-            // The reference's first pass clears the layers, then CHI_DrawMediums.
-            let l = layers.insert(Layers::new(gpu, W, H, kinds).unwrap());
-            let items = smoke_draws(shape.texture_ref());
-            let step = s.settings.light.resolved_medium_height_step();
-            batch.prepare(&mut shaders, &items).unwrap();
-            let mut cmd = CommandBuffer::acquire(&device).unwrap();
-            drop(l.clear_pass(&mut cmd, kinds).unwrap());
-            batch.record(&mut cmd, l, step, &items).unwrap();
-            let down = queue_download(gpu, &mut cmd, l.texture(Layer::Medium).unwrap());
-            cmd.submit_and_wait().unwrap();
-            let want = golden_bytes("medium/stage", "smoke.layer.bin");
-            let (n, max) = diff(&read_download(down), &want, false);
-            eprintln!("smoke.layer: {n} differing (max {max})");
-            if n > 0 {
-                failures.push(format!("smoke.layer: {n} differing, max {max}"));
-            }
-        }
-        let uploaded = s.layer.as_ref().map(|px| sampled_rgba8(gpu, W, H, px));
-        let layer = uploaded
-            .as_ref()
-            .map(|t| t.texture_ref())
-            .or_else(|| layers.as_ref().and_then(|l| l.texture(Layer::Medium)));
-        let mut list = ShockwaveList::default();
-        list.set(&s.waves).unwrap();
-        let post = post_projection(&s.projection);
-        let mut waves = ShockwaveFrame::default();
-        collect_shockwaves(&list, &post, W, H, &mut waves);
-        let frame = Light2dFrame {
-            medium: layer,
-            shockwaves: (!s.waves.is_empty()).then_some((&post, &waves)),
-            ..Light2dFrame::new(color.texture_ref(), target.texture_ref(), &s.projection)
-        };
-        let stores = SceneStores {
-            zones: s.zones.as_ref(),
-            ..SceneStores::new(&s.lights, &s.obstacles)
-        };
-        let prepared = renderer.prepare(&frame, &stores, &s.settings).unwrap();
-        assert!(
-            prepared.light.stages.contains(PassStages::MEDIUM),
-            "{}",
-            s.name
-        );
-        let mut cmd = CommandBuffer::acquire(&device).unwrap();
-        let record = renderer
-            .record(&mut cmd, &frame, &s.settings, prepared)
-            .unwrap();
-        eprintln!("{}: {:?}", s.name, record.medium);
-        let m = renderer.plan().medium();
-        let mut reads = Vec::new();
-        queue(gpu, &mut cmd, &mut reads, "scatter", m.scatter(), true);
-        queue(gpu, &mut cmd, &mut reads, "filtered", m.filtered(), true);
-        queue(gpu, &mut cmd, &mut reads, "guides", m.guides(), false);
-        if s.polar {
-            queue(gpu, &mut cmd, &mut reads, "polar", m.polar_atlas(), true);
-        }
-        if s.sun {
-            queue(gpu, &mut cmd, &mut reads, "sun", m.sun_heights(), false);
-        }
-        queue(
+    with_chiaro_pack(|gpu, pack| {
+        // One renderer per scene: the reference renders each scene as the first frame of a new
+        // context, and the occlusion heights of an earlier frame must not help.
+        let fresh = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
+        let mut renderer = fresh();
+        let out_dir = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
+        let bench = std::env::var("KNORKE_SCENE_BENCH")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|&n| n > 0);
+        let color = sampled_rgba8(gpu, W, H, &checker());
+        let target = texture(
             gpu,
-            &mut cmd,
-            &mut reads,
-            "final",
-            Some(frame.target),
-            false,
+            (W, H),
+            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+            None,
         );
-        cmd.submit_and_wait().unwrap();
-        for r in reads {
-            let got = read_download(r.download);
-            // The rows' shafts and sun heights differ from Chiaro's field march at shadow
-            // edges: re-blessed where they do (tests/golden/rows).
-            let name = format!("{}.{}.bin", s.name, r.name);
-            let want = expected_bytes("medium/stage", &name, &got);
-            if r.name == "final" {
-                let strict = compare_rgba8(&got, &want, W, H, &[], &ParityBudget::STRICT).unwrap();
-                strict.print(s.name, "STRICT");
-                if !strict.within(&ParityBudget::STRICT) {
-                    failures.push(format!("{}.final: {strict:?}", s.name));
-                }
-                if let Some(dir) = &out_dir {
-                    std::fs::create_dir_all(dir).unwrap();
-                    save_png_rgba8(&dir.join(format!("{}.rust.png", s.name)), &got, W, H);
-                    save_png_rgba8(&dir.join(format!("{}.chiaro.png", s.name)), &want, W, H);
-                }
-            }
-            let (n, max) = diff(&got, &want, r.half);
-            eprintln!("{}.{}: {n} differing (max {max})", s.name, r.name);
-            if n > 0 {
-                failures.push(format!("{}.{}: {n} differing, max {max}", s.name, r.name));
-            }
-        }
-        // The host times frames (wall clock is a host tool, not simulation).
-        #[allow(clippy::disallowed_methods)]
-        if let Some(n) = bench {
-            let mut us = Vec::with_capacity(n);
-            for _ in 0..n {
-                let t0 = std::time::Instant::now();
-                let prepared = renderer.prepare(&frame, &stores, &s.settings).unwrap();
-                let mut cmd = CommandBuffer::acquire(&device).unwrap();
-                renderer
-                    .record(&mut cmd, &frame, &s.settings, prepared)
-                    .unwrap();
+        let mut failures = Vec::new();
+        let shape = sampled_rgba8(gpu, 16, 16, &puff());
+        let mut shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
+        let mut batch = MediumBatch::new(gpu, &shaders).unwrap();
+        let kinds = LayerSet::of(Layer::Scene).with(Layer::Medium);
+        for s in [shafts(), sun(), ring(), smoke()] {
+            renderer = fresh();
+            let mut layers = None;
+            if s.smoke {
+                // The reference's first pass clears the layers, then CHI_DrawMediums.
+                let l = layers.insert(Layers::new(gpu, W, H, kinds).unwrap());
+                let items = smoke_draws(shape.texture_ref());
+                let step = s.settings.light.resolved_medium_height_step();
+                batch.prepare(&mut shaders, &items).unwrap();
+                let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+                drop(l.clear_pass(&mut cmd, kinds).unwrap());
+                batch.record(&mut cmd, l, step, &items).unwrap();
+                let down = queue_download(gpu, &mut cmd, l.texture(Layer::Medium).unwrap());
                 cmd.submit_and_wait().unwrap();
-                us.push(t0.elapsed().as_secs_f64() * 1e6);
+                let want = golden_bytes("medium/stage", "smoke.layer.bin");
+                let (n, max) = diff(&read_download(down), &want, false);
+                eprintln!("smoke.layer: {n} differing (max {max})");
+                if n > 0 {
+                    failures.push(format!("smoke.layer: {n} differing, max {max}"));
+                }
             }
-            us.sort_by(f64::total_cmp);
-            eprintln!(
-                "bench {} (Rust), {n} frames: median {:.1} us, p95 {:.1} us",
-                s.name,
-                us[n / 2],
-                us[n * 95 / 100]
+            let uploaded = s.layer.as_ref().map(|px| sampled_rgba8(gpu, W, H, px));
+            let layer = uploaded
+                .as_ref()
+                .map(|t| t.texture_ref())
+                .or_else(|| layers.as_ref().and_then(|l| l.texture(Layer::Medium)));
+            let mut list = ShockwaveList::default();
+            list.set(&s.waves).unwrap();
+            let post = post_projection(&s.projection);
+            let mut waves = ShockwaveFrame::default();
+            collect_shockwaves(&list, &post, W, H, &mut waves);
+            let frame = Light2dFrame {
+                medium: layer,
+                shockwaves: (!s.waves.is_empty()).then_some((&post, &waves)),
+                ..Light2dFrame::new(color.texture_ref(), target.texture_ref(), &s.projection)
+            };
+            let stores = SceneStores {
+                zones: s.zones.as_ref(),
+                ..SceneStores::new(&s.lights, &s.obstacles)
+            };
+            let prepared = renderer.prepare(&frame, &stores, &s.settings).unwrap();
+            assert!(
+                prepared.light.stages.contains(PassStages::MEDIUM),
+                "{}",
+                s.name
             );
+            let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+            let record = renderer
+                .record(&mut cmd, &frame, &s.settings, prepared)
+                .unwrap();
+            eprintln!("{}: {:?}", s.name, record.medium);
+            let m = renderer.plan().medium();
+            let mut reads = Vec::new();
+            queue(gpu, &mut cmd, &mut reads, "scatter", m.scatter(), true);
+            queue(gpu, &mut cmd, &mut reads, "filtered", m.filtered(), true);
+            queue(gpu, &mut cmd, &mut reads, "guides", m.guides(), false);
+            if s.polar {
+                queue(gpu, &mut cmd, &mut reads, "polar", m.polar_atlas(), true);
+            }
+            if s.sun {
+                queue(gpu, &mut cmd, &mut reads, "sun", m.sun_heights(), false);
+            }
+            queue(
+                gpu,
+                &mut cmd,
+                &mut reads,
+                "final",
+                Some(frame.target),
+                false,
+            );
+            cmd.submit_and_wait().unwrap();
+            for r in reads {
+                let got = read_download(r.download);
+                // The rows' shafts and sun heights differ from Chiaro's field march at shadow
+                // edges: re-blessed where they do (tests/golden/rows).
+                let name = format!("{}.{}.bin", s.name, r.name);
+                let want = expected_bytes("medium/stage", &name, &got);
+                if r.name == "final" {
+                    let strict =
+                        compare_rgba8(&got, &want, W, H, &[], &ParityBudget::STRICT).unwrap();
+                    strict.print(s.name, "STRICT");
+                    if !strict.within(&ParityBudget::STRICT) {
+                        failures.push(format!("{}.final: {strict:?}", s.name));
+                    }
+                    if let Some(dir) = &out_dir {
+                        std::fs::create_dir_all(dir).unwrap();
+                        save_png_rgba8(&dir.join(format!("{}.rust.png", s.name)), &got, W, H);
+                        save_png_rgba8(&dir.join(format!("{}.chiaro.png", s.name)), &want, W, H);
+                    }
+                }
+                let (n, max) = diff(&got, &want, r.half);
+                eprintln!("{}.{}: {n} differing (max {max})", s.name, r.name);
+                if n > 0 {
+                    failures.push(format!("{}.{}: {n} differing, max {max}", s.name, r.name));
+                }
+            }
+            // The host times frames (wall clock is a host tool, not simulation).
+            #[allow(clippy::disallowed_methods)]
+            if let Some(n) = bench {
+                let mut us = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let t0 = std::time::Instant::now();
+                    let prepared = renderer.prepare(&frame, &stores, &s.settings).unwrap();
+                    let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+                    renderer
+                        .record(&mut cmd, &frame, &s.settings, prepared)
+                        .unwrap();
+                    cmd.submit_and_wait().unwrap();
+                    us.push(t0.elapsed().as_secs_f64() * 1e6);
+                }
+                us.sort_by(f64::total_cmp);
+                eprintln!(
+                    "bench {} (Rust), {n} frames: median {:.1} us, p95 {:.1} us",
+                    s.name,
+                    us[n / 2],
+                    us[n * 95 / 100]
+                );
+            }
         }
-    }
-    // A frame without haze and medium layer: the stage records nothing and keeps no target.
-    let s = shafts();
-    let plain = settings(0.0, true);
-    let frame = Light2dFrame::new(color.texture_ref(), target.texture_ref(), &s.projection);
-    let stores = SceneStores::new(&s.lights, &s.obstacles);
-    let prepared = renderer.prepare(&frame, &stores, &plain).unwrap();
-    assert!(!prepared.light.stages.contains(PassStages::MEDIUM));
-    let mut cmd = CommandBuffer::acquire(&device).unwrap();
-    let record = renderer.record(&mut cmd, &frame, &plain, prepared).unwrap();
-    cmd.submit_and_wait().unwrap();
-    let m = renderer.plan().medium();
-    assert_eq!(record.medium, Default::default());
-    assert!(!m.is_active() && m.scatter().is_none() && m.filtered().is_none());
-    assert!(m.polar_atlas().is_none() && m.sun_heights().is_none());
-
-    drop((renderer, batch, shaders));
-    drop((color, target, shape));
-    assert_eq!(counter.live(), 0, "GPU objects leaked");
-    assert!(
-        failures.is_empty(),
-        "differences from Chiaro: {failures:#?}"
-    );
+        // A frame without haze and medium layer: the stage records nothing and keeps no target.
+        let s = shafts();
+        let plain = settings(0.0, true);
+        let frame = Light2dFrame::new(color.texture_ref(), target.texture_ref(), &s.projection);
+        let stores = SceneStores::new(&s.lights, &s.obstacles);
+        let prepared = renderer.prepare(&frame, &stores, &plain).unwrap();
+        assert!(!prepared.light.stages.contains(PassStages::MEDIUM));
+        let mut cmd = CommandBuffer::acquire(gpu.device()).unwrap();
+        let record = renderer.record(&mut cmd, &frame, &plain, prepared).unwrap();
+        cmd.submit_and_wait().unwrap();
+        let m = renderer.plan().medium();
+        assert_eq!(record.medium, Default::default());
+        assert!(!m.is_active() && m.scatter().is_none() && m.filtered().is_none());
+        assert!(m.polar_atlas().is_none() && m.sun_heights().is_none());
+        assert!(
+            failures.is_empty(),
+            "differences from Chiaro: {failures:#?}"
+        );
+    });
 }

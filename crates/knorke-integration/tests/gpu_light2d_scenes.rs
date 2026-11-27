@@ -27,8 +27,8 @@ use knorke_contract_tests::parity::{
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 };
-use knorke_gpu::test_support::{sampled_rgba8, texture, vulkan_device_with_pack, workspace_root};
-use knorke_gpu::{CommandBuffer, Device, DownloadBuffer, Gpu, LiveCounter, Texture};
+use knorke_gpu::test_support::{sampled_rgba8, texture, with_chiaro_pack, workspace_root};
+use knorke_gpu::{CommandBuffer, Device, DownloadBuffer, Texture};
 use knorke_integration::light2d::{Light2dFrame, Light2dRenderer, Light2dSettings};
 use knorke_light2d::codec::{AlphaSource, Material, NormalMapOptions, convert_normal_map};
 use knorke_light2d::light::{LightDesc, LightType};
@@ -181,132 +181,135 @@ fn frame_once(
 
 #[test]
 fn scenes_match_chiaro_through_pass_plan_and_post() {
-    let Some((device, pack_bytes)) = vulkan_device_with_pack() else {
-        return;
-    };
-    let counter = LiveCounter::new();
-    let gpu = Gpu::new(&device, &counter);
-    let mut renderer = Light2dRenderer::new(gpu, pack_bytes).unwrap();
-    let bench = std::env::var("KNORKE_SCENE_BENCH")
-        .ok()
-        .and_then(|s| s.parse::<u32>().ok());
-    let out = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
-    let mut failures = Vec::new();
+    with_chiaro_pack(|gpu, pack_bytes| {
+        let mut renderer = Light2dRenderer::new(gpu, pack_bytes.to_vec()).unwrap();
+        let bench = std::env::var("KNORKE_SCENE_BENCH")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok());
+        let out = std::env::var("KNORKE_SCENE_OUT").ok().map(PathBuf::from);
+        let mut failures = Vec::new();
 
-    for scene in [minimal_normal_map(), gate_sprite_shadow()] {
-        let (w, h) = (scene.w, scene.h);
-        let color = sampled_rgba8(gpu, w, h, &scene.color);
-        let material = scene
-            .material
-            .as_deref()
-            .map(|m| sampled_rgba8(gpu, w, h, m));
-        let occlusion = scene
-            .occlusion
-            .as_deref()
-            .map(|o| sampled_rgba8(gpu, w, h, o));
-        let target = texture(
-            gpu,
-            (w, h),
-            SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-            SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
-            None,
-        );
-        let projection = Projection::default();
-        let frame = Light2dFrame {
-            material: material.as_ref().map(Texture::texture_ref),
-            occlusion: occlusion.as_ref().map(Texture::texture_ref),
-            ..Light2dFrame::new(color.texture_ref(), target.texture_ref(), &projection)
-        };
-        // Chiaro's defaults with the scene's ambient and output filter.
-        let mut settings = Light2dSettings {
-            light: LightSettings {
-                ambient: Vec3::new(scene.ambient, scene.ambient, scene.ambient),
-                ..LightSettings::default()
-            },
-            post: PostSettings::default(),
-        };
-        settings.post.output.filter = scene.filter;
-        let mut lights = LightStore::new();
-        lights.create(&scene.light, &NoResources).unwrap();
-        let obstacles = ObstacleStore::new();
-        let stores = SceneStores::new(&lights, &obstacles);
-        let mut download = DownloadBuffer::new(gpu, w * h * 4).unwrap();
-        let prepared = frame_once(
-            &device,
-            &mut renderer,
-            &frame,
-            &stores,
-            &settings,
-            Some(&download),
-        );
-        let shadows = scene.occlusion.is_some();
-        assert_eq!(
-            prepared.stages.contains(PassStages::OCCLUSION),
-            shadows,
-            "{}: the sprite mask is the only shadow source",
-            scene.name
-        );
-        if shadows {
-            // The sprite may change anywhere every frame: never reused.
-            assert_ne!(prepared.mask_update, Some(MaskUpdate::Reused));
-        }
-        let mut pixels = vec![0u8; (w * h * 4) as usize];
-        download.read(&mut pixels).unwrap();
-
-        // The rows differ from Chiaro's light along shadow edges: `gate_sprite_shadow` is
-        // re-blessed (tests/golden/rows).
-        let reference = expected_png_rgba8(
-            &workspace_root().join(format!("tests/golden/chiaro/{}.png", scene.name)),
-            &pixels,
-            w,
-            h,
-        );
-        let strict = compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::STRICT).unwrap();
-        strict.print(scene.name, "STRICT");
-        if !strict.within(&ParityBudget::STRICT) {
-            let loose =
-                compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::LOOSE).unwrap();
-            loose.print(scene.name, "LOOSE");
-            failures.push(format!("{}: {strict:?}", scene.name));
-        }
-        if let Some(dir) = &out {
-            std::fs::create_dir_all(dir).unwrap();
-            save_png_rgba8(&dir.join(format!("{}.rust.png", scene.name)), &pixels, w, h);
-            // Diff x32, red where it exceeds the STRICT tolerance.
-            let diff: Vec<u8> = pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .zip(reference.as_chunks::<4>().0)
-                .flat_map(|(a, b)| {
-                    let m = (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap();
-                    let v = m.saturating_mul(32);
-                    let g = if m > 2 { 0 } else { v };
-                    [v, g, g, 255]
-                })
-                .collect();
-            save_png_rgba8(&dir.join(format!("{}.diff.png", scene.name)), &diff, w, h);
-        }
-        // Host-side wall clock for the benchmark only; the renderers read no clock.
-        #[allow(clippy::disallowed_methods)]
-        if let Some(frames) = bench {
-            let mut times = Vec::with_capacity(frames as usize);
-            for _ in 0..frames {
-                let t = Instant::now();
-                frame_once(&device, &mut renderer, &frame, &stores, &settings, None);
-                times.push(t.elapsed().as_secs_f64() * 1e6);
-            }
-            times.sort_by(f64::total_cmp);
-            let mean = times.iter().sum::<f64>() / times.len() as f64;
-            eprintln!(
-                "bench {} {w}x{h} vulkan (Rust), {frames} frames: mean {mean:.1} us, median {:.1} us, p95 {:.1} us",
-                scene.name,
-                times[times.len() / 2],
-                times[times.len() * 95 / 100]
+        for scene in [minimal_normal_map(), gate_sprite_shadow()] {
+            let (w, h) = (scene.w, scene.h);
+            let color = sampled_rgba8(gpu, w, h, &scene.color);
+            let material = scene
+                .material
+                .as_deref()
+                .map(|m| sampled_rgba8(gpu, w, h, m));
+            let occlusion = scene
+                .occlusion
+                .as_deref()
+                .map(|o| sampled_rgba8(gpu, w, h, o));
+            let target = texture(
+                gpu,
+                (w, h),
+                SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
+                SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
+                None,
             );
+            let projection = Projection::default();
+            let frame = Light2dFrame {
+                material: material.as_ref().map(Texture::texture_ref),
+                occlusion: occlusion.as_ref().map(Texture::texture_ref),
+                ..Light2dFrame::new(color.texture_ref(), target.texture_ref(), &projection)
+            };
+            // Chiaro's defaults with the scene's ambient and output filter.
+            let mut settings = Light2dSettings {
+                light: LightSettings {
+                    ambient: Vec3::new(scene.ambient, scene.ambient, scene.ambient),
+                    ..LightSettings::default()
+                },
+                post: PostSettings::default(),
+            };
+            settings.post.output.filter = scene.filter;
+            let mut lights = LightStore::new();
+            lights.create(&scene.light, &NoResources).unwrap();
+            let obstacles = ObstacleStore::new();
+            let stores = SceneStores::new(&lights, &obstacles);
+            let mut download = DownloadBuffer::new(gpu, w * h * 4).unwrap();
+            let prepared = frame_once(
+                gpu.device(),
+                &mut renderer,
+                &frame,
+                &stores,
+                &settings,
+                Some(&download),
+            );
+            let shadows = scene.occlusion.is_some();
+            assert_eq!(
+                prepared.stages.contains(PassStages::OCCLUSION),
+                shadows,
+                "{}: the sprite mask is the only shadow source",
+                scene.name
+            );
+            if shadows {
+                // The sprite may change anywhere every frame: never reused.
+                assert_ne!(prepared.mask_update, Some(MaskUpdate::Reused));
+            }
+            let mut pixels = vec![0u8; (w * h * 4) as usize];
+            download.read(&mut pixels).unwrap();
+
+            // The rows differ from Chiaro's light along shadow edges: `gate_sprite_shadow` is
+            // re-blessed (tests/golden/rows).
+            let reference = expected_png_rgba8(
+                &workspace_root().join(format!("tests/golden/chiaro/{}.png", scene.name)),
+                &pixels,
+                w,
+                h,
+            );
+            let strict =
+                compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::STRICT).unwrap();
+            strict.print(scene.name, "STRICT");
+            if !strict.within(&ParityBudget::STRICT) {
+                let loose =
+                    compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::LOOSE).unwrap();
+                loose.print(scene.name, "LOOSE");
+                failures.push(format!("{}: {strict:?}", scene.name));
+            }
+            if let Some(dir) = &out {
+                std::fs::create_dir_all(dir).unwrap();
+                save_png_rgba8(&dir.join(format!("{}.rust.png", scene.name)), &pixels, w, h);
+                // Diff x32, red where it exceeds the STRICT tolerance.
+                let diff: Vec<u8> = pixels
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(reference.as_chunks::<4>().0)
+                    .flat_map(|(a, b)| {
+                        let m = (0..3).map(|i| a[i].abs_diff(b[i])).max().unwrap();
+                        let v = m.saturating_mul(32);
+                        let g = if m > 2 { 0 } else { v };
+                        [v, g, g, 255]
+                    })
+                    .collect();
+                save_png_rgba8(&dir.join(format!("{}.diff.png", scene.name)), &diff, w, h);
+            }
+            // Host-side wall clock for the benchmark only; the renderers read no clock.
+            #[allow(clippy::disallowed_methods)]
+            if let Some(frames) = bench {
+                let mut times = Vec::with_capacity(frames as usize);
+                for _ in 0..frames {
+                    let t = Instant::now();
+                    frame_once(
+                        gpu.device(),
+                        &mut renderer,
+                        &frame,
+                        &stores,
+                        &settings,
+                        None,
+                    );
+                    times.push(t.elapsed().as_secs_f64() * 1e6);
+                }
+                times.sort_by(f64::total_cmp);
+                let mean = times.iter().sum::<f64>() / times.len() as f64;
+                eprintln!(
+                    "bench {} {w}x{h} vulkan (Rust), {frames} frames: mean {mean:.1} us, median {:.1} us, p95 {:.1} us",
+                    scene.name,
+                    times[times.len() / 2],
+                    times[times.len() * 95 / 100]
+                );
+            }
         }
-    }
-    drop(renderer);
-    assert_eq!(counter.live(), 0, "the renderers leaked GPU objects");
-    assert!(failures.is_empty(), "STRICT parity missed: {failures:#?}");
+        assert!(failures.is_empty(), "STRICT parity missed: {failures:#?}");
+    });
 }
