@@ -90,28 +90,6 @@ fn plain(store: &LightStore) -> LightList {
 }
 
 #[test]
-fn inside_obstacle_turns_the_source_radius_in_shadow_x_into_minus_one_minus_r() {
-    let mut store = LightStore::new();
-    let mut d = LightDesc::new(LightType::Point);
-    d.position = at(16.0, 32.0);
-    d.radius = 50.0;
-    d.cast_shadows = true;
-    d.inside_obstacle = true;
-    d.source_radius = 6.0;
-    store.create(&d, &NoResources).unwrap();
-    d.source_radius = 0.0;
-    store.create(&d, &NoResources).unwrap();
-    add_point(&mut store, 64.0, 32.0, true, 6.0); // unmarked: unchanged
-
-    let list = plain(&store);
-    assert_eq!(shadowed(&list).len(), 3);
-    assert!(near(shadowed(&list)[0].shadow[0], -7.0));
-    assert_eq!(shadowed(&list)[1].shadow[0], -1.0);
-    assert!(near(shadowed(&list)[2].shadow[0], 6.0));
-    assert!(near(shadowed(&list)[0].shadow[2], 48.0)); // the rest as before
-}
-
-#[test]
 fn shadowed_lights_carry_their_mask_space_shadow_parameters() {
     let mut store = LightStore::new();
     add_point(&mut store, 16.0, 32.0, true, 6.0);
@@ -121,15 +99,13 @@ fn shadowed_lights_carry_their_mask_space_shadow_parameters() {
     let list = plain(&store);
     assert_eq!(shadowed(&list).len(), 2);
     assert_eq!(unshadowed(&list).len(), 1);
-    // Margin 32 at scale 1: mask = scene + 32. x = R, y = specular factor (E47), zw = ground
-    // position in mask texels.
+    // Margin 32 at scale 1: mask = scene + 32. y = specular factor (E47), zw = ground position
+    // in mask texels.
     let a = &shadowed(&list)[0];
-    assert!(near(a.shadow[0], 6.0));
-    assert_eq!(a.shadow[1], 1.0);
+    assert_eq!(a.shadow[..2], [0.0, 1.0]);
     assert!(near(a.shadow[2], 48.0));
     assert!(near(a.shadow[3], 64.0));
     let b = &shadowed(&list)[1];
-    assert_eq!(b.shadow[0], 0.0);
     assert_eq!(b.shadow[1], 1.0);
     assert!(near(b.shadow[2], 132.0));
     assert!(near(b.shadow[3], 42.0));
@@ -196,8 +172,6 @@ fn shadow_parameters_follow_zoom_camera_and_shadow_scale() {
     let list = collect(&store, &settings, &projection, 0.0, &LightModes::default());
     assert_eq!(shadowed(&list).len(), 1);
     let g = &shadowed(&list)[0];
-    // R = source_radius * axis scale * s = 6 * 2 * 0.5.
-    assert!(near(g.shadow[0], 6.0));
     // Scene position: camera centre (64, 32) + 2 * (2, 1) = (68, 34); mask = (scene + 32) * 0.5.
     assert!(near(g.shadow[2], 50.0));
     assert!(near(g.shadow[3], 33.0));

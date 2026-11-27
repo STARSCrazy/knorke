@@ -24,9 +24,9 @@ uniform_block! {
         /// x cos(inner), y cos(outer), z quad half extent (ground radius), w 1 / profile atlas
         /// height (profiles only).
         pub spot_cos: [f32; 4],
-        /// x source radius R in mask texels (negative for `inside_obstacle`: `-1 - R`), zw ground
-        /// position of the light in mask texels (shadow-casting lights only, zero otherwise); y the
-        /// light's specular factor (every light, E47).
+        /// x the medium's polar row + 1 (`medium_light.vert`; zero for the ground lights), y the
+        /// light's specular factor (every light, E47), zw ground position of the light in mask
+        /// texels (shadow-casting lights only, zero otherwise).
         pub shadow: [f32; 4],
         /// x first atlas row of the light's profile or -1 without, yzw C0 unit vector.
         pub profile: [f32; 4],

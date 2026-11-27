@@ -659,10 +659,6 @@ pub fn collect_lights(
             // light; with heights (E22) it rises to the height of the light, `position_radius[2]`,
             // on the way.
             let mask = domain.scene_to_domain(projection.project(d.position, 0.0).raw());
-            g.shadow[0] = d.source_radius * axis_scale * shadow_scale;
-            if d.inside_obstacle {
-                g.shadow[0] = -1.0 - g.shadow[0]; // the sign marks the light (E147); R >= 0 stays unmarked
-            }
             g.shadow[2] = mask.x - anchor.remainder[0];
             g.shadow[3] = mask.y - anchor.remainder[1];
             // The ground image of a world vector in mask texels.

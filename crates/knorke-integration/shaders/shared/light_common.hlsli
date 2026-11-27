@@ -26,9 +26,9 @@ struct GpuLight
     float4 spotCos;        // x cos(inner), y cos(outer), z quad half extent = ground radius sqrt(r^2 - z^2),
                            // w 1 / profile atlas height (profile.hlsli). The varying spotCos.z is the specular
                            // factor instead (E47, set by the vertex shaders from shadow.y).
-    float4 shadow;         // x source radius R in mask texels (-1 - R with CHI_LIGHT_INSIDE_OBSTACLE, E147), zw
-                           // ground position of the light in mask texels (shadowed lights), y the specular factor
-                           // of every light (E47). The varying shadow.y is the light's height instead.
+    float4 shadow;         // x the medium's polar row + 1 (medium_light.vert), 0 for the ground lights; zw ground
+                           // position of the light in mask texels (shadowed lights), y the specular factor of
+                           // every light (E47). The varying shadow.y is the light's height instead.
     float4 profile;        // x first profile atlas row or -1 without a profile, yzw C0 unit vector (profile.hlsli)
     float4 area;           // line and rect lights: xyz half extent U along the length, w half width (rect)
     float4 areaMask;       // shadowed line and rect lights: xy U, zw V (the rect's half extent across) in mask texels
