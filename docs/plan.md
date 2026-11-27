@@ -1042,10 +1042,10 @@ Ziel (Manuel, 2026-11-27): pixelraum (`knorke-render` + `knorke-lighting`) wird 
 
 | Schritt | Inhalt | Status |
 |---|---|---|
-| 3D-1 | `knorke-post` an die CPU-Ausgabe anschließen | läuft |
-| 3D-2 | Szenenmodell aus `knorke-render` herauslösen, Meshes gleichberechtigt | offen |
-| 3D-3 | GPU-Raster derselben Szene ohne Licht, Vergleich gegen CPU-Goldens | offen |
-| 3D-4 | GPU-Licht mit Schattenkarten, Materialien, Nebel | offen |
-| 3D-5 | Wizardry 7 auf Knorke (C-ABI `knorke-abi`, 17.1) | offen |
-| 3D-6 | Shooter-Grundlagen (Kollision 17.8, Sichtbarkeit, Animation 17.4, Maus), Demo | offen |
+| 3D-1 | Szenenmodell aus `knorke-render` herauslösen, Meshes gleichberechtigt | läuft (Entwurf) |
+| 3D-2 | GPU-Raster derselben Szene, danach `knorke-post`, Vergleich gegen CPU-Goldens | offen |
+| 3D-3 | GPU-Licht mit Schattenkarten, Materialien, Nebel, Pixel-Look auf der GPU | offen |
+| 3D-4 | Wizardry 7 auf Knorke (C-ABI `knorke-abi`, 17.1) | offen |
+| 3D-5 | Shooter-Grundlagen (Kollision 17.8, Sichtbarkeit, Animation 17.4, Maus), Demo | offen |
+| – | CPU-Bild an `knorke-post` geben | verworfen 2026-11-27 – Post braucht ohnehin die GPU, also gleich alles auf der GPU (ADR 0021) |
 | – | Lichtzeilen (ADR 0019) als Sonderweg für reine Gitter-Welten | offen – nur nach Messung |
