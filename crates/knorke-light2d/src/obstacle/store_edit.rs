@@ -42,8 +42,6 @@ pub(super) struct EditState {
     pub row: Vec<CellRect>,
     /// `on_patterns_destroyed`: the obstacles that name a destroyed pattern.
     affected: Vec<ObstacleId>,
-    /// `set_patterns`: sorted handle bits for the duplicate check.
-    sorted: Vec<u64>,
 }
 
 /// A tile grid with its channels and pattern data as slices; empty slices are channels the grid
@@ -348,13 +346,7 @@ impl ObstacleStore {
             };
             check_assignment(s, *p, patterns).map_err(|e| batch("patterns", i, e))?;
         }
-        self.edit.sorted.clear();
-        self.edit.sorted.extend(ids.iter().map(|id| id.to_bits()));
-        self.edit.sorted.sort_unstable();
-        if self.edit.sorted.windows(2).any(|w| w[0] == w[1]) {
-            let index = (0..ids.len())
-                .find(|&i| (0..i).any(|j| ids.get(j) == ids.get(i)))
-                .unwrap_or(0);
+        if let Some(index) = crate::first_repeat(&ids, &mut self.sorted) {
             return Err(batch(
                 "ids",
                 index,

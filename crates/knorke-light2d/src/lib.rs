@@ -105,3 +105,21 @@ pub use projection::{Projection, ProjectionError};
 pub use resources::StoreResources;
 pub use triangulate::{TriangulateError, Triangulator, circle_triangles};
 
+/// Index of the first handle of `ids` equal to an earlier one, `None` without repeats. `sorted`
+/// is reused scratch: a sorted copy of the bits tells cheaply whether there is a repeat at all.
+pub(crate) fn first_repeat<T>(
+    ids: &impl knorke_types::Column<knorke_types::Handle<T>>,
+    sorted: &mut Vec<u64>,
+) -> Option<usize> {
+    sorted.clear();
+    sorted.extend(ids.iter().map(|id| id.to_bits()));
+    sorted.sort_unstable();
+    if !sorted.windows(2).any(|w| w[0] == w[1]) {
+        return None;
+    }
+    Some(
+        (0..ids.len())
+            .find(|&i| (0..i).any(|j| ids.get(j) == ids.get(i)))
+            .unwrap_or(0),
+    )
+}

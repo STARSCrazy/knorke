@@ -227,19 +227,7 @@ impl LightStore {
                 return Err(batch("ids", i, invalid(*id)));
             }
         }
-        // Duplicates: find the first element equal to an earlier one through a sorted copy of
-        // (bits, index); the scratch is reused.
-        self.sorted.clear();
-        self.sorted.extend(ids.iter().map(|id| id.to_bits()));
-        self.sorted.sort_unstable();
-        if self.sorted.windows(2).any(|w| w[0] == w[1]) {
-            let index = (0..ids.len())
-                .find(|&i| {
-                    ids.get(i).is_some_and(|id| {
-                        (0..i).any(|j| ids.get(j).is_some_and(|other| other == id))
-                    })
-                })
-                .unwrap_or(0);
+        if let Some(index) = crate::first_repeat(&ids, &mut self.sorted) {
             return Err(batch(
                 "ids",
                 index,
