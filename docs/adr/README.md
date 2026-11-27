@@ -23,3 +23,4 @@ Bindend für alle Änderungen (`CLAUDE.md`). Neue Grundsatzentscheidung → neue
 | [0017](0017-pass-plan-2d-licht.md) | Pass-Plan des 2D-Lichts, GPU-Profil in `knorke-integration` (P31) | vorgeschlagen |
 | [0018](0018-szene-und-agenten-cli.md) | Szene als Text, Profil `stealth`, Agenten-Kommandozeile | angenommen; Stufe 1 umgesetzt |
 | [0019](0019-lichtzeilen-2d-licht.md) | 2D-Licht neu: eine Lichtzeile pro Lampe statt Strahl-Marsch pro Pixel | vorgeschlagen (GPU-Versuch für Punkt- und Spotlichter mit harten und weichen Schatten gemessen 2026-11-26; übrige Lichtarten und Bild-Urteil offen) |
+| [0020](0020-audio.md) | Audio: `knorke-audio` als Mischpult ohne Gerät, Steuerung über Commands, Raumklang Stufe 1 | angenommen (Stufe 1 umgesetzt) |

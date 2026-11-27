@@ -37,6 +37,8 @@ const RULES: &[Rule] = &[
             "knorke-gpu",
             "knorke-light2d",
             "knorke-post",
+            "knorke-audio",
+            "knorke-audio-sdl",
             "knorke-runtime",
             "knorke-scene",
             "knorke-integration",
@@ -110,6 +112,34 @@ const RULES: &[Rule] = &[
         except: &[],
         through: &[],
         why: "lighting works on host-provided targets without the renderer or a world runtime",
+    },
+    // ADR 0020: the mixer renders into host buffers; device and thread belong to the host.
+    Rule {
+        from: &["knorke-audio"],
+        to: &["*"],
+        except: &[
+            "knorke-audio",
+            "knorke-math",
+            "knorke-types",
+            "bytemuck",
+            "mint",
+            "libm",
+        ],
+        through: &[],
+        why: "knorke-audio is a device-free mixer on knorke-math only; device, thread and queue are the host's (ADR 0020)",
+    },
+    // ADR 0020: the host side of audio knows no engine crate beyond the mixer.
+    Rule {
+        from: &["knorke-audio-sdl"],
+        to: &["knorke-*"],
+        except: &[
+            "knorke-audio-sdl",
+            "knorke-audio",
+            "knorke-math",
+            "knorke-types",
+        ],
+        through: &[],
+        why: "knorke-audio-sdl only joins the mixer to an SDL3 device (ADR 0020)",
     },
     // The GPU foundation serves 2D light, post and a later 3D renderer (ADR 0014).
     Rule {

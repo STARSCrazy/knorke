@@ -29,6 +29,7 @@ knorke-integration = { workspace = true, features = ["stealth"] }
 knorke-scene = { workspace = true }
 knorke-light2d = { workspace = true }
 knorke-post = { workspace = true }
+knorke-audio = { workspace = true }
 knorke-gpu = { workspace = true, features = ["test-support"] }
 
 # Own lint table: the allocation counter needs `unsafe impl GlobalAlloc`.
@@ -44,4 +45,8 @@ harness = false
 
 [[bench]]
 name = "render"
+harness = false
+
+[[bench]]
+name = "audio"
 harness = false

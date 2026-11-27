@@ -1,0 +1,36 @@
+[package]
+name = "knorke-audio-sdl"
+description = "SDL3 playback for knorke-audio: opens the default audio device, runs the mixer in SDL's audio callback and carries commands from the game thread to it. The host side of ADR 0020."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Playback over SDL3. Links the SDL3 library the host provides, as in knorke-gpu.
+sdl = ["dep:sdl3-sys", "dep:knorke-audio"]
+# Builds SDL3 from the bundled source and links it statically (needs CMake), as in knorke-gpu.
+sdl-build-static = ["sdl", "sdl3-sys/build-from-source-static"]
+
+[dependencies]
+knorke-audio = { workspace = true, optional = true }
+sdl3-sys = { workspace = true, optional = true }
+
+[dev-dependencies]
+knorke-math = { workspace = true }
+
+[[example]]
+name = "dungeon_sound"
+required-features = ["sdl"]
+
+# Own lint table instead of `workspace = true`: identical, except that `unsafe_code` is
+# `deny` so that the FFI boundary to SDL3 can opt in locally (ADR 0005).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
