@@ -1,6 +1,6 @@
 # ADR 0019: 2D-Licht neu – eine Lichtzeile pro Lampe statt Strahl-Marsch pro Pixel
 
-Status: vorgeschlagen (Versuch für Punkt- und Spotlichter mit harten und weichen Schatten gemessen, Ergebnisse unten ab „Ergebnis von Schritt −1“; die Runden 2 bis 5 überholen die Schattenhöhen-Karte aus Abschnitt 2a – nachgeschaut wird direkt in der gepackten Zeile; übrige Lichtarten und das Urteil am Bild stehen aus) · Datum: 2026-11-25, Versuch bis 2026-11-26 · Bezug: ADR 0002, 0011, 0014, 0016, 0017, Plan 17.1 („2D-Licht grundsätzlich neu denken“), 17.11 Nr. 6, 17.13 · Auftrag: `docs/prompts/licht-neu-denken.md`
+Status: angenommen 2026-11-27 (umgesetzt in Plan 17.13 L1–L7; Chiaros Schatten-Weg und das Distanzfeld sind gelöscht, siehe Plan Abschnitt 16) · Datum: 2026-11-25, Versuch bis 2026-11-26 · Bezug: ADR 0002, 0011, 0014, 0016, 0017, Plan 17.1 („2D-Licht grundsätzlich neu denken“), 17.11 Nr. 6, 17.13 · Auftrag: `docs/prompts/licht-neu-denken.md`
 
 Kennzeichnung in diesem Dokument: **[belegt]** = im Code oder in der Primärquelle selbst gelesen, **[sekundär]** = nur aus zweiter Hand, **[Schätzung]** = überlegt, nicht gemessen.
 
@@ -60,7 +60,7 @@ Ein Transport-Durchlauf für alles; Lichter sind gemalte Emission.
 - Kostet: bei 512² rund 2 ms auf vergleichbarer Hardware [belegt für HRC in CUDA; für eine Fragment-Fassung in `knorke-gpu` ungemessen]. Das ist vermutlich mehr als das heutige Licht in den Demo-Szenen braucht [Schätzung, Grundlinie fehlt]. Entweder `knorke-gpu` um Compute erweitern oder das Verfahren als erste Fragment-Fassung selbst herleiten.
 - Urteil: Als Kern verfehlt C die Hälfte des Solls und müsste um einen Direkt-Weg wie B ergänzt werden. Indirektes Licht ist **nicht Teil des Solls** – das heutige Licht hat keines.
 
-## Entscheidung (vorgeschlagen)
+## Entscheidung
 
 **Variante B als Kern. C nur als spätere, abschaltbare Zusatzstufe. A ist der Rückfall, wenn B im Versuch am Bild scheitert.**
 
