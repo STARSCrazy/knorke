@@ -1,6 +1,6 @@
 [package]
 name = "knorke-audio"
-description = "Audio mixer of the Knorke Engine: voices, buses, fades, positional sound with distance, walls, rear dulling and ear delay, short room echoes and a soft output knee. Renders into a host buffer; the host owns device and thread (ADR 0020)."
+description = "Audio mixer of the Knorke Engine: voices, buses, fades, positional sound with distance, walls, rear dulling and ear delay, short room echoes, sample-exact start times, sound travel delay, a cap per sound, bus filters, sidechain ducking and a soft output knee. Renders into a host buffer; the host owns device and thread (ADR 0020)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

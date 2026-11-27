@@ -15,9 +15,19 @@
 //! Positional sound follows the model of the Wizardry 7 rewrite (`wizardry7/revised/platform/
 //! sdl/audio_sdl.c`): level and brightness fall with distance, walls and sounds behind the
 //! listener; with headphones the far ear hears the sound slightly later and duller.
+//!
+//! Beyond that (what middleware such as Wwise, FMOD or Unreal's Quartz offers, Plan 17.6):
+//! sample-exact start on a given output frame for music on the beat ([`Play::start`]), sound
+//! arriving late over distance ([`Config::sound_speed`]), a cap per sound against the
+//! machine-gun effect ([`Play::limit`]), a filter per bus for underwater, radio or stunned
+//! ([`Command::Filter`]) and a bus that ducks under another one by itself ([`Command::Duck`]).
 
+mod bus;
+mod echo;
 mod mixer;
+mod ramp;
 mod spatial;
+mod voice;
 
 pub use mixer::{Mixer, Stats};
 
@@ -39,6 +49,12 @@ pub struct VoiceId(pub u32);
 /// A mix bus (music, effects, interface, …): index below [`Config::buses`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Bus(pub u8);
+
+impl Bus {
+    pub(crate) fn index(self) -> usize {
+        usize::from(self.0)
+    }
+}
 
 /// Borrowed PCM: `f32` samples in `-1..=1`, interleaved when `stereo`.
 #[derive(Clone, Copy, Debug)]
@@ -93,6 +109,12 @@ pub struct Play {
     pub priority: u8,
     /// Fade-in length in frames (0 starts at full gain).
     pub fade_in: u32,
+    /// Output frame (see [`Mixer::clock`]) the voice starts on; a past frame starts at once.
+    /// The game reads the clock, works out the next beat and sends the play ahead of time.
+    pub start: u64,
+    /// At most this many voices of the same sound at once (0: no cap); a new one replaces the
+    /// one furthest through the sound.
+    pub limit: u8,
 }
 
 impl Default for Play {
@@ -108,6 +130,8 @@ impl Default for Play {
             looped: false,
             priority: 0,
             fade_in: 0,
+            start: 0,
+            limit: 0,
         }
     }
 }
@@ -179,6 +203,63 @@ pub enum Command {
     Listener(Listener),
     /// Headphones on: ear delay and head shadow for placed voices.
     Headphones(bool),
+    /// Fades the filter of a bus to `filter` (underwater, radio, stunned).
+    Filter {
+        /// The bus.
+        bus: Bus,
+        /// Target filter.
+        filter: Filter,
+        /// Fade length.
+        fade: u32,
+    },
+    /// Lets `bus` duck under another bus while that one sounds (sidechain), or stops it (`None`).
+    Duck {
+        /// The bus that gets quieter.
+        bus: Bus,
+        /// How, or `None` for no ducking.
+        duck: Option<Duck>,
+    },
+}
+
+/// Filter on a bus: two cutoffs, each 12 dB per octave. 0 Hz switches a side off.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Filter {
+    /// Above this the sound gets dull (low-pass).
+    pub lowpass_hz: f32,
+    /// Below this the sound gets thin (high-pass).
+    pub highpass_hz: f32,
+}
+
+impl Filter {
+    /// No filter.
+    pub const NONE: Self = Self {
+        lowpass_hz: 0.0,
+        highpass_hz: 0.0,
+    };
+    /// Under water, behind a thick door, stunned: only the lows remain.
+    pub const UNDERWATER: Self = Self {
+        lowpass_hz: 600.0,
+        highpass_hz: 0.0,
+    };
+    /// Radio or telephone: a narrow band in the middle.
+    pub const RADIO: Self = Self {
+        lowpass_hz: 3_000.0,
+        highpass_hz: 400.0,
+    };
+}
+
+/// Sidechain ducking: a bus gets quieter while the bus `by` carries sound (speech over music,
+/// an explosion pressing everything else down).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Duck {
+    /// The bus that is listened to.
+    pub by: Bus,
+    /// Share of the level taken away at full duck, 0..=1.
+    pub depth: f32,
+    /// How fast the duck goes down, in milliseconds.
+    pub attack_ms: u16,
+    /// How fast the level comes back, in milliseconds.
+    pub release_ms: u16,
 }
 
 /// The ears: position, orientation and the room they are in.
@@ -256,6 +337,9 @@ pub struct Config {
     pub range: f32,
     /// Headphones at start (see [`Command::Headphones`]).
     pub headphones: bool,
+    /// World units sound travels per second; a placed voice then starts late by its distance
+    /// (lightning before thunder). 0 switches it off. Air: 343 m/s.
+    pub sound_speed: f32,
 }
 
 impl Default for Config {
@@ -269,6 +353,7 @@ impl Default for Config {
             air: 0.9,
             range: 12.0,
             headphones: false,
+            sound_speed: 0.0,
         }
     }
 }

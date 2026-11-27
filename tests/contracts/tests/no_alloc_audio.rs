@@ -1,10 +1,11 @@
 //! Contract: after `Mixer::new`, applying commands and rendering allocate nothing – the audio
 //! callback has a hard deadline (ADR 0020, ADR 0006). Covers placed and unplaced voices, voice
-//! replacement, fades, bus ducking, headphones and a room change.
+//! replacement, fades, bus ducking, headphones, a room change, delayed starts, the cap per
+//! sound, bus filters and sidechain ducking.
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests.
 
-use knorke_audio::{Bus, Command, Config, Listener, Mixer, Pcm, Play, Room, VoiceId};
+use knorke_audio::{Bus, Command, Config, Duck, Filter, Listener, Mixer, Pcm, Play, Room, VoiceId};
 use knorke_contract_tests::counting_alloc::{Counting, allocations};
 use knorke_math::{At, Vec2};
 
@@ -31,6 +32,7 @@ fn mixer_steady_state_allocates_nothing() {
     ];
     let mut m = Mixer::new(Config {
         voices: 8,
+        sound_speed: 40.0,
         ..Config::default()
     });
     let mut out = vec![0.0; 2 * 480];
@@ -46,6 +48,8 @@ fn mixer_steady_state_allocates_nothing() {
             looped: tick % 5 == 0,
             priority: (tick % 4) as u8,
             fade_in: 100,
+            start: m.clock() + u64::from(tick % 4) * 300,
+            limit: (tick % 3) as u8,
             ..Play::default()
         };
         m.apply(Command::Play { voice: id, play });
@@ -63,6 +67,21 @@ fn mixer_steady_state_allocates_nothing() {
             fade: 960,
         });
         m.apply(Command::Headphones(tick % 3 == 0));
+        let filter = [Filter::NONE, Filter::UNDERWATER, Filter::RADIO][(tick / 7 % 3) as usize];
+        m.apply(Command::Filter {
+            bus: Bus((tick % 3) as u8),
+            filter,
+            fade: 240,
+        });
+        m.apply(Command::Duck {
+            bus: Bus(0),
+            duck: (tick % 11 != 0).then_some(Duck {
+                by: Bus(2),
+                depth: 0.6,
+                attack_ms: 10,
+                release_ms: 200,
+            }),
+        });
         let room = [Room::NONE, Room::SMALL, Room::STONE, Room::CAVE][(tick / 40 % 4) as usize];
         m.apply(Command::Listener(Listener {
             room,

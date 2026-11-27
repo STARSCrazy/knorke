@@ -1,5 +1,6 @@
 //! A one-minute listening tour of the mixer: music, a fountain that circles you, walks away and
-//! hides behind walls, dripping water in three rooms, headphone mode and music ducking.
+//! hides behind walls, dripping water in three rooms, headphone mode, music ducking and
+//! bus filters (underwater, radio).
 //!
 //! All sounds are made in code, so no files are needed:
 //! `cargo run -p knorke-audio-sdl --example dungeon_sound --features sdl-build-static`
@@ -9,7 +10,7 @@ use std::f32::consts::TAU;
 use std::thread::sleep;
 use std::time::Duration;
 
-use knorke_audio::{Bus, Command, Config, Listener, Play, Room, SoundId, VoiceId};
+use knorke_audio::{Bus, Command, Config, Filter, Listener, Play, Room, SoundId, VoiceId};
 use knorke_audio_sdl::{Clip, Output};
 use knorke_math::det;
 use knorke_math::{At, Vec2};
@@ -42,7 +43,7 @@ fn main() {
     };
     let ms = |ms| cfg.frames(ms);
 
-    say("1/9 Musik allein");
+    say("1/10 Musik allein");
     send(Command::Play {
         voice: SONG,
         play: Play {
@@ -57,7 +58,7 @@ fn main() {
     });
     wait(3.0);
 
-    say("2/9 Ein Brunnen rechts neben dir");
+    say("2/10 Ein Brunnen rechts neben dir");
     send(Command::Play {
         voice: FOUNTAIN,
         play: Play {
@@ -73,10 +74,10 @@ fn main() {
     });
     wait(3.0);
 
-    say("3/9 Der Brunnen kreist um dich (hinter dir klingt er dumpfer)");
+    say("3/10 Der Brunnen kreist um dich (hinter dir klingt er dumpfer)");
     circle(&send, 8.0);
 
-    say("4/9 Der Brunnen entfernt sich vor dir (leiser und dumpfer)");
+    say("4/10 Der Brunnen entfernt sich vor dir (leiser und dumpfer)");
     ticks(6.0, |t| {
         send(Command::Place {
             voice: FOUNTAIN,
@@ -84,7 +85,7 @@ fn main() {
         })
     });
 
-    say("5/9 Der Brunnen kommt zurück: offen, eine Wand, zwei Wände, wieder offen");
+    say("5/10 Der Brunnen kommt zurück: offen, eine Wand, zwei Wände, wieder offen");
     send(Command::Place {
         voice: FOUNTAIN,
         at: at(0.0, 3.0),
@@ -97,7 +98,7 @@ fn main() {
         wait(2.0);
     }
 
-    say("6/9 Tropfen in drei Räumen: kleiner Raum, Steinhalle, Höhle");
+    say("6/10 Tropfen in drei Räumen: kleiner Raum, Steinhalle, Höhle");
     send(Command::Gain {
         voice: FOUNTAIN,
         gain: 0.25,
@@ -138,12 +139,12 @@ fn main() {
         fade: ms(500),
     });
 
-    say("7/9 Kopfhörer-Modus an, der Brunnen kreist wieder (am besten mit Kopfhörern)");
+    say("7/10 Kopfhörer-Modus an, der Brunnen kreist wieder (am besten mit Kopfhörern)");
     send(Command::Headphones(true));
     circle(&send, 8.0);
     send(Command::Headphones(false));
 
-    say("8/9 Musik wird leiser gedreht, als würde jemand sprechen, dann wieder lauter");
+    say("8/10 Musik wird leiser gedreht, als würde jemand sprechen, dann wieder lauter");
     send(Command::BusGain {
         bus: MUSIC,
         gain: 0.2,
@@ -157,7 +158,19 @@ fn main() {
     });
     wait(2.0);
 
-    say("9/9 Alles blendet aus");
+    say("9/10 Unter Wasser (alles dumpf), dann wie aus dem Funkgerät, dann wieder klar");
+    for filter in [Filter::UNDERWATER, Filter::RADIO, Filter::NONE] {
+        for bus in [MUSIC, EFFECTS] {
+            send(Command::Filter {
+                bus,
+                filter,
+                fade: ms(600),
+            });
+        }
+        wait(3.0);
+    }
+
+    say("10/10 Alles blendet aus");
     send(Command::StopBus {
         bus: MUSIC,
         fade: ms(2000),

@@ -3,7 +3,7 @@
 
 #![allow(clippy::disallowed_methods)]
 
-use knorke_audio::{Command, Config, Listener, Mixer, Pcm, Play, Room, VoiceId};
+use knorke_audio::{Bus, Command, Config, Duck, Filter, Listener, Mixer, Pcm, Play, Room, VoiceId};
 use knorke_math::{At, Vec2};
 use std::hint::black_box;
 use std::time::{Duration, Instant};
@@ -23,7 +23,31 @@ fn best(runs: u32, mut f: impl FnMut()) -> Duration {
         .unwrap()
 }
 
-fn case(name: &str, voices: u32, headphones: bool, room: Room, far: bool, sounds: &[Pcm<'_>]) {
+/// Bus 0 under a radio filter and ducked by bus 1: the costliest bus setup.
+const EFFECTS: [Command; 2] = [
+    Command::Filter {
+        bus: Bus(0),
+        filter: Filter::RADIO,
+        fade: 0,
+    },
+    Command::Duck {
+        bus: Bus(0),
+        duck: Some(Duck {
+            by: Bus(1),
+            depth: 0.5,
+            attack_ms: 10,
+            release_ms: 200,
+        }),
+    },
+];
+
+fn case(
+    name: &str,
+    voices: u32,
+    (headphones, room, far): (bool, Room, bool),
+    effects: &[Command],
+    sounds: &[Pcm<'_>],
+) {
     let d = best(5, || {
         let mut m = Mixer::new(Config {
             rate: RATE,
@@ -31,6 +55,7 @@ fn case(name: &str, voices: u32, headphones: bool, room: Room, far: bool, sounds
             ..Config::default()
         });
         m.apply(Command::Headphones(headphones));
+        effects.iter().for_each(|&c| m.apply(c));
         m.apply(Command::Listener(Listener {
             room,
             ..Listener::default()
@@ -73,33 +98,36 @@ fn main() {
     case(
         "32 placed voices, speakers, no room",
         32,
-        false,
-        Room::NONE,
-        false,
+        (false, Room::NONE, false),
+        &[],
         &sounds,
     );
     case(
         "32 placed voices, headphones, stone room",
         32,
-        true,
-        Room::STONE,
-        false,
+        (true, Room::STONE, false),
+        &[],
         &sounds,
     );
     case(
         "64 placed voices, headphones, stone room",
         64,
-        true,
-        Room::STONE,
-        false,
+        (true, Room::STONE, false),
+        &[],
         &sounds,
     );
     case(
         "32 voices out of earshot (virtual)",
         32,
-        false,
-        Room::NONE,
-        true,
+        (false, Room::NONE, true),
+        &[],
+        &sounds,
+    );
+    case(
+        "32 placed voices, stone room, bus filter + duck",
+        32,
+        (false, Room::STONE, false),
+        &EFFECTS,
         &sounds,
     );
 }

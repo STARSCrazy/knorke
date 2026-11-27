@@ -1,7 +1,7 @@
 //! Behaviour of the mixer through its public API.
 
 use knorke_audio::{
-    BLOCK, Bus, Command, Config, Listener, Mixer, Pcm, Play, Room, SoundId, VoiceId,
+    BLOCK, Bus, Command, Config, Duck, Filter, Listener, Mixer, Pcm, Play, Room, SoundId, VoiceId,
 };
 use knorke_math::{At, Vec2};
 
@@ -18,6 +18,27 @@ fn noise(frames: usize) -> Vec<f32> {
             (x >> 8) as f32 / 8_388_608.0 - 1.0
         })
         .collect()
+}
+
+/// A constant level: makes start frames and gains readable sample by sample.
+fn dc(level: f32, frames: usize) -> Vec<f32> {
+    vec![level; frames]
+}
+
+fn first_sound(out: &[f32]) -> Option<usize> {
+    out.as_chunks::<2>().0.iter().position(|f| f[0] != 0.0)
+}
+
+fn mono(samples: &[f32], rate: u32) -> Pcm<'_> {
+    Pcm {
+        samples,
+        rate,
+        stereo: false,
+    }
+}
+
+fn set_filter(m: &mut Mixer, bus: Bus, filter: Filter, fade: u32) {
+    m.apply(Command::Filter { bus, filter, fade });
 }
 
 fn mixer() -> Mixer {
@@ -62,11 +83,7 @@ fn at(x: f32, y: f32) -> Option<At<knorke_math::World2, Vec2>> {
 #[test]
 fn silence_without_voices_and_centre_is_balanced() {
     let data = noise(4800);
-    let sounds = [Pcm {
-        samples: &data,
-        rate: RATE,
-        stereo: false,
-    }];
+    let sounds = [mono(&data, RATE)];
     let mut m = mixer();
     assert!(render(&mut m, &sounds, 300).iter().all(|&s| s == 0.0));
     play(&mut m, 1, Play::default());
@@ -78,11 +95,7 @@ fn silence_without_voices_and_centre_is_balanced() {
 #[test]
 fn output_does_not_depend_on_callback_size() {
     let data = noise(9000);
-    let sounds = [Pcm {
-        samples: &data,
-        rate: 22_050,
-        stereo: false,
-    }];
+    let sounds = [mono(&data, 22_050)];
     let setup = |m: &mut Mixer| {
         m.apply(Command::Headphones(true));
         m.apply(Command::Listener(Listener {
@@ -108,6 +121,26 @@ fn output_does_not_depend_on_callback_size() {
                 ..Play::default()
             },
         );
+        // Starts mid-block, on a filtered bus that ducks bus 0.
+        play(
+            m,
+            3,
+            Play {
+                bus: Bus(1),
+                start: 1300,
+                ..Play::default()
+            },
+        );
+        set_filter(m, Bus(1), Filter::RADIO, 900);
+        m.apply(Command::Duck {
+            bus: Bus(0),
+            duck: Some(Duck {
+                by: Bus(1),
+                depth: 0.7,
+                attack_ms: 5,
+                release_ms: 80,
+            }),
+        });
     };
     let mut a = mixer();
     setup(&mut a);
@@ -124,11 +157,7 @@ fn output_does_not_depend_on_callback_size() {
 #[test]
 fn right_is_right_behind_is_duller_walls_are_quieter() {
     let data = noise(48_000);
-    let sounds = [Pcm {
-        samples: &data,
-        rate: RATE,
-        stereo: false,
-    }];
+    let sounds = [mono(&data, RATE)];
     let probe = |p: Play| {
         let mut m = mixer();
         play(&mut m, 1, p);
@@ -162,11 +191,7 @@ fn right_is_right_behind_is_duller_walls_are_quieter() {
 #[test]
 fn fades_end_voices_and_buses_duck() {
     let data = noise(48_000);
-    let sounds = [Pcm {
-        samples: &data,
-        rate: RATE,
-        stereo: false,
-    }];
+    let sounds = [mono(&data, RATE)];
     let mut m = mixer();
     play(
         &mut m,
@@ -211,11 +236,7 @@ fn fades_end_voices_and_buses_duck() {
 #[test]
 fn pitch_shortens_and_full_mixer_replaces_by_priority() {
     let data = noise(4800);
-    let sounds = [Pcm {
-        samples: &data,
-        rate: RATE,
-        stereo: false,
-    }];
+    let sounds = [mono(&data, RATE)];
     let mut m = Mixer::new(Config {
         rate: RATE,
         voices: 2,
@@ -284,11 +305,7 @@ fn pitch_shortens_and_full_mixer_replaces_by_priority() {
 #[test]
 fn far_voices_run_virtual_and_keep_time() {
     let data = noise(4800);
-    let sounds = [Pcm {
-        samples: &data,
-        rate: RATE,
-        stereo: false,
-    }];
+    let sounds = [mono(&data, RATE)];
     let mut m = mixer();
     play(
         &mut m,
@@ -308,11 +325,7 @@ fn far_voices_run_virtual_and_keep_time() {
 #[test]
 fn loud_overlaps_bend_below_one_and_missing_sounds_end() {
     let data = vec![1.0; 4800];
-    let sounds = [Pcm {
-        samples: &data,
-        rate: RATE,
-        stereo: false,
-    }];
+    let sounds = [mono(&data, RATE)];
     let mut m = mixer();
     for id in 0..8 {
         play(&mut m, id, Play::default());
@@ -331,4 +344,161 @@ fn loud_overlaps_bend_below_one_and_missing_sounds_end() {
     render(&mut m, &sounds, 1);
     assert_eq!(m.stats().voices, 8);
     assert_eq!(m.stats().dropped, 1);
+}
+
+#[test]
+fn start_frame_and_sound_travel_are_sample_exact() {
+    let data = dc(0.5, 48_000);
+    let sounds = [mono(&data, RATE)];
+    let mut m = mixer();
+    render(&mut m, &sounds, 333);
+    assert_eq!(m.clock(), 333);
+    play(
+        &mut m,
+        1,
+        Play {
+            start: 1000,
+            ..Play::default()
+        },
+    );
+    let mut out = Vec::new();
+    for n in [100, 511, 2000] {
+        out.extend(render(&mut m, &sounds, n));
+    }
+    assert_eq!(first_sound(&out), Some(1000 - 333));
+
+    // 3 units at 96 units per second: 1/32 s = 1500 frames late.
+    let mut m = Mixer::new(Config {
+        rate: RATE,
+        sound_speed: 96.0,
+        ..Config::default()
+    });
+    play(
+        &mut m,
+        1,
+        Play {
+            at: at(0.0, 3.0),
+            ..Play::default()
+        },
+    );
+    assert_eq!(first_sound(&render(&mut m, &sounds, 3000)), Some(1500));
+    // A stop before the start ends the voice at once, even with a fade.
+    play(
+        &mut m,
+        2,
+        Play {
+            start: 10_000,
+            ..Play::default()
+        },
+    );
+    m.apply(Command::Stop {
+        voice: VoiceId(2),
+        fade: 500,
+    });
+    assert_eq!(m.stats().voices, 1);
+}
+
+#[test]
+fn limit_caps_voices_of_one_sound() {
+    let data = noise(48_000);
+    let sounds = [mono(&data, RATE)];
+    let mut m = mixer();
+    for id in 0..3 {
+        play(
+            &mut m,
+            id,
+            Play {
+                limit: 2,
+                ..Play::default()
+            },
+        );
+        render(&mut m, &sounds, 100);
+    }
+    play(&mut m, 9, Play::default());
+    let s = m.stats();
+    assert_eq!((s.voices, s.dropped), (3, 1));
+}
+
+#[test]
+fn bus_filter_dulls_thins_and_switches_off_exactly() {
+    let data = noise(48_000);
+    let sounds = [mono(&data, RATE)];
+    let run = |filter: Option<Filter>| {
+        let mut m = mixer();
+        play(&mut m, 1, Play::default());
+        if let Some(filter) = filter {
+            set_filter(&mut m, Bus(0), filter, 0);
+        }
+        render(&mut m, &sounds, 4 * BLOCK)
+    };
+    let (dry, under) = (energy(&run(None)), energy(&run(Some(Filter::UNDERWATER))));
+    assert!(
+        under.1 < dry.1 * 0.01,
+        "highs left: {} of {}",
+        under.1,
+        dry.1
+    );
+
+    // The high-pass removes a constant level.
+    let level = dc(0.5, 48_000);
+    let flat = [mono(&level, RATE)];
+    let mut m = mixer();
+    play(&mut m, 1, Play::default());
+    set_filter(&mut m, Bus(0), Filter::RADIO, 0);
+    let out = render(&mut m, &flat, 4800);
+    assert!(out[out.len() - 2].abs() < 0.01, "{}", out[out.len() - 2]);
+
+    // Back to NONE: once the fade is over the bus is bit for bit unfiltered again.
+    let mut a = mixer();
+    let mut b = mixer();
+    play(&mut a, 1, Play::default());
+    play(&mut b, 1, Play::default());
+    set_filter(&mut a, Bus(0), Filter::RADIO, 0);
+    render(&mut a, &sounds, 500);
+    render(&mut b, &sounds, 500);
+    set_filter(&mut a, Bus(0), Filter::NONE, 200);
+    render(&mut a, &sounds, 300);
+    render(&mut b, &sounds, 300);
+    assert_eq!(render(&mut a, &sounds, 1000), render(&mut b, &sounds, 1000));
+}
+
+#[test]
+fn a_bus_ducks_under_another_and_comes_back() {
+    let (music, speech) = (dc(0.25, 96_000), dc(0.5, 96_000));
+    let sounds = [mono(&music, RATE), mono(&speech, RATE)];
+    let mut m = mixer();
+    play(&mut m, 1, Play::default());
+    let alone = *render(&mut m, &sounds, 10).last().unwrap();
+    m.apply(Command::Duck {
+        bus: Bus(0),
+        duck: Some(Duck {
+            by: Bus(1),
+            depth: 0.5,
+            attack_ms: 5,
+            release_ms: 20,
+        }),
+    });
+    // The duck listens before the bus gain, so a muted speech bus shows the music alone.
+    m.apply(Command::BusGain {
+        bus: Bus(1),
+        gain: 0.0,
+        fade: 0,
+    });
+    play(
+        &mut m,
+        2,
+        Play {
+            sound: SoundId(1),
+            bus: Bus(1),
+            ..Play::default()
+        },
+    );
+    let ducked = *render(&mut m, &sounds, 4800).last().unwrap();
+    assert!((ducked - alone * 0.5).abs() < 0.002, "{ducked} vs {alone}");
+    m.apply(Command::Stop {
+        voice: VoiceId(2),
+        fade: 0,
+    });
+    let back = *render(&mut m, &sounds, 9600).last().unwrap();
+    assert!((back - alone).abs() < 0.002, "{back} vs {alone}");
 }
