@@ -27,7 +27,6 @@ use crate::composite::{CompositeFrame, CompositeLight, CompositeStage, InputColo
 use crate::debug_check::{DebugCheckFrame, DebugCheckStage};
 use crate::frame_warnings::{DebugChecks, FrameFindings, FrameWarnings, WarningSet};
 use crate::light_culling::{LightList, LightModes, collect_lights};
-use crate::light_pipelines::LightPipelines;
 use crate::light_store::LightStore;
 use crate::lighting::{
     DetailMode, LightingFrame, LightingRecord, LightingResult, LightingStage, ShadowMaps,
@@ -49,7 +48,7 @@ use crate::pattern_store::PatternStore;
 use crate::profile_store::ProfileStore;
 use crate::projection::Projection;
 use crate::ring_light::RingLight;
-use crate::rows::{MaskChange, frame_suits};
+use crate::rows::MaskChange;
 use crate::settings::LightSettings;
 use crate::shadow::{MaskAnchor, MaskPlanInput, MaskUpdate, OcclusionDomain};
 use crate::zone_pass::ZoneInput;
@@ -254,7 +253,6 @@ struct ShadowState {
 pub struct PassPlan<'d> {
     shaders: ShaderLibrary<'d>,
     pipelines: PipelineCache<'d>,
-    light_pipelines: LightPipelines<'d>,
     samplers: Samplers<'d>,
     geometry: OccluderGeometry<'d>,
     tiles: TileOccluders<'d>,
@@ -298,9 +296,6 @@ impl ShadowState {
             mask: mask
                 .mask()
                 .ok_or_else(|| not_prepared("the occlusion mask is missing"))?,
-            field: mask
-                .field()
-                .ok_or_else(|| not_prepared("the distance field is missing"))?,
             height: if self.height_mode {
                 mask.height()
             } else {
@@ -381,7 +376,7 @@ fn medium_frame<'a>(
             None
         },
         zone_directional: lit.zone_directional,
-        rows: frame_suits(settings).then(|| lighting.rows()),
+        rows: lighting.rows(),
     }
 }
 
@@ -426,7 +421,6 @@ impl<'d> PassPlan<'d> {
     pub fn new(gpu: Gpu<'d>, pack: impl Into<Cow<'static, [u8]>>) -> Result<Self, Diagnostic> {
         let shaders = ShaderLibrary::new(gpu, pack)?;
         let pipelines = PipelineCache::new(&shaders, &OCCLUSION_PROGRAMS)?;
-        let light_pipelines = LightPipelines::new(&shaders)?;
         let composite = CompositeStage::new(gpu, &shaders)?;
         let debug_check = DebugCheckStage::new(gpu, &shaders)?;
         let medium_map = MediumMapStage::new(&shaders)?;
@@ -434,7 +428,6 @@ impl<'d> PassPlan<'d> {
         Ok(Self {
             shaders,
             pipelines,
-            light_pipelines,
             samplers: Samplers::new(gpu)?,
             geometry: OccluderGeometry::new(gpu, OccluderPrograms::default()),
             tiles: TileOccluders::new(gpu, OccluderPrograms::default()),
@@ -525,7 +518,6 @@ impl<'d> PassPlan<'d> {
             settings.surface_height_step,
         );
         let builds_medium = medium_map_builds(frame.medium.is_some(), stores.lights);
-        let rows = frame_suits(settings);
         let modes = LightModes {
             height_mode: obstacles.any_finite_height(),
             normal_mode,
@@ -534,7 +526,6 @@ impl<'d> PassPlan<'d> {
             profiles: stores.profiles.map(|p| p as _),
             animations: stores.animations,
             masks: stores.masks,
-            rows,
         };
         collect_lights(
             stores.lights,
@@ -578,10 +569,9 @@ impl<'d> PassPlan<'d> {
         // Steps 1 and 2: occlusion (Chiaro OcclusionStage::Prepare).
         let active = obstacles.iter().any(|(_, o)| o.is_active());
         let shadows = if any_shadow_caster(&self.lights) && (active || sprite) {
-            // Rows are built from the height texture; in a flat frame without finite heights the
-            // obstacles' heights are then all infinite, and Chiaro's height programs light as the
-            // flat ones.
-            let height_mode = obstacles.any_finite_height() || normal_mode || rows;
+            // Rows are built from the height texture, so a frame with shadows always has one; in
+            // a flat frame the obstacles' heights are all infinite.
+            let height_mode = true;
             let mut input = MaskPlanInput::new(
                 obstacles,
                 frame.projection,
@@ -712,12 +702,9 @@ impl<'d> PassPlan<'d> {
             store,
             list: &self.zones,
         });
-        let lit = self.lighting.prepare_with_zones(
-            &mut self.shaders,
-            &mut self.light_pipelines,
-            &light_frame,
-            zones,
-        )?;
+        let lit = self
+            .lighting
+            .prepare_with_zones(&mut self.shaders, &light_frame, zones)?;
         prepared.allocations += lit.allocations;
         if lit.ambient_zones {
             prepared.stages.insert(PassStages::ZONES);
@@ -815,9 +802,6 @@ impl<'d> PassPlan<'d> {
             .ok_or_else(|| not_prepared("record needs a successful prepare of the frame"))?;
         let mut out = PassRecord::default();
         if shadows.is_some() {
-            // Row lights and sun maps read mask and heights only: a pan costs no field then.
-            let field = self.lighting.reads_field() || self.medium.reads_field();
-            self.occlusion.set_field_needed(field);
             out.mask = self.occlusion.record_with_sprite(
                 cmd,
                 &self.pipelines,
@@ -858,9 +842,7 @@ impl<'d> PassPlan<'d> {
             &self.atlases,
             &self.medium_map,
         );
-        out.lighting =
-            self.lighting
-                .record(cmd, &self.light_pipelines, &self.samplers, &light_frame)?;
+        out.lighting = self.lighting.record(cmd, &self.samplers, &light_frame)?;
         self.lighting.commit();
         if self.medium.is_active() {
             let media = frame.media.unwrap_or(&self.default_media);
@@ -978,11 +960,10 @@ impl<'d> PassPlan<'d> {
         &self.medium
     }
 
-    /// Pipelines created so far: occlusion table, light programs, composite programs, debug
-    /// check, medium map.
+    /// Pipelines created so far: occlusion table, composite programs, debug check, medium map
+    /// and stage (not the row programs).
     pub fn pipeline_count(&self) -> usize {
         self.pipelines.len()
-            + self.light_pipelines.len()
             + self.composite.pipeline_count()
             + self.debug_check.pipeline_count()
             + self.medium_map.pipeline_count()
@@ -995,7 +976,7 @@ impl<'d> PassPlan<'d> {
     ///
     /// - the HDR buffer exists and has the size of the last frame's scene;
     /// - a frame that drew a light buffer still has it;
-    /// - a frame with shadows has a mask and a distance field of its domain's size.
+    /// - a frame with shadows has a mask of its domain's size.
     pub fn check_invariants(&self, sink: &mut dyn Sink<Diagnostic>) -> u32 {
         let Some(last) = &self.last else {
             return 0;
@@ -1019,11 +1000,8 @@ impl<'d> PassPlan<'d> {
             let (w, h) = self.last_size;
             let d = OcclusionDomain::new(w, h, self.last_shadow_scale);
             let want = Some((d.width, d.height));
-            if size(self.occlusion.mask()) != want || size(self.occlusion.field()) != want {
-                report(
-                    "mask or distance field do not have the domain size",
-                    "occlusion",
-                );
+            if size(self.occlusion.mask()) != want {
+                report("the mask does not have the domain size", "occlusion");
             }
         }
         found
@@ -1064,7 +1042,7 @@ impl Inspect for PassPlan<'_> {
         v.field("shaders", self.shaders.created_count());
         v.field(
             "lights",
-            self.lights.ordered.len() + self.lights.rows.len() + self.lights.directional.len(),
+            self.lights.rows.len() + self.lights.directional.len(),
         );
         v.field("zones", self.zones.zones.len());
         v.field("warnings_reported", self.warnings.reported().len());
@@ -1095,7 +1073,6 @@ impl Inspect for PassPlan<'_> {
             ("direction", self.lighting.direction_buffer()),
             ("pure_ambient", self.lighting.pure_ambient()),
             ("mask", self.occlusion.mask()),
-            ("field", self.occlusion.field()),
             ("profile_atlas", self.atlases.profiles.texture()),
             ("mask_atlas", self.atlases.masks.texture()),
             ("medium_map", self.medium_map.view().map(|m| m.map)),

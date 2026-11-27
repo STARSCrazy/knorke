@@ -18,14 +18,12 @@ use common::check_layout;
 use knorke_gpu::kpak::ShaderPack;
 use knorke_gpu::test_support::chiaro_pack;
 use knorke_gpu::test_support::spirv::decode;
-use knorke_light2d::light_program::{LIGHT_PROGRAMS, LightFeature};
 use knorke_light2d::medium_map::{
     MEDIUM_MAP_PROGRAMS, MediumMapParams, MediumParams, MediumProgram, MediumResolveParams,
     MediumSplatParams, MediumTopParams, medium_layout_of, slots,
 };
 use knorke_light2d::medium_stage::{
-    MediumLightPassParams, MediumMaskLightPassParams, PolarQueryParams, PolarRowParams,
-    SunHeightParams, SunParams,
+    MediumLightPassParams, MediumMaskLightPassParams, PolarQueryParams, SunParams,
 };
 
 #[test]
@@ -144,12 +142,6 @@ const POLAR_QUERY: Layout = &[
     f!(PolarQueryParams, "PolarMaskY", mask_y, 4),
     f!(PolarQueryParams, "PolarAtlasSize", atlas, 4),
 ];
-const POLAR_ROW: Layout = &[
-    f!(PolarRowParams, "PolarMaskX", mask_x, 4),
-    f!(PolarRowParams, "PolarMaskY", mask_y, 4),
-    f!(PolarRowParams, "PolarLight", light, 4),
-    f!(PolarRowParams, "PolarDomain", domain, 4),
-];
 const SUN: Layout = &[
     f!(SunParams, "SunColor", color, 4),
     f!(SunParams, "SunToLight", to_light, 4),
@@ -158,12 +150,8 @@ const SUN: Layout = &[
     f!(SunParams, "SunAtlas", atlas, 4),
     f!(SunParams, "SunBlock", block, 4),
 ];
-const SUN_HEIGHT: Layout = &[
-    f!(SunHeightParams, "SunMarch", march, 4),
-    f!(SunHeightParams, "SunDomain", domain, 4),
-];
 
-const STRUCTS: [(&str, Layout, usize); 10] = [
+const STRUCTS: [(&str, Layout, usize); 8] = [
     (
         "type.MediumLightPassParams",
         LIGHT_PASS,
@@ -174,17 +162,7 @@ const STRUCTS: [(&str, Layout, usize); 10] = [
         POLAR_QUERY,
         size_of::<PolarQueryParams>(),
     ),
-    (
-        "type.PolarRowParams",
-        POLAR_ROW,
-        size_of::<PolarRowParams>(),
-    ),
     ("type.SunParams", SUN, size_of::<SunParams>()),
-    (
-        "type.SunHeightParams",
-        SUN_HEIGHT,
-        size_of::<SunHeightParams>(),
-    ),
     ("type.MediumParams", MEDIUM, size_of::<MediumParams>()),
     ("type.MediumMapParams", MAP, size_of::<MediumMapParams>()),
     (
@@ -204,7 +182,7 @@ const STRUCTS: [(&str, Layout, usize); 10] = [
 fn rust_layouts_match_every_medium_shader() {
     let Some(bytes) = chiaro_pack() else { return };
     let pack = ShaderPack::parse(&bytes).unwrap();
-    // The map passes, the medium programs and the `*_medium` light programs.
+    // The map passes, the medium programs and the row light programs (which read the map).
     let mut shaders: Vec<&str> = MEDIUM_MAP_PROGRAMS
         .iter()
         .flat_map(|p| [p.vertex, p.fragment])
@@ -214,10 +192,9 @@ fn rust_layouts_match_every_medium_shader() {
                 .flat_map(|p| [p.vertex(), p.fragment()]),
         )
         .chain(
-            LIGHT_PROGRAMS
-                .iter()
-                .filter(|p| p.program().has(LightFeature::Medium))
-                .map(|p| p.fragment),
+            pack.iter()
+                .map(|p| p.name)
+                .filter(|n| n.starts_with("lightrow_light")),
         )
         .collect();
     shaders.sort_unstable();

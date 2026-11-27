@@ -22,7 +22,7 @@ use super::{
     SunHeightRowsParams, SunParams, SunSource, WIDE_SLOT, height_code, sun_bands, sun_plain,
 };
 use crate::light_culling::Casters;
-use crate::light_pipelines::MATERIAL_TARGET_FORMAT;
+use crate::lighting::MATERIAL_TARGET_FORMAT;
 use crate::lighting::{
     DetailMode, LIGHT_FORMAT, LightSurfacePassParams, LightingFrame, ShadowMaps, height_tolerance,
 };
@@ -530,12 +530,11 @@ impl<'d> RowLights<'d> {
         let mut n = 0;
         if let Some(s) = frame.shadows.filter(|s| s.height_mode) {
             let mask = row_mask(s);
-            let suits = frame.settings.light_rows;
             let tolerance = height_tolerance(frame.settings);
             let candidates = (list.directional.iter().zip(&list.directional_casters))
                 .zip(&list.directional_rise)
                 .enumerate()
-                .filter(|(_, ((g, _), _))| suits && !sun_plain(g));
+                .filter(|(_, ((g, _), _))| !sun_plain(g));
             let count = candidates.clone().count();
             // Storage for the most suns a frame had: steady frames do not allocate.
             while self.suns.len() < count {
@@ -610,12 +609,9 @@ impl<'d> RowLights<'d> {
                 f.work = MapWork::Build;
             }
         }
-        // In a row frame the sun programs draw every directional light without shadow too.
-        let plain = if frame.settings.light_rows {
-            list.directional.iter().filter(|g| sun_plain(g)).count()
-        } else {
-            0
-        };
+        // Every other directional light is drawn without a map: one without shadow, or with
+        // shadows but no obstacle to cast them (no occlusion stage this frame).
+        let plain = list.directional.len() - n;
         if n + plain > 0 {
             // The stand-in for the pattern records of a frame without them.
             let bytes = n * MAX_SUN_BANDS * SUN_BAND_SIZE;
@@ -1137,9 +1133,8 @@ impl<'d> RowLights<'d> {
     }
 
     /// The directional light `light` (index into `LightList::directional`) into the open light
-    /// pass if the prepared frame gave it a sun map or it needs none ([`sun_plain`], in a row
-    /// frame), one fullscreen draw; `false` if not (it is Chiaro's then). `surface_params` is
-    /// the pass's `SurfaceParams` block.
+    /// pass, one fullscreen draw: from its sun map, or unshadowed if the prepared frame gave it
+    /// none. `surface_params` is the pass's `SurfaceParams` block.
     ///
     /// # Errors
     /// Not prepared, or a binding failed.
@@ -1150,11 +1145,10 @@ impl<'d> RowLights<'d> {
         frame: &LightingFrame<'_>,
         surface_params: &[u8],
         light: usize,
-    ) -> Result<bool, Diagnostic> {
+    ) -> Result<(), Diagnostic> {
         let suns = &self.suns[..self.frame.suns as usize];
         let sun = suns.iter().find(|s| s.light as usize == light);
-        let plain = (frame.lights.directional.get(light))
-            .filter(|g| self.frame.plain_suns > 0 && sun_plain(g));
+        let plain = frame.lights.directional.get(light);
         // Neither surface nor material buffer: the flat program does not read the first; a hard
         // sun does not read the second map, a map without partly transparent runs not the next
         // two, a frame without pattern obstacles not the atlas and the records; a sun without
@@ -1177,7 +1171,7 @@ impl<'d> RowLights<'d> {
                 params.light.color[3] = 0.0; // visibility 1 (lightrow_sun_surface.hlsli)
                 (params, None, [stand_in; 4])
             }
-            (None, None) => return Ok(false),
+            (None, None) => return Err(missing("the directional light")),
         };
         let patterns = shadows.and_then(|s| s.patterns.as_ref());
         let (mask, height) = match (shadows, sun) {
@@ -1235,8 +1229,7 @@ impl<'d> RowLights<'d> {
                 },
             },
         )?;
-        pass.draw_fullscreen()?;
-        Ok(true)
+        pass.draw_fullscreen()
     }
 
     /// The row of the frame's row light `key` ([`super::row_key`]), its slot code as the lamp

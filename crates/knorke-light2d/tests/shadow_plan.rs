@@ -4,8 +4,8 @@
 use knorke_light2d::obstacle::{ObstacleId, ShapeDesc, TileGridDesc};
 use knorke_light2d::shadow::{
     CellLog, CellRect, DirtyRect, DirtyRectList, FULL_REBUILD_RATIO, MaskAnchor, MaskLayout,
-    MaskPlanInput, MaskUpdate, MaskUpdateLimits, MaskUpdatePlan, OcclusionDomain,
-    SPRITE_PAN_ALLOWANCE, obstacle_grid_rect, sprite_grid_rect,
+    MaskPlanInput, MaskUpdate, MaskUpdatePlan, OcclusionDomain, SPRITE_PAN_ALLOWANCE,
+    obstacle_grid_rect, sprite_grid_rect,
 };
 use knorke_light2d::{ObstacleStore, Projection};
 use knorke_math::{At, Vec2};
@@ -155,23 +155,6 @@ fn the_list_holds_max_dirty_rects_and_skips_empty_ones() {
 }
 
 #[test]
-fn content_shifted_out_of_the_domain_marks_where_the_field_forgets_it() {
-    let grid = [r(2, 5, 10, 15), r(50, 20, 60, 30)];
-    let mut list = DirtyRectList::new();
-    list.add_vanished_content(&grid, [10 - 15, 0], [-15, 0], 100, 50);
-    assert_eq!(list.rects(), &[r(-3, 5, 0, 15)]);
-    list.clear();
-    list.add_vanished_content(&grid, [10 + 15, 0], [15, 0], 100, 50);
-    assert!(list.rects().is_empty());
-    list.clear();
-    list.add_vanished_content(&grid, [10, 25], [0, 25], 100, 50);
-    assert_eq!(list.rects(), &[r(60, 50, 70, 55)]);
-    list.clear();
-    list.add_vanished_content(&grid, [10, 0], [0, 0], 100, 50);
-    assert!(list.rects().is_empty());
-}
-
-#[test]
 fn union_folds_only_when_cheaper() {
     let mut list = DirtyRectList::new();
     list.add_union(r(0, 0, 4, 4), r(1, 0, 5, 4));
@@ -225,15 +208,17 @@ const SQUARE4: [Vec2; 4] = [
 ];
 
 impl Plan {
-    fn new(limits: MaskUpdateLimits) -> Self {
+    fn new(full_rebuild_ratio: f64) -> Self {
         let projection = Projection {
             origin: At::new(Vec2::ZERO),
             x_axis: Vec2::new(1.0, 0.0),
             y_axis: Vec2::new(0.0, 1.0),
             ..Projection::default()
         };
+        let mut plan = MaskUpdatePlan::new();
+        plan.set_full_rebuild_ratio(full_rebuild_ratio);
         Self {
-            plan: MaskUpdatePlan::new(limits),
+            plan,
             store: ObstacleStore::new(),
             projection,
             domain: domain(64, 64, 100, 100),
@@ -243,11 +228,7 @@ impl Plan {
     }
 
     fn plain() -> Self {
-        Self::new(MaskUpdateLimits {
-            field_grow: 0,
-            seed_grow: 0,
-            full_rebuild_ratio: 1.0,
-        })
+        Self::new(1.0)
     }
 
     fn decide(&mut self) -> MaskUpdate {
@@ -362,34 +343,14 @@ fn a_shift_by_half_the_mask_stays_local_one_texel_more_rebuilds() {
 }
 
 #[test]
-fn field_rects_of_exactly_the_ratio_stay_local() {
-    let mut p = Plan::new(MaskUpdateLimits {
-        field_grow: 0,
-        seed_grow: 0,
-        full_rebuild_ratio: FULL_REBUILD_RATIO,
-    });
+fn mask_rects_of_exactly_the_ratio_stay_local() {
+    let mut p = Plan::new(FULL_REBUILD_RATIO);
     assert_eq!(p.frame(), MaskUpdate::Full);
     p.pan(50.0, 0.0);
     assert_eq!(p.decide(), MaskUpdate::Incremental);
-    assert_eq!(p.plan.field_rects().area(), 5000);
+    assert_eq!(p.plan.mask_rects().area(), 5000);
     p.pan(50.0, 1.0);
     assert_eq!(p.decide(), MaskUpdate::Full);
-}
-
-#[test]
-fn field_and_seed_rects_grow_by_the_limits() {
-    let mut p = Plan::new(MaskUpdateLimits {
-        field_grow: 10,
-        seed_grow: 5,
-        full_rebuild_ratio: 1.0,
-    });
-    let o = p.boxed(30.0, 30.0, 4.0, true);
-    assert_eq!(p.frame(), MaskUpdate::Full);
-    p.move_to(o, 31.0, 30.0, 0.0);
-    assert_eq!(p.decide(), MaskUpdate::Incremental);
-    assert_eq!(p.plan.mask_rects().rects(), &[r(47, 47, 54, 53)]);
-    assert_eq!(p.plan.field_rects().rects(), &[r(37, 37, 64, 63)]);
-    assert_eq!(p.plan.seed_rects().rects(), &[r(32, 32, 69, 68)]);
 }
 
 #[test]
@@ -553,22 +514,6 @@ fn a_65th_dynamic_obstacle_is_tracked_like_the_others() {
     p.store.destroy(extra).unwrap();
     assert_eq!(p.frame(), MaskUpdate::Incremental);
     assert_eq!(p.frame(), MaskUpdate::Reused);
-}
-
-#[test]
-fn a_pan_marks_static_obstacles_pushed_out_of_the_mask_for_the_field() {
-    let mut p = Plan::new(MaskUpdateLimits {
-        field_grow: 2,
-        seed_grow: 0,
-        full_rebuild_ratio: 1.0,
-    });
-    // World [-18, -14] is mask texels [0, 4] (+1 texel round-out on each side).
-    p.boxed(-18.0, 10.0, 4.0, false);
-    assert_eq!(p.frame(), MaskUpdate::Full);
-    p.pan(-3.0, 0.0); // contents move 3 texels left: the box leaves over the left edge
-    assert_eq!(p.decide(), MaskUpdate::Incremental);
-    assert!(p.plan.mask_rects().rects().iter().all(|r| r.x0 >= 97));
-    assert!(covers(p.plan.field_rects(), 0, 30)); // the field still remembers it
 }
 
 #[test]

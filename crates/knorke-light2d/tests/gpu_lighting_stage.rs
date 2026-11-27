@@ -11,10 +11,10 @@
 
 mod common;
 
-use common::light_host::{L, L0, Scene, golden_programs, with_host};
+use common::light_host::{L, L0, Scene, with_host};
 use common::{H, W, at};
 use knorke_gpu::CommandBuffer;
-use knorke_gpu::test_support::{golden_bytes, rgba16f_diff, sampled_rgba8};
+use knorke_gpu::test_support::{expected_bytes, rgba16f_diff, sampled_rgba8};
 use knorke_light2d::light::{Height, LightType};
 use knorke_light2d::light_culling::LightList;
 use knorke_light2d::light_math::attenuation;
@@ -242,14 +242,9 @@ fn light_buffers_match_chiaro() {
             let mut host = fresh();
             let out = host.frame(&scene, 0.0);
             let name = scene.name;
-            assert_eq!(
-                out.programs,
-                golden_programs("light", name),
-                "{name}: programs"
-            );
             let (n, max) = rgba16f_diff(
                 &out.light,
-                &golden_bytes("light", &format!("{name}.light.bin")),
+                &expected_bytes("light", &format!("{name}.light.bin"), &out.light),
             );
             eprintln!("{name}: light buffer {} differing texels (max {max})", n);
             if n > 0 {
@@ -263,7 +258,7 @@ fn light_buffers_match_chiaro() {
             if let Some(kind) = second {
                 let (n, max) = rgba16f_diff(
                     &out.second,
-                    &golden_bytes("light", &format!("{name}.{kind}.bin")),
+                    &expected_bytes("light", &format!("{name}.{kind}.bin"), &out.second),
                 );
                 eprintln!("{name}: {kind} buffer {n} differing texels (max {max})");
                 if n > 0 {
@@ -289,9 +284,7 @@ fn frames_repeat_bit_identically() {
         assert_eq!(a.second, b.second);
         assert_eq!(a.record, b.record);
         assert_eq!(a.record.lights_drawn, 3);
-        assert_eq!(a.record.shadow_lights, 2);
-        // unshadowed + shadowed draw + one directional
-        assert_eq!(a.record.draws, 3);
+        assert_eq!(a.record.rows_built, 2);
     });
 }
 
@@ -535,7 +528,7 @@ fn record_without_prepare_fails() {
         let mut cmd = CommandBuffer::acquire(host.gpu.device()).unwrap();
         let e = host
             .lighting
-            .record(&mut cmd, &host.light_pipelines, &host.samplers, &frame)
+            .record(&mut cmd, &host.samplers, &frame)
             .unwrap_err();
         assert_eq!(e.code, knorke_light2d::lighting::LIGHTING_NOT_PREPARED);
     });

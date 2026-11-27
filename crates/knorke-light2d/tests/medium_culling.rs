@@ -72,7 +72,7 @@ fn a_light_off_screen_whose_sphere_reaches_into_the_iso_view_is_collected() {
         &LightModes::default(),
         &mut ground,
     );
-    assert!(ground.ordered.is_empty());
+    assert!(ground.rows.is_empty());
 
     let mut out = MediumLightList {
         skipped_haze: 7,
@@ -194,11 +194,7 @@ fn shaft_entries_follow_the_lights_and_the_list_keeps_its_capacity() {
         out.shafts,
         [
             None,
-            Some(Shafts {
-                casters: Casters::Static,
-                inside: true,
-                key: 4, // the second light's row key
-            }),
+            Some(Shafts { key: 4 }), // the second light's row key
             None
         ]
     );
@@ -266,17 +262,7 @@ fn masked_lights_go_to_their_own_list_and_windows_get_no_shafts() {
     assert!((out.masked.lights[0].color_falloff[0] - 2.0).abs() < 1e-6); // haze factor
     assert_eq!(out.masked.masks[0].n[3], 0.0); // projector
     assert_eq!(out.masked.masks[1].n[3], 1.0); // window
-    assert_eq!(
-        out.masked_shafts,
-        [
-            Some(Shafts {
-                casters: Casters::All,
-                inside: false,
-                key: 0,
-            }),
-            None
-        ]
-    );
+    assert_eq!(out.masked_shafts, [Some(Shafts { key: 0 }), None]);
 
     // Without the mask store masked lights are dropped, never drawn unmasked.
     let out = collect(&store, &Projection::IDENTITY, 20.0, &LightModes::default());
@@ -317,7 +303,7 @@ fn flicker_and_animation_darkening_apply_as_for_the_ground() {
     );
     assert_eq!(
         out.lights[0].color_falloff[0],
-        ground.ordered[0].color_falloff[0]
+        ground.rows[0].light.color_falloff[0]
     );
     assert!(out.lights[0].color_falloff[0] < 1.0);
 }

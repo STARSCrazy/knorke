@@ -1,9 +1,7 @@
 // Origin: chiaro @ 9bc5b9b, src/rendering/OcclusionMask.hpp and OcclusionMask.cpp (Begin, Plan,
-// PreparePipelines, RecordMask, RecordShiftCopy, Commit), src/rendering/SdfShadows.hpp and
-// SdfShadows.cpp (Prepare, Record, RecordPasses, FieldPass, DrawTexelRects), the caster classes
-// of E53 (OcclusionMask.cpp PrepareCasters, RecordCasters, RecordCaster) and
-// src/gpu/PipelineCache.cpp (the program table entries MaskClearRects, MaskClearRectsHeight,
-// JfaSeed, JfaStep, JfaDistance, JfaSeedRects, JfaStepRects, JfaDistanceRects, OcclusionMask,
+// PreparePipelines, RecordMask, RecordShiftCopy, Commit), the caster classes of E53
+// (OcclusionMask.cpp PrepareCasters, RecordCasters, RecordCaster) and src/gpu/PipelineCache.cpp
+// (the program table entries MaskClearRects, MaskClearRectsHeight, OcclusionMask,
 // OcclusionMaskHeight); the sprite mask of OcclusionMask.cpp (PreparePipelines, DrawSources,
 // SpriteParams).
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any
@@ -11,20 +9,17 @@
 // must be plainly marked as such (this file is a Rust port) and this notice may not be removed or
 // altered from any source distribution. Full text: LICENSE-CHIARO-ZLIB.txt.
 
-//! The GPU stage: mask, height and field textures as ping-pong pairs, the seed targets, and the
-//! passes that bring them up to date. Ownership follows ADR 0002: the host lends the command
+//! The GPU stage: mask and height textures as ping-pong pairs, and the passes that bring them up
+//! to date. Ownership follows ADR 0002: the host lends the command
 //! buffer; nothing here submits, presents or reads back.
 
-use super::{JfaParams, RectParams, ShiftCopy, UPDATE_LIMITS, jfa_steps};
+use super::{RectParams, ShiftCopy};
 use crate::lighting::CasterMaps;
 use crate::occluder_raster::{
     DomainParams, HEIGHT_FORMAT, INFINITE_TOP, MASK_FORMAT, OccluderGeometry, TileOccluders,
 };
 use crate::shadow::{DirtyRectList, MaskPlanInput, MaskUpdate, MaskUpdatePlan, OcclusionDomain};
-use knorke_gpu::sys::gpu::{
-    SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, SDL_GPU_TEXTUREFORMAT_R16_FLOAT,
-    SDL_GPU_TEXTUREFORMAT_R32G32_FLOAT, SDL_GPUTextureFormat,
-};
+use knorke_gpu::sys::gpu::{SDL_GPU_PRIMITIVETYPE_TRIANGLELIST, SDL_GPUTextureFormat};
 use knorke_gpu::sys::rect::SDL_Rect;
 use knorke_gpu::{
     Bindings, Blend, ColorTarget, CommandBuffer, Gpu, Load, PipelineCache, PipelineRef,
@@ -37,12 +32,6 @@ use knorke_types::{Diagnostic, DiagnosticCode};
 /// Recording without a successful [`OcclusionMask::prepare`] since the last commit.
 pub const NOT_PREPARED: DiagnosticCode =
     DiagnosticCode::new("knorke.light2d.occlusion.not_prepared");
-
-/// Format of the jump flooding seeds: the texel coordinate of the nearest seed, `-1` for none.
-pub const SEED_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R32G32_FLOAT;
-/// Format of the distance field: texels to the nearest obstacle texel, clamped to
-/// [`FIELD_BOUND`](super::FIELD_BOUND).
-pub const FIELD_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R16_FLOAT;
 
 const fn program(vertex: &'static str, fragment: &'static str) -> ProgramDesc {
     ProgramDesc {
@@ -57,10 +46,10 @@ const fn program(vertex: &'static str, fragment: &'static str) -> ProgramDesc {
 
 /// The programs of the stage, to be placed in the host's
 /// [`PipelineCache`](knorke_gpu::PipelineCache) table at [`MaskPrograms::at`], next to
-/// [`OCCLUDER_PROGRAMS`](crate::occluder_raster::OCCLUDER_PROGRAMS). None blends: the clear
-/// programs reset the rectangles of a local update, the field programs overwrite; the sprite
-/// programs (the application's occlusion buffer, E21) blend with MAX like the obstacles.
-pub const MASK_PROGRAMS: [ProgramDesc; 10] = [
+/// [`OCCLUDER_PROGRAMS`](crate::occluder_raster::OCCLUDER_PROGRAMS). The clear programs reset
+/// the rectangles of a local update without blending; the sprite programs (the application's
+/// occlusion buffer, E21) blend with MAX like the obstacles.
+pub const MASK_PROGRAMS: [ProgramDesc; 4] = [
     program("rect.vert", "clear.frag"),
     ProgramDesc {
         second: Some(SecondTarget {
@@ -69,12 +58,6 @@ pub const MASK_PROGRAMS: [ProgramDesc; 10] = [
         }),
         ..program("rect.vert", "clear_height.frag")
     },
-    program("fullscreen.vert", "jfa_seed.frag"),
-    program("fullscreen.vert", "jfa_step.frag"),
-    program("fullscreen.vert", "jfa_distance.frag"),
-    program("rect.vert", "jfa_seed.frag"),
-    program("rect.vert", "jfa_step.frag"),
-    program("rect.vert", "jfa_distance.frag"),
     ProgramDesc {
         blend: Blend::Max,
         ..program("fullscreen.vert", "occlusion_mask.frag")
@@ -134,12 +117,12 @@ fn sprite_params(d: &OcclusionDomain, remainder: [f32; 2]) -> ([u8; SPRITE_PARAM
 /// Where [`MASK_PROGRAMS`] sit in a pipeline table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MaskPrograms {
-    /// The first of the ten programs.
+    /// The first of the four programs.
     pub base: ProgramIndex,
 }
 
 impl MaskPrograms {
-    /// The ten programs at `base..base + 10`, in the order of [`MASK_PROGRAMS`].
+    /// The four programs at `base..base + 4`, in the order of [`MASK_PROGRAMS`].
     pub const fn at(base: ProgramIndex) -> Self {
         Self { base }
     }
@@ -149,13 +132,7 @@ impl MaskPrograms {
     }
 
     fn sprite(&self, height_mode: bool) -> ProgramIndex {
-        self.base + 8 + usize::from(height_mode)
-    }
-
-    /// Seed, step and distance program, fullscreen or over rectangles.
-    fn field(&self, local: bool) -> [ProgramIndex; 3] {
-        let first = self.base + if local { 5 } else { 2 };
-        [first, first + 1, first + 2]
+        self.base + 2 + usize::from(height_mode)
     }
 }
 
@@ -173,26 +150,20 @@ pub struct MaskRecord {
     pub uploads: u32,
     /// Draws of obstacle sources into the mask.
     pub draws: u32,
-    /// Field texels the distance passes wrote (the caster fields included).
-    pub field_texels: u64,
     /// Caster class masks drawn (E53): 0, 1 or 2.
     pub caster_masks: u32,
-    /// Caster class fields built: as many as masks while Chiaro's programs read a field.
-    pub caster_fields: u32,
 }
 
-/// The mask, field and height targets of one caster class (E53).
+/// The mask and height targets of one caster class (E53).
 #[derive(Debug)]
 struct CasterTargets<'d> {
     mask: RenderTarget<'d>,
-    field: RenderTarget<'d>,
     height: RenderTarget<'d>,
 }
 
 impl CasterTargets<'_> {
     fn release(&mut self) {
         self.mask.release();
-        self.field.release();
         self.height.release();
     }
 }
@@ -207,7 +178,7 @@ struct Sources<'a, 'd> {
     dynamic_set: bool,
 }
 
-/// One target of a ping-pong pair or the seeds.
+/// One target of a ping-pong pair or a caster class.
 fn view<'a>(t: &'a RenderTarget<'_>, what: &str) -> Result<TextureRef<'a>, Diagnostic> {
     t.texture_ref()
         .ok_or_else(|| Diagnostic::error(NOT_PREPARED, format!("the {what} texture is missing")))
@@ -226,8 +197,8 @@ fn pipeline<'a>(
     })
 }
 
-/// The occlusion mask (R the obstacle opacity, G footprint, E25), its distance field (E19) and,
-/// in height mode, the height intervals (E22), each as a ping-pong pair kept across frames (E21).
+/// The occlusion mask (R the obstacle opacity, G footprint, E25) and, in height mode, the height
+/// intervals (E22), each as a ping-pong pair kept across frames (E21).
 /// The mask covers the scene plus a margin band ([`OcclusionDomain`]).
 ///
 /// [`MaskUpdatePlan`] decides per frame how they change:
@@ -235,10 +206,9 @@ fn pipeline<'a>(
 ///   pass at all;
 /// - [`MaskUpdate::Incremental`]: on a pan, the current textures are copied, shifted, into the
 ///   other texture of each pair; then the changed rectangles are cleared and every source is
-///   drawn again (outside the rectangles it rewrites what is there), and the field is recomputed
-///   in the field rectangles only, with seed and step passes over the seed rectangles;
+///   drawn again (outside the rectangles it rewrites what is there);
 /// - otherwise, or after a frame that was prepared but not committed, [`MaskUpdate::Full`]:
-///   cleared, drawn and the field rebuilt with fullscreen passes.
+///   cleared and drawn.
 ///
 /// Per frame: [`prepare`](Self::prepare) (decides; may fail), the obstacle stages'
 /// `prepare` (if the update is not `Reused`), [`record`](Self::record) and, once the command
@@ -248,9 +218,7 @@ fn pipeline<'a>(
 pub struct OcclusionMask<'d> {
     programs: MaskPrograms,
     mask: [RenderTarget<'d>; 2],
-    field: [RenderTarget<'d>; 2],
     height: [RenderTarget<'d>; 2],
-    seeds: [RenderTarget<'d>; 2],
     /// Index of the pairs' textures that hold the last committed frame.
     current: usize,
     /// Index the prepared frame draws into; becomes `current` in commit.
@@ -270,16 +238,11 @@ pub struct OcclusionMask<'d> {
     sprite: bool,
     /// The anchor remainder of the prepared frame, for the sprite rectangle.
     remainder: [f32; 2],
-    /// Caster classes `[Static, Dynamic]` (E53): own masks and fields, each drawn fully every
-    /// frame from the sources of its class; released while no visible light uses the class.
+    /// Caster classes `[Static, Dynamic]` (E53): own masks, each drawn fully every frame from
+    /// the sources of its class; released while no visible light uses the class.
     casters: [CasterTargets<'d>; 2],
     /// The caster classes of the prepared frame (bit 0 static, bit 1 dynamic).
     caster_classes: u32,
-    /// A light of the frame reads the field ([`set_field_needed`](Self::set_field_needed)).
-    field_needed: bool,
-    /// The field was left out since it was last whole: the next frame that needs it builds it
-    /// whole.
-    field_stale: bool,
 }
 
 impl<'d> OcclusionMask<'d> {
@@ -289,12 +252,10 @@ impl<'d> OcclusionMask<'d> {
         Self {
             programs,
             mask: pair(),
-            field: pair(),
             height: pair(),
-            seeds: pair(),
             current: 0,
             target: 0,
-            plan: MaskUpdatePlan::new(UPDATE_LIMITS),
+            plan: MaskUpdatePlan::new(),
             failed: false,
             prepared: None,
             recorded: false,
@@ -307,21 +268,16 @@ impl<'d> OcclusionMask<'d> {
             remainder: [0.0; 2],
             casters: [(); 2].map(|()| CasterTargets {
                 mask: RenderTarget::new(gpu),
-                field: RenderTarget::new(gpu),
                 height: RenderTarget::new(gpu),
             }),
             caster_classes: 0,
-            field_needed: true,
-            field_stale: true,
         }
     }
 
     /// Replaces the full rebuild ratio of the plan (tests reach local updates that are never
     /// cheaper at small sizes; settings).
     pub fn set_full_rebuild_ratio(&mut self, ratio: f64) {
-        let mut limits = UPDATE_LIMITS;
-        limits.full_rebuild_ratio = ratio;
-        self.plan.set_limits(limits);
+        self.plan.set_full_rebuild_ratio(ratio);
     }
 
     /// Forgets what the textures hold: the next frame is [`MaskUpdate::Full`]. Call it after a
@@ -354,12 +310,9 @@ impl<'d> OcclusionMask<'d> {
         let mut reallocated = false;
         for i in 0..2 {
             reallocated |= self.mask[i].ensure(d.width, d.height, MASK_FORMAT)?;
-            reallocated |= self.field[i].ensure(d.width, d.height, FIELD_FORMAT)?;
             if height_mode {
                 reallocated |= self.height[i].ensure(d.width, d.height, HEIGHT_FORMAT)?;
             }
-            // The seeds are rewritten from scratch where they are read: no rebuild on change.
-            self.seeds[i].ensure(d.width, d.height, SEED_FORMAT)?;
         }
         let mut input = *input;
         input.force_full |= failed_before || reallocated || height_mode != self.height_recorded;
@@ -380,12 +333,6 @@ impl<'d> OcclusionMask<'d> {
         if update != MaskUpdate::Reused {
             // Every variant every time: the first camera pan must not create pipelines.
             pipelines.get(shaders, self.programs.clear(height_mode), MASK_FORMAT)?;
-            for local in [false, true] {
-                let [seed, step, distance] = self.programs.field(local);
-                pipelines.get(shaders, seed, SEED_FORMAT)?;
-                pipelines.get(shaders, step, SEED_FORMAT)?;
-                pipelines.get(shaders, distance, FIELD_FORMAT)?;
-            }
             if input.sprite {
                 pipelines.get(shaders, self.programs.sprite(height_mode), MASK_FORMAT)?;
             }
@@ -394,8 +341,8 @@ impl<'d> OcclusionMask<'d> {
         Ok(update)
     }
 
-    /// Filtered shadows (E53), after [`prepare`](Self::prepare): ensures the mask, field and (in
-    /// height mode) height targets of every caster class in `classes`
+    /// Filtered shadows (E53), after [`prepare`](Self::prepare): ensures the mask and (in height
+    /// mode) height targets of every caster class in `classes`
     /// ([`LightList::caster_classes`](crate::light_culling::LightList::caster_classes): bit 0
     /// static, bit 1 dynamic) and releases the others, so a frame without filtered lights holds
     /// and draws nothing extra. The classes draw with the pipelines of the full mask.
@@ -416,7 +363,6 @@ impl<'d> OcclusionMask<'d> {
                 continue;
             }
             t.mask.ensure(d.width, d.height, MASK_FORMAT)?;
-            t.field.ensure(d.width, d.height, FIELD_FORMAT)?;
             if self.height_mode {
                 t.height.ensure(d.width, d.height, HEIGHT_FORMAT)?;
             } else {
@@ -427,14 +373,6 @@ impl<'d> OcclusionMask<'d> {
         Ok(())
     }
 
-    /// Whether a light of the prepared frame reads the distance field (Chiaro's shadow and
-    /// medium programs; the row lights do not). Without, [`record`](Self::record) leaves the
-    /// field out, and [`field`](Self::field) holds an older one until a frame needs it again,
-    /// which builds it whole. Default `true`.
-    pub fn set_field_needed(&mut self, needed: bool) {
-        self.field_needed = needed;
-    }
-
     /// The domain parameters of the prepared frame, for the obstacle stages (the same values
     /// [`record`](Self::record) draws them with).
     pub fn domain_params(&self) -> &DomainParams {
@@ -443,8 +381,8 @@ impl<'d> OcclusionMask<'d> {
 
     /// Records the prepared frame into `cmd`: one copy pass (the pending uploads of `geometry`
     /// and `tiles`, the shift copy), one render pass on the mask (and height texture) that
-    /// clears the changed rectangles and draws every source, and the field passes. Nothing for
-    /// [`MaskUpdate::Reused`]. The obstacle stages must be prepared for this frame. `nearest`
+    /// clears the changed rectangles and draws every source, and the caster class masks.
+    /// Nothing else for [`MaskUpdate::Reused`]. The obstacle stages must be prepared for this frame. `nearest`
     /// is the host's nearest-neighbour sampler.
     ///
     /// # Errors
@@ -493,13 +431,6 @@ impl<'d> OcclusionMask<'d> {
         let mut out = MaskRecord::default();
         if update == MaskUpdate::Reused {
             // The sources of the frame that built the mask still hold (Chiaro OcclusionStage).
-            if self.field_needed && self.field_stale {
-                let t = self.target;
-                let (mask, field) = (view(&self.mask[t], "mask")?, view(&self.field[t], "field")?);
-                out.field_texels =
-                    self.record_field(cmd, pipelines, nearest, mask, field, false)?;
-                self.field_stale = false;
-            }
             self.record_casters(cmd, pipelines, nearest, geometry, tiles, sprite, &mut out)?;
             self.recorded = true;
             return Ok(out);
@@ -513,12 +444,7 @@ impl<'d> OcclusionMask<'d> {
             out.uploads += tiles.record_uploads(&mut copy)?;
             if let Some(c) = shift {
                 let (cur, tgt) = (self.current, self.target);
-                let pairs = [
-                    (&self.mask, true),
-                    (&self.field, self.field_needed && !self.field_stale),
-                    (&self.height, self.height_mode),
-                ];
-                for (pair, used) in pairs {
+                for (pair, used) in [(&self.mask, true), (&self.height, self.height_mode)] {
                     if !used {
                         continue; // a change of the height mode rebuilds fully
                     }
@@ -549,12 +475,6 @@ impl<'d> OcclusionMask<'d> {
             dynamic_set: true,
         };
         out.draws = self.record_mask(cmd, pipelines, nearest, &sources, mask, height, local)?;
-        let field = view(&self.field[t], "field")?;
-        if self.field_needed {
-            let local = local && !self.field_stale;
-            out.field_texels = self.record_field(cmd, pipelines, nearest, mask, field, local)?;
-        }
-        self.field_stale = !self.field_needed;
         self.record_casters(cmd, pipelines, nearest, geometry, tiles, sprite, &mut out)?;
         self.recorded = true;
         Ok(out)
@@ -562,7 +482,7 @@ impl<'d> OcclusionMask<'d> {
 
     /// Chiaro `RecordCasters`: every prepared caster class gets its mask cleared and drawn from
     /// the sources of its class (static: static shapes, tile grids, the sprite mask; dynamic:
-    /// dynamic shapes) and its field rebuilt with fullscreen passes.
+    /// dynamic shapes).
     #[allow(clippy::too_many_arguments)] // the caster passes draw every source: all of it is needed
     fn record_casters(
         &self,
@@ -593,13 +513,6 @@ impl<'d> OcclusionMask<'d> {
             out.draws +=
                 self.record_mask(cmd, pipelines, nearest, &sources, mask, height, false)?;
             out.caster_masks += 1;
-            // Only Chiaro's programs read a field; the rows and sun maps of a class its mask.
-            if self.field_needed {
-                let field = view(&t.field, "caster field")?;
-                out.field_texels +=
-                    self.record_field(cmd, pipelines, nearest, mask, field, false)?;
-                out.caster_fields += 1;
-            }
         }
         Ok(())
     }
@@ -697,124 +610,6 @@ impl<'d> OcclusionMask<'d> {
         Ok(draws)
     }
 
-    /// One pass of `program` reading `input` into `target`: fullscreen, or the rectangles of
-    /// `rects` only (the rest is kept).
-    #[allow(clippy::too_many_arguments)] // one pass of a fixed pipeline: all of it is needed
-    fn field_pass(
-        cmd: &mut CommandBuffer<'_>,
-        target: TextureRef<'_>,
-        program: PipelineRef<'_>,
-        input: TextureRef<'_>,
-        nearest: SamplerRef<'_>,
-        params: &JfaParams,
-        rects: Option<(&RectParams, u32)>,
-        cycle: bool,
-    ) -> Result<(), Diagnostic> {
-        let load = if rects.is_some() {
-            Load::Load
-        } else {
-            Load::DontCare
-        };
-        let mut pass = cmd.render_pass(&[ColorTarget::new(target, load).cycled(cycle)])?;
-        let samplers = [SamplerBinding::new(input, nearest)];
-        let jfa = params.to_bytes();
-        let fragment = StageBindings {
-            samplers: &samplers,
-            uniforms: &[&jfa],
-            ..Default::default()
-        };
-        match rects {
-            Some((r, n)) => {
-                let bytes: &[u8] = r.bytes();
-                let bindings = Bindings {
-                    vertex: StageBindings {
-                        uniforms: &[bytes],
-                        ..Default::default()
-                    },
-                    fragment,
-                };
-                pass.bind_program(program, &bindings)?;
-                pass.draw_instanced(6, n)
-            }
-            None => {
-                let bindings = Bindings {
-                    vertex: StageBindings::default(),
-                    fragment,
-                };
-                pass.bind_program(program, &bindings)?;
-                pass.draw_fullscreen()
-            }
-        }
-    }
-
-    /// Seed pass, step passes and distance pass (E19) from `mask` into `field`; returns the
-    /// field texels written.
-    fn record_field(
-        &self,
-        cmd: &mut CommandBuffer<'_>,
-        pipelines: &PipelineCache<'_>,
-        nearest: SamplerRef<'_>,
-        mask: TextureRef<'_>,
-        field: TextureRef<'_>,
-        local: bool,
-    ) -> Result<u64, Diagnostic> {
-        let (w, h) = (self.domain.width, self.domain.height);
-        let [seed, step, distance] = self.programs.field(local);
-        let seed = pipeline(pipelines, seed, SEED_FORMAT)?;
-        let step = pipeline(pipelines, step, SEED_FORMAT)?;
-        let distance = pipeline(pipelines, distance, FIELD_FORMAT)?;
-        let params = JfaParams::new(w, h);
-        // Local: seed and step passes cover the seed rectangles, so that no texel of the field
-        // rectangles reads a stale seed; the distance pass writes the field rectangles only.
-        let mut seed_rects = RectParams::new();
-        let mut field_rects = RectParams::new();
-        let (seed_area, field_area) = if local {
-            let ns = seed_rects.write(self.plan.seed_rects(), w, h);
-            let nf = field_rects.write(self.plan.field_rects(), w, h);
-            (Some((&seed_rects, ns)), Some((&field_rects, nf)))
-        } else {
-            (None, None)
-        };
-        if local && field_area.is_some_and(|(_, n)| n == 0) {
-            return Ok(0); // a pan alone: the shifted field is complete
-        }
-        let seeds = [view(&self.seeds[0], "seed")?, view(&self.seeds[1], "seed")?];
-        // The ping-pong seeds are rewritten several times per frame: no cycling.
-        Self::field_pass(
-            cmd, seeds[0], seed, mask, nearest, &params, seed_area, false,
-        )?;
-        let mut current = 0;
-        for k in jfa_steps() {
-            Self::field_pass(
-                cmd,
-                seeds[1 - current],
-                step,
-                seeds[current],
-                nearest,
-                &params.with_step(k as f32),
-                seed_area,
-                false,
-            )?;
-            current = 1 - current;
-        }
-        // A full rebuild overwrites the whole field (cycle); a local one keeps the shifted rest.
-        Self::field_pass(
-            cmd,
-            field,
-            distance,
-            seeds[current],
-            nearest,
-            &params.distance(),
-            field_area,
-            !local,
-        )?;
-        Ok(if local {
-            self.plan.field_rects().area()
-        } else {
-            u64::from(w) * u64::from(h)
-        })
-    }
-
     /// The prepared frame is in the command buffer: its textures are the current ones now.
     /// Without a recorded frame this does nothing (the next frame then rebuilds fully).
     pub fn commit(&mut self) {
@@ -834,12 +629,6 @@ impl<'d> OcclusionMask<'d> {
         self.mask[self.current].texture_ref()
     }
 
-    /// The current distance field (R16F), `None` before the first frame; an older one after
-    /// frames that left it out ([`set_field_needed`](Self::set_field_needed)).
-    pub fn field(&self) -> Option<TextureRef<'_>> {
-        self.field[self.current].texture_ref()
-    }
-
     /// The current height texture, `None` unless the last committed frame had heights.
     pub fn height(&self) -> Option<TextureRef<'_>> {
         if self.height_recorded {
@@ -849,13 +638,12 @@ impl<'d> OcclusionMask<'d> {
         }
     }
 
-    /// The mask, field and heights of caster class `c` (0 static, 1 dynamic; E53), `None` while
+    /// The mask and heights of caster class `c` (0 static, 1 dynamic; E53), `None` while
     /// the last prepared frame does not use that class.
     pub fn caster_maps(&self, c: usize) -> Option<CasterMaps<'_>> {
         let t = self.casters.get(c)?;
         Some(CasterMaps {
             mask: t.mask.texture_ref()?,
-            field: t.field.texture_ref()?,
             height: t.height.texture_ref(),
         })
     }
@@ -878,11 +666,8 @@ impl<'d> OcclusionMask<'d> {
 
     /// Textures (re)allocated over the stage's lifetime; constant in the steady state.
     pub fn allocations(&self) -> u32 {
-        let casters = self
-            .casters
-            .iter()
-            .flat_map(|t| [&t.mask, &t.field, &t.height]);
-        [&self.mask, &self.field, &self.height, &self.seeds]
+        let casters = self.casters.iter().flat_map(|t| [&t.mask, &t.height]);
+        [&self.mask, &self.height]
             .iter()
             .flat_map(|pair| pair.iter())
             .chain(casters)

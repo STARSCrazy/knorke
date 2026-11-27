@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 
 use knorke_gpu::ProgramDesc;
 use knorke_gpu::kpak::{Program, Stage};
+use knorke_light2d::binding_layout::{LightLayout, LightSampler, LightStorage, LightUniform};
 use knorke_light2d::codec::{AlphaSource, Material, NormalMapOptions, convert_normal_map};
-use knorke_light2d::light_program::{LightLayout, LightSampler, LightStorage, LightUniform};
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc, TileGridDesc};
 use knorke_light2d::occluder_raster::OCCLUDER_PROGRAMS;
 use knorke_light2d::occlusion::MASK_PROGRAMS;

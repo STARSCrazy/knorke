@@ -55,8 +55,7 @@ const SUN_RECEIVER_GAP: f32 = 1.0;
 
 /// Whether a directional light of [`LightList::directional`](crate::light_culling::LightList)
 /// needs no map: it casts no shadow, or stands straight overhead (Chiaro's directional programs
-/// see everything then). The sun programs draw it without one in a frame
-/// [`super::frame_suits`] accepts, every other with a map: with a caster filter (E53) from its
+/// see everything then). The sun programs draw it without one, every other with a map: with a caster filter (E53) from its
 /// class's heights, from the horizon or below it too, where its rays do not rise.
 pub fn sun_plain(g: &GpuDirectional) -> bool {
     g.color[3] < 0.5 || (g.dir_slope[0] == 0.0 && g.dir_slope[1] == 0.0)

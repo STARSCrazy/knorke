@@ -146,7 +146,7 @@ impl DirtyRect {
     }
 }
 
-/// The changed rectangles of one local mask and field update (E21), in mask texels of the
+/// The changed rectangles of one local mask update (E21), in mask texels of the
 /// current frame. Storage is a fixed array; adding beyond [`MAX_DIRTY_RECTS`](Self::MAX_DIRTY_RECTS)
 /// fails and marks the list as overflowed, which forces a full rebuild. Never allocates.
 #[derive(Clone, Debug)]
@@ -315,35 +315,6 @@ impl DirtyRectList {
     pub fn add_exposed_strips(&mut self, dx: i32, dy: i32, w: i32, h: i32) {
         for strip in exposed_strips([dx, dy], w, h) {
             self.add(strip);
-        }
-    }
-
-    /// The counterpart of [`add_exposed_strips`](Self::add_exposed_strips): the contents that
-    /// the shift pushed out of the `w x h` mask. For each of the [`vanished_strips`], adds the
-    /// bounding box of the parts of `grid_rects` (moved by `offset` into the current frame's
-    /// mask texels) that lie in it. Expanded by the field bound and clipped, they cover the field
-    /// texels that still remember an obstacle which is gone.
-    pub fn add_vanished_content(
-        &mut self,
-        grid_rects: &[DirtyRect],
-        offset: [i32; 2],
-        shift: [i32; 2],
-        w: i32,
-        h: i32,
-    ) {
-        for strip in vanished_strips(shift, w, h) {
-            let mut bounds = DirtyRect::EMPTY;
-            for g in grid_rects {
-                let part = g.offset(offset[0], offset[1]).intersection(&strip);
-                if !part.is_empty() {
-                    bounds = if bounds.is_empty() {
-                        part
-                    } else {
-                        bounds.bounding_box(&part)
-                    };
-                }
-            }
-            self.add(bounds);
         }
     }
 

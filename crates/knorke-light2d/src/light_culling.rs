@@ -77,8 +77,6 @@ pub struct LightModes<'a> {
     pub animations: Option<&'a AnimationStore>,
     /// Resolves a light's mask to atlas blocks; `None`: masked lights are dropped.
     pub masks: Option<&'a MaskStore>,
-    /// The frame draws suitable lights with light rows ([`crate::rows::frame_suits`]).
-    pub rows: bool,
 }
 
 impl core::fmt::Debug for LightModes<'_> {
@@ -91,7 +89,6 @@ impl core::fmt::Debug for LightModes<'_> {
             .field("profiles", &self.profiles.is_some())
             .field("animations", &self.animations.is_some())
             .field("masks", &self.masks.is_some())
-            .field("rows", &self.rows)
             .finish()
     }
 }
@@ -109,7 +106,7 @@ pub enum Casters {
 }
 
 impl Casters {
-    /// Index into the filtered lists of [`LightList`]; `None` for [`All`](Self::All).
+    /// Index of the caster class (`[Static, Dynamic]`); `None` for [`All`](Self::All).
     pub fn filter_index(self) -> Option<usize> {
         match self {
             Self::All => None,
@@ -168,14 +165,6 @@ impl MaskedLights {
 /// The lights of one frame, culled and with animation and flicker applied.
 #[derive(Clone, Debug, Default)]
 pub struct LightList {
-    /// Every visible point/spot light without a mask in store order (phase 2 order).
-    pub ordered: Vec<GpuLight>,
-    /// Visible point/spot lights without `cast_shadows`.
-    pub unshadowed: Vec<GpuLight>,
-    /// Visible point/spot lights with `cast_shadows`, `shadow` filled.
-    pub shadowed: Vec<GpuLight>,
-    /// Visible line/rect lights with `cast_shadows` (own shadow programs, E33).
-    pub shadowed_area: Vec<GpuLight>,
     /// Directional lights drawn per pixel (E23, E24), in store order.
     pub directional: Vec<GpuDirectional>,
     /// Lights in `directional` that cast shadows (`color[3] == 1`).
@@ -188,28 +177,15 @@ pub struct LightList {
     pub directional_rise: Vec<f32>,
     /// Of each entry of `directional`: its [`row_key`] (the medium stage finds its sun map by it).
     pub directional_keys: Vec<u64>,
-    /// Shadowed lights with a caster filter, `[Static, Dynamic][0 point/spot, 1 line/rect]`; not
-    /// in `shadowed` and `shadowed_area`. Index with [`Casters::filter_index`].
-    pub filtered: [[Vec<GpuLight>; 2]; 2],
-    /// Masked lights (E115), drawn by the `_mask` programs after the unmasked ones of their kind;
-    /// not in the lists above. All of them in store order (frames without active shadows) ...
-    pub masked_ordered: MaskedLights,
-    /// ... then split like the plain lists: without shadows ...
-    pub masked_unshadowed: MaskedLights,
-    /// ... with shadows ...
-    pub masked_shadowed: MaskedLights,
-    /// ... and shadowed with a caster filter, `[Static, Dynamic]`.
-    pub masked_filtered: [MaskedLights; 2],
-    /// Row lights (ADR 0019, [`crate::rows::light_suits`]) in store order, drawn by the row programs;
-    /// in none of the lists above.
+    /// Every visible point, spot, line and rect light in store order, drawn by the row programs
+    /// (ADR 0019).
     pub rows: Vec<RowLight>,
     /// Atlas slots the entries of `rows` need ([`RowLight::slots`]); 0: none casts shadows.
     pub row_shadows: u32,
     /// Shadow-casting lights drawn without shadow: beyond [`crate::rows::WIDE_REACH`] or the
     /// atlas's [`MAX_ROWS`] (warning `unshadowed_lights`).
     pub shadowless_rows: u32,
-    /// Visible masked lights: `masked_ordered.len()` and the masked entries of `rows` (they
-    /// read the mask atlas too).
+    /// The masked entries of `rows` (they read the mask atlas).
     pub masked_lights: u32,
     /// `mask_atlas_blocks` of the mask store when the list was made (the `GpuMask` atlas v).
     pub mask_blocks: u32,
@@ -235,26 +211,11 @@ pub struct LightList {
 
 impl LightList {
     fn reset(&mut self) {
-        self.ordered.clear();
-        self.unshadowed.clear();
-        self.shadowed.clear();
-        self.shadowed_area.clear();
         self.directional.clear();
         self.directional_shadows = 0;
         self.directional_casters.clear();
         self.directional_rise.clear();
         self.directional_keys.clear();
-        for by_class in &mut self.filtered {
-            for list in by_class {
-                list.clear();
-            }
-        }
-        self.masked_ordered.clear();
-        self.masked_unshadowed.clear();
-        self.masked_shadowed.clear();
-        for m in &mut self.masked_filtered {
-            m.clear();
-        }
         self.rows.clear();
         self.row_shadows = 0;
         self.shadowless_rows = 0;
@@ -492,9 +453,9 @@ fn make_directional(
 
 /// Fills `out` from the enabled lights: directional lights go into `directional` in normal mode
 /// (all of them, for their Lambert term), with a medium world map (all of them, for the clouds'
-/// shade) and in height mode (those that cast shadows), the others into the ambient sum; point
-/// and spot lights whose ground disc can reach the scene rectangle into `ordered` and into one of
-/// the three split lists (each in store order). Reuses the vectors' capacity.
+/// shade) and in height mode (those that cast shadows), the others into the ambient sum; point,
+/// spot, line and rect lights whose ground disc can reach the scene rectangle into `rows` (store
+/// order). Reuses the vectors' capacity.
 #[allow(clippy::too_many_arguments)]
 pub fn collect_lights(
     lights: &LightStore,
@@ -731,52 +692,26 @@ pub fn collect_lights(
         } else {
             Casters::All
         };
-        if modes.rows {
-            let mut row = RowLight {
-                light: g,
-                key: row_key(light_ref),
-                shadowed: d.cast_shadows,
-                reach: row_space.reach(d.radius + row_span(&g)),
-                size: d.source_radius,
-                mask: gpu_mask,
-                window,
-                casters,
-            };
-            // Beyond what a row reaches or the atlas's slots a light casts no shadow (warned).
-            let fits = light_suits(d, row.reach) && out.row_shadows + row.slots() <= MAX_ROWS;
-            if row.shadowed && !fits {
-                row.shadowed = false;
-                out.shadowless_rows += 1;
-            }
-            out.row_shadows += row.slots();
-            if row.shadowed {
-                out.caster_classes |= casters.class_bit();
-            }
-            out.rows.push(row);
-            continue;
+        let mut row = RowLight {
+            light: g,
+            key: row_key(light_ref),
+            shadowed: d.cast_shadows,
+            reach: row_space.reach(d.radius + row_span(&g)),
+            size: d.source_radius,
+            mask: gpu_mask,
+            window,
+            casters,
+        };
+        // Beyond what a row reaches or the atlas's slots a light casts no shadow (warned).
+        let fits = light_suits(d, row.reach) && out.row_shadows + row.slots() <= MAX_ROWS;
+        if row.shadowed && !fits {
+            row.shadowed = false;
+            out.shadowless_rows += 1;
         }
-        if let Some(mask) = gpu_mask {
-            out.masked_ordered.push(g, mask);
-            if let Some(i) = casters.filter_index() {
-                out.masked_filtered[i].push(g, mask);
-                out.caster_classes |= casters.class_bit();
-            } else if d.cast_shadows {
-                out.masked_shadowed.push(g, mask);
-            } else {
-                out.masked_unshadowed.push(g, mask);
-            }
-            continue;
-        }
-        out.ordered.push(g);
-        if let Some(i) = casters.filter_index() {
-            out.filtered[i][usize::from(area)].push(g);
+        out.row_shadows += row.slots();
+        if row.shadowed {
             out.caster_classes |= casters.class_bit();
-        } else if !d.cast_shadows {
-            out.unshadowed.push(g);
-        } else if area {
-            out.shadowed_area.push(g);
-        } else {
-            out.shadowed.push(g);
         }
+        out.rows.push(row);
     }
 }

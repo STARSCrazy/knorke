@@ -12,7 +12,7 @@
 //! | Step | Stage | Reads | Writes |
 //! |---|---|---|---|
 //! | 1 | [`OccluderGeometry`](crate::occluder_raster::OccluderGeometry), [`TileOccluders`](crate::occluder_raster::TileOccluders) (P22) | obstacle store | vertex and cell buffers |
-//! | 2 | [`OcclusionMask`](crate::occlusion::OcclusionMask) (P23) | step 1, sprite mask | mask, height, distance field |
+//! | 2 | [`OcclusionMask`](crate::occlusion::OcclusionMask) (P23) | step 1, sprite mask | mask, height |
 //! | 3 | [`LightAtlases`](crate::atlas::LightAtlases) (P26) | profile and mask store | atlases |
 //! | 3b | [`MediumMapStage`](crate::medium_map::MediumMapStage) (P29, only with a medium layer and a light) | medium layer, media table, the mask's grid | medium world map |
 //! | 4 | [`LightingStage`](crate::lighting::LightingStage) with the zone pass (P25, P26) and the ring light pass (P21) | light list, zone list, ring lights, steps 2 to 3b | light, specular, direction, pure ambient |
@@ -73,7 +73,7 @@ pub struct PassStages(u8);
 impl PassStages {
     /// No stage.
     pub const NONE: Self = Self(0);
-    /// Obstacle raster, occlusion mask and distance field (steps 1 and 2).
+    /// Obstacle raster and occlusion mask (steps 1 and 2).
     pub const OCCLUSION: Self = Self(1);
     /// Profile or mask atlas (step 3).
     pub const ATLASES: Self = Self(2);
@@ -142,15 +142,10 @@ impl PassStats {
     }
 }
 
-/// Chiaro `AnyShadowCaster` (OcclusionStage.cpp): a visible light needs the occlusion mask, a
-/// shadow caster of any kind or a caster class filter (E53).
+/// Whether a visible light needs the occlusion mask (Chiaro `AnyShadowCaster`): a row or a sun
+/// that casts shadows, or a caster class filter (E53).
 pub fn any_shadow_caster(list: &LightList) -> bool {
-    !(list.shadowed.is_empty()
-        && list.shadowed_area.is_empty()
-        && list.masked_shadowed.is_empty()
-        && list.row_shadows == 0
-        && list.directional_shadows == 0
-        && list.caster_classes == 0)
+    !(list.row_shadows == 0 && list.directional_shadows == 0 && list.caster_classes == 0)
 }
 
 /// The highest height a lit pixel can have (Chiaro `Context::BuildFrame`): 0 without a surface

@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use knorke_contract_tests::parity::{load_png_rgba8, save_png_rgba8};
+use knorke_contract_tests::parity::{expected_png_rgba8, load_png_rgba8, save_png_rgba8};
 use knorke_gpu::sys::gpu::SDL_GPUBufferUsageFlags;
 use knorke_gpu::test_support::workspace_root;
 use knorke_gpu::{CommandBuffer, Gpu, UploadBuffer};
@@ -18,6 +18,14 @@ pub(crate) fn fixture(dir: &str, name: &str, (w, h): (u32, u32)) -> Vec<u8> {
         w,
         h,
     )
+}
+
+/// The golden picture `actual` must match: [`fixture`] `dir`/`name`, or its re-blessed rows
+/// golden where the light rows draw the scene differently ([`expected_png_rgba8`], which writes
+/// it with `KNORKE_BLESS=1`).
+pub(crate) fn expected(dir: &str, name: &str, actual: &[u8], (w, h): (u32, u32)) -> Vec<u8> {
+    let chiaro = workspace_root().join(format!("tests/golden/chiaro/{dir}/{name}.png"));
+    expected_png_rgba8(&chiaro, actual, w, h)
 }
 
 /// Records copies of `fills` into their layers on `cmd` and marks them drawn. The returned

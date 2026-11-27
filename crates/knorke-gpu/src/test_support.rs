@@ -158,6 +158,27 @@ pub fn golden_bytes(dir: &str, name: &str) -> Vec<u8> {
     std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
+/// What a readback of a Chiaro scene must equal: the re-blessed dump `tests/golden/rows/<dir>/<name>`
+/// where the light rows (ADR 0019) differ from Chiaro's picture, else the Chiaro dump of
+/// [`golden_bytes`].
+///
+/// Side effect: with `KNORKE_BLESS=1` it writes `actual` as the re-blessed dump (removes it when
+/// `actual` equals Chiaro's) and returns `actual`.
+pub fn expected_bytes(dir: &str, name: &str, actual: &[u8]) -> Vec<u8> {
+    let rows = workspace_root().join("tests/golden/rows").join(dir);
+    let path = rows.join(name);
+    if std::env::var_os("KNORKE_BLESS").is_some() {
+        if golden_bytes(dir, name) == actual {
+            let _ = std::fs::remove_file(&path);
+        } else {
+            std::fs::create_dir_all(&rows).unwrap();
+            std::fs::write(&path, actual).unwrap();
+        }
+        return actual.to_vec();
+    }
+    std::fs::read(&path).unwrap_or_else(|_| golden_bytes(dir, name))
+}
+
 /// An IEEE half float as `f32` (the dumps and readbacks of `R16G16B16A16_FLOAT` targets);
 /// infinities are kept, NaNs are not expected.
 pub fn half_to_f32(h: u16) -> f32 {

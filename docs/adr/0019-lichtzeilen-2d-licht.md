@@ -145,6 +145,8 @@ Wenn später leuchtende Flächen (die Glow-Ebene) die Szene wirklich beleuchten 
 
 Bis Bild und Messung den Ersatz belegen, wird an `knorke-light2d` nichts gelöscht und nichts gekürzt. Der Versuch ist Wegwerf-Code neben dem Bestand.
 
+**Nachtrag 2026-11-27 (Plan 17.13 L7 Teil 2):** Belegt durch die Probe gegen das Wahrheitsbild in allen Fällen (L1–L7) – gelöscht. Chiaros Schatten-Lichtprogramme, das Distanzfeld (Jump Flooding, Feld-Ziele, Klassen-Felder, Feld-Rechtecke), Chiaros Medium-Programme `medium_polar`/`medium_sun_height` und die Einstellung `light_rows` gibt es nicht mehr: jedes Licht nimmt seinen Schatten aus einer Zeile, jede Sonne aus einer Karte. Wo das Bild von Chiaro abweicht, gelten neue Referenzbilder unter `tests/golden/rows/`; die Chiaro-Bilder bleiben als Vorher-Vergleich (Konsequenzen unten).
+
 ## Risiken
 
 1. **Winkel-Raster:** dünne Pfeiler weit weg von der Lampe können zwischen zwei Strahlen fallen (die Laternenmasten in `iso_night` haben Radius 0,12 – wenige Texel); Schattenkanten können beim Bewegen der Lampe flimmern. Gegenmittel: Winkelzahl nach Radius, halbe Schritte, lineares Lesen der Höhe.

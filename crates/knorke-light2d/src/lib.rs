@@ -18,20 +18,20 @@
 //! | [`pattern_store`], [`pattern_geometry`] | obstacle patterns: store with shelf-packed atlas places, sampling, ray entry geometry | P15 |
 //! | [`shadow`] | occlusion domain and anchor, dirty rectangles, incremental mask update plan | P16 |
 //! | [`occluder_raster`] | obstacles into the occlusion mask: triangle buffers, tile cell textures | P22 |
-//! | [`occlusion`] | occlusion mask cache and jump flooding distance field (GPU stage with `gpu`) | P23 |
+//! | [`occlusion`] | occlusion mask cache (GPU stage with `gpu`) | P23 |
 //! | [`settings`] | settings and quality presets of the light (replace `CullSettings`) | P19 |
 //! | [`frame_warnings`] | debug-check findings of a frame as stable diagnostics | P18 |
-//! | [`light_program`] (+ `light_pipelines` with `gpu`) | light program family: table of the 92 programs, rules, binding layouts, lazy pipelines | P24 |
-//! | [`lighting`] | light pass: uniform blocks, program choice, draw plan; `LightingStage` with `gpu` | P25 |
+//! | [`binding_layout`] | names and slots of the resources the medium and composite programs bind | P24 |
+//! | [`lighting`] | light pass: uniform blocks; `LightingStage` with `gpu` | P25 |
 //! | [`composite`] | composite pass: programs, binding layouts, uniform block; `CompositeStage` with `gpu` | P27 |
 //! | [`pass_plan`] | the fixed stage order of a frame; `PassPlan` with `gpu` | P31 |
 //! | [`ring_light`] | ring light of shockwaves: input and uniform blocks; `RingLightPass` with `gpu` | P21 |
-//! | [`rows`] | light rows (ADR 0019): which lights take their shadow from a row per lamp, row cache; `RowLights` with `gpu` | – |
+//! | [`rows`] | light rows (ADR 0019): every light's shadow from a row per lamp, every sun's from a map, their caches; `RowLights` with `gpu` | – |
 //! | [`surface_geometry`] | surface helpers (box, wall, floor, quad as triangles) and surface sprite encoding | P35 |
 //!
 //! GPU stages come behind the `gpu` feature and take `knorke-gpu` as their only graphics
-//! dependency: the occluder raster (P22), the occlusion mask (P23), the light pipelines (P24),
-//! the atlases and the zone pass (P26), the light pass (P25), the composite pass (P27) and the
+//! dependency: the occluder raster (P22), the occlusion mask (P23), the atlases and the zone
+//! pass (P26), the light pass with the rows (P25, ADR 0019), the composite pass (P27) and the
 //! pass plan that runs them in order (P31). The output (tonemap, bloom, target) is
 //! `knorke-post`; `knorke-integration` joins both.
 //! This crate does not know `knorke-post`, `knorke-lighting`, `knorke-render` or
@@ -55,6 +55,7 @@ pub mod ambient_zone_store;
 pub mod animation;
 pub mod area_light;
 pub mod atlas;
+pub mod binding_layout;
 pub mod codec;
 pub mod composite;
 pub mod debug_check;
@@ -64,9 +65,6 @@ pub mod light;
 pub mod light_culling;
 pub mod light_mask;
 pub mod light_math;
-#[cfg(feature = "gpu")]
-pub mod light_pipelines;
-pub mod light_program;
 pub mod light_store;
 pub mod lighting;
 pub mod mask;

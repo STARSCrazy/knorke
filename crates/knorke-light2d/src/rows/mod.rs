@@ -13,11 +13,17 @@
 //! ([`SunCache`], module `sun`); a pan or a redrawn rectangle rebuilds only the map texels
 //! whose rays reach the change ([`sun_bands`]).
 //!
-//! This is the transition of plan 17.13: with [`LightSettings::light_rows`] the pass plan draws
-//! every light [`light_suits`] accepts in a frame [`frame_suits`] accepts with the row
-//! programs, and every directional light with the sun programs: from a map, or without one if
+//! Rows are the light pass (plan 17.13): every point, spot, line and rect light is drawn by the
+//! row programs, every directional light by the sun programs, from a map or without one if
 //! [`sun_plain`]. A light beyond what a row reaches ([`WIDE_REACH`]) or the atlas's slots
-//! ([`MAX_ROWS`]) is drawn without shadow; nothing stays with Chiaro's programs.
+//! ([`MAX_ROWS`]) is drawn without shadow (warning `unshadowed_lights`).
+//!
+//! Partly transparent obstacles, pattern obstacles (tile grids too) and the application's sprite
+//! mask (its heights are in the height texture) are runs of the row. The sprite mask may change
+//! anywhere every frame, so its scene rectangle counts as changed every frame and the rows of
+//! the lamps that reach it are rebuilt every frame. A frame without surface buffer lights its
+//! pixels as ground, with the material buffer as surfaces, without one flat (no Lambert term).
+//! With a medium world map the `_medium` programs dim the light through it.
 //!
 //! | Part | Content |
 //! |---|---|
@@ -48,7 +54,6 @@ use crate::gpu_light::{GpuLight, GpuMask};
 use crate::light::{LightDesc, LightRef, LightType};
 use crate::light_culling::Casters;
 use crate::projection::Projection;
-use crate::settings::LightSettings;
 use crate::shadow::{DirtyRectList, OcclusionDomain};
 
 /// Angles of a row (texel `a` holds the ray at `a + 0.5`).
@@ -88,20 +93,6 @@ pub const EDGE_NEAR: f32 = 16.0;
 /// A lamp's ground point may drift this many mask texels from where its row was built: float
 /// noise of a camera pan, far below the quarter texel a row resolves.
 pub const GROUND_TOLERANCE: f32 = 1e-3;
-
-/// Whether a frame can draw row lights at all ([`LightSettings::light_rows`]).
-///
-/// Partly transparent obstacles, pattern obstacles (tile grids too) and the application's sprite
-/// mask (its heights are in the height texture) are runs of the row. The sprite mask may change anywhere
-/// every frame, so its scene rectangle counts as changed every frame and the rows of the lamps
-/// that reach it are rebuilt every frame.
-///
-/// A frame without surface buffer lights its pixels as ground, with the material buffer as
-/// Chiaro's surface programs, without one as Chiaro's flat programs (no Lambert term). With a
-/// medium world map the row programs dim the light through it as Chiaro's `*_medium` programs.
-pub fn frame_suits(settings: &LightSettings) -> bool {
-    settings.light_rows
-}
 
 /// How the rows of a frame whose highest finite obstacle top is `max_top` store heights
 /// (`PackRun` in `lightrow.hlsli`): x 1 / unit, y the unit, z the top from which on an obstacle
@@ -754,13 +745,6 @@ mod tests {
 
     #[test]
     fn suitability_names_what_rows_cannot_do() {
-        let on = LightSettings::default();
-        let off = LightSettings {
-            light_rows: false,
-            ..on
-        };
-        assert!(frame_suits(&on));
-        assert!(!frame_suits(&off));
         // Tall obstacles: a coarser unit, so the highest finite top stays finite.
         assert_eq!(height_code(3.0), [100.0, 0.01, MAX_TOP, 0.0]);
         for top in [MAX_TOP, 50.0, 100.0, 1000.0] {

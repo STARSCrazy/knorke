@@ -1,5 +1,5 @@
 // Origin: chiaro @ 9bc5b9b, src/lighting/MediumCulling.hpp and MediumCulling.cpp
-// (CollectMediumLights, CollectMediumSuns, MediumSun, kNoShafts, kShaftsInside).
+// (CollectMediumLights, CollectMediumSuns, MediumSun, kNoShafts).
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any
 // express or implied warranty; the origin must not be misrepresented; altered source versions
 // must be plainly marked as such (this file is a Rust port) and this notice may not be removed or
@@ -20,7 +20,9 @@
 //! Redesign against the C++ version:
 //!
 //! - The five out parameters are one reusable [`MediumLightList`]; the shaft entries are
-//!   `Option<`[`Shafts`]`>` instead of a byte (`kNoShafts`, `kShaftsInside`, `kCasters*`).
+//!   `Option<`[`Shafts`]`>` instead of a byte (`kNoShafts`): the light's row key, as the
+//!   medium stage reads the shafts from its row (which knows its caster class and whether it
+//!   sits in an obstacle).
 //! - Masked lights (E115) are always collected into [`MediumLightList::masked`] when the mask
 //!   store is in `modes`; without it they are dropped (never drawn unmasked), as in C++.
 //! - Everything reuses the vectors' capacity: after the first frames collecting allocates nothing.
@@ -41,11 +43,7 @@ use knorke_math::{At, Screen, Vec2, Vec3, det};
 /// A light with light shafts: the medium stage traces its shadow ray through the media.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shafts {
-    /// Which obstacles cast the shafts (E53).
-    pub casters: Casters,
-    /// The light sits inside an obstacle (E147).
-    pub inside: bool,
-    /// Its [`row_key`]: with light rows its shaft row is read from its row.
+    /// Its [`row_key`]: the medium stage reads its shaft row from its row.
     pub key: u64,
 }
 
@@ -182,8 +180,6 @@ pub fn collect_medium_lights(
         let can_have_shafts =
             d.cast_shadows && matches!(d.kind, LightType::Point | LightType::Spot);
         let shafts = Shafts {
-            casters: casters_of(d),
-            inside: d.inside_obstacle,
             key: row_key(light_ref),
         };
         if let Some(block) = mask_block {

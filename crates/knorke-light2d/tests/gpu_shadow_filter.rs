@@ -2,8 +2,8 @@
 //! `tests/gpu/ShadowFilterTests.cpp` (chiaro @ 9bc5b9b). A dynamic-only light is shadowed by the
 //! dynamic disc but not by the static wall, a static-only one the other way round; the caster
 //! class masks exist only while a visible light uses a filter, and without one the frame is
-//! bit-identical. Filtered lights and suns are row lights and sun maps (L7): they read the class
-//! masks, no class field is built. (The flag validation case of the C++ test has no counterpart: the
+//! bit-identical. Filtered lights and suns read the class masks through their rows and sun
+//! maps. (The flag validation case of the C++ test has no counterpart: the
 //! filter is one enum, both flags at once cannot be expressed.)
 //!
 //! Needs a Vulkan device and the shader pack of `cargo xtask shaders`; skips without them (a
@@ -154,7 +154,6 @@ fn dynamic_only_shadows_the_disc_but_not_the_wall_static_only_the_reverse() {
                     let (behind, open) = (red(&img, 30, y), red(&img, 12, y));
                     let masks = record.mask.caster_masks;
                     assert_eq!(masks, u32::from(filter != ShadowFilter::All));
-                    assert_eq!(record.mask.caster_fields, 0);
                     eprintln!("{normals} {filter:?} row {row}: behind {behind}, open {open}");
                     behind < open / SHADOWED
                 };
@@ -181,10 +180,7 @@ fn both_filters_in_one_frame_use_both_class_masks_and_a_directional_light_filter
         fx.light(Some(ShadowFilter::DynamicOnly), 8.0);
         fx.light(Some(ShadowFilter::StaticOnly), 24.0);
         let (record, img) = fx.render();
-        assert_eq!(
-            (record.mask.caster_masks, record.mask.caster_fields),
-            (2, 0)
-        );
+        assert_eq!(record.mask.caster_masks, 2);
         // The wall casts nothing for the dynamic-only light, the disc nothing for the static one.
         assert!(red(&img, 30, 8) > red(&img, 12, 8) / 3.0);
         assert!(red(&img, 30, 24) > red(&img, 12, 24) / 3.0);
@@ -199,10 +195,7 @@ fn both_filters_in_one_frame_use_both_class_masks_and_a_directional_light_filter
         d.shadow_filter = ShadowFilter::DynamicOnly;
         sun.lights.create(&d, &NoResources).unwrap();
         let (record, lit) = sun.render();
-        assert_eq!(
-            (record.mask.caster_masks, record.mask.caster_fields),
-            (1, 0)
-        );
+        assert_eq!(record.mask.caster_masks, 1);
         let (wall, disc, open) = (red(&lit, 30, 8), red(&lit, 30, 24), red(&lit, 12, 4));
         assert!(wall == open, "behind wall {wall}, open {open}");
         assert!(disc < open / SHADOWED, "behind disc {disc}, open {open}");
@@ -232,9 +225,7 @@ fn a_static_only_light_equals_an_unfiltered_one_without_the_dynamic_disc() {
                 } else {
                     fx.light(Some(filter), 16.0);
                 }
-                let (record, img) = fx.render();
-                assert_eq!(record.mask.field_texels, 0, "sun {sun}: rows and maps only");
-                images.push(img);
+                images.push(fx.render().1);
             }
             assert!(images[0] == images[1], "sun {sun}: the image differs");
         }
@@ -246,13 +237,12 @@ fn caster_masks_count_up_and_back_to_none_in_one_plan() {
     with_chiaro_pack(|gpu, pack| {
         let mut fx = Fx::new(gpu, pack, 0.0);
         fx.light(None, 4.0);
-        assert_eq!(fx.render().0.mask.field_texels, 0); // no shadow caster: no occlusion
+        assert_eq!(fx.render().0.mask.caster_masks, 0); // no shadow caster: no occlusion
         let mut ids = Vec::new();
         for (n, filter) in FILTERS.into_iter().enumerate() {
             ids.push(fx.light(Some(filter), [8.0, 24.0, 28.0][n]));
             let (record, _) = fx.render();
-            // Row lights all: no field; the filtered ones draw their class masks.
-            assert_eq!(record.mask.field_texels, 0, "{filter:?}");
+            // The filtered ones draw their class masks.
             assert_eq!(record.mask.caster_masks, n as u32);
         }
         // The same frame again creates nothing.

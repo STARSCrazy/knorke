@@ -9,13 +9,11 @@ mod common;
 use common::at;
 use common::light_host::{L, L0, Scene};
 use knorke_gpu::test_support::{
-    compare_bytes, golden_bytes, queue_download, read_download, rgba16f_diff, sampled_rgba8,
-    with_chiaro_pack,
+    compare_bytes, expected_bytes, golden_bytes, queue_download, read_download, rgba16f_diff,
+    sampled_rgba8, with_chiaro_pack,
 };
 use knorke_gpu::{CommandBuffer, Gpu};
 use knorke_light2d::light::{Height, LightType};
-use knorke_light2d::light_program::LightFeature;
-use knorke_light2d::lighting::DrawProgram;
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc, TileGridDesc};
 use knorke_light2d::pass_plan::{PassFrame, PassPlan, SceneStores};
 use knorke_light2d::pattern_store::{PatternDesc, Sheet, SheetFormat, raw_id};
@@ -313,24 +311,6 @@ fn pattern_obstacles_match_chiaro_bit_for_bit() {
             let name = s.scene.name;
             let mut plan = PassPlan::new(gpu, pack.to_vec()).unwrap();
             let (mask, light) = render(gpu, &mut plan, &s, true);
-            // Both shadow paths read the patterns (the flat scene's directional light is culled:
-            // flat, as in Chiaro).
-            let lit = plan.lighting();
-            let shadowed = lit.program(DrawProgram::Shadowed).unwrap();
-            assert!(
-                shadowed.has(LightFeature::Pattern),
-                "{name}: point/spot without patterns"
-            );
-            let directional = lit.directional_program();
-            assert_eq!(
-                directional.is_some(),
-                name != "flat",
-                "{name}: directional draws"
-            );
-            assert!(
-                directional.is_none_or(|p| p.has(LightFeature::Pattern)),
-                "{name}"
-            );
             let (n, max) = compare_bytes(
                 name,
                 &mask,
@@ -342,7 +322,7 @@ fn pattern_obstacles_match_chiaro_bit_for_bit() {
             }
             let (n, max) = rgba16f_diff(
                 &light,
-                &golden_bytes("pattern", &format!("{name}.light.bin")),
+                &expected_bytes("pattern", &format!("{name}.light.bin"), &light),
             );
             eprintln!("{name}: light buffer {n} differing texels (max {max})");
             if n > 0 {

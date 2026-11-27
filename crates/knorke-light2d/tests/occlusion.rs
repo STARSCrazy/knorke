@@ -1,11 +1,8 @@
-//! P23 without a device: the jump flooding schedule, the uniform blocks of the field and rectangle
-//! shaders and the shift copy of a camera pan (chiaro @ 9bc5b9b, src/rendering/SdfShadows.* and
-//! OcclusionMask.cpp, zlib license).
+//! P23 without a device: the uniform block of the rectangle shaders and the shift copy of a
+//! camera pan (chiaro @ 9bc5b9b, src/rendering/OcclusionMask.cpp, zlib license).
 
-use knorke_light2d::occlusion::{
-    FIELD_BOUND, JfaParams, RectParams, ShiftCopy, UPDATE_LIMITS, jfa_span, jfa_steps,
-};
-use knorke_light2d::shadow::{DirtyRect, DirtyRectList, FULL_REBUILD_RATIO};
+use knorke_light2d::occlusion::{RectParams, ShiftCopy};
+use knorke_light2d::shadow::{DirtyRect, DirtyRectList};
 
 fn f32_at(bytes: &[u8], at: usize) -> f32 {
     f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
@@ -13,37 +10,6 @@ fn f32_at(bytes: &[u8], at: usize) -> f32 {
 
 fn i32_at(bytes: &[u8], at: usize) -> i32 {
     i32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
-}
-
-#[test]
-fn jump_flooding_halves_from_the_span_and_repeats_the_last_step() {
-    assert_eq!(FIELD_BOUND, 32);
-    assert_eq!(jfa_span(), 32);
-    let steps: Vec<u32> = jfa_steps().collect();
-    assert_eq!(steps, [16, 8, 4, 2, 1, 1]);
-    // A texel reads seeds at most the sum of the steps away: within the field bound.
-    assert_eq!(steps.iter().sum::<u32>(), FIELD_BOUND);
-}
-
-#[test]
-fn the_update_limits_follow_the_field_bound() {
-    assert_eq!(UPDATE_LIMITS.field_grow, 32);
-    assert_eq!(UPDATE_LIMITS.seed_grow, 34);
-    assert_eq!(UPDATE_LIMITS.full_rebuild_ratio, FULL_REBUILD_RATIO);
-}
-
-#[test]
-fn jfa_params_match_the_cbuffer_layout() {
-    let p = JfaParams::new(192, 128);
-    let b = p.with_step(8.0).to_bytes();
-    assert_eq!(b.len(), 32);
-    assert_eq!(
-        [f32_at(&b, 0), f32_at(&b, 4), f32_at(&b, 8), f32_at(&b, 12)],
-        [192.0, 128.0, 1.0 / 192.0, 1.0 / 128.0]
-    );
-    assert_eq!([f32_at(&b, 16), f32_at(&b, 20)], [8.0, 0.0]);
-    let d = p.distance().to_bytes();
-    assert_eq!([f32_at(&d, 16), f32_at(&d, 20)], [0.0, 32.0]);
 }
 
 #[test]

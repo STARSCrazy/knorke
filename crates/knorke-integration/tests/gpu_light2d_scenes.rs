@@ -21,7 +21,9 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use knorke_contract_tests::parity::{ParityBudget, compare_rgba8, load_png_rgba8, save_png_rgba8};
+use knorke_contract_tests::parity::{
+    ParityBudget, compare_rgba8, expected_png_rgba8, save_png_rgba8,
+};
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 };
@@ -215,11 +217,10 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
             occlusion: occlusion.as_ref().map(Texture::texture_ref),
             ..Light2dFrame::new(color.texture_ref(), target.texture_ref(), &projection)
         };
-        // Chiaro's defaults with the scene's ambient and output filter, and Chiaro's light.
+        // Chiaro's defaults with the scene's ambient and output filter.
         let mut settings = Light2dSettings {
             light: LightSettings {
                 ambient: Vec3::new(scene.ambient, scene.ambient, scene.ambient),
-                light_rows: false,
                 ..LightSettings::default()
             },
             post: PostSettings::default(),
@@ -252,8 +253,11 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
         let mut pixels = vec![0u8; (w * h * 4) as usize];
         download.read(&mut pixels).unwrap();
 
-        let reference = load_png_rgba8(
+        // The rows differ from Chiaro's light along shadow edges: `gate_sprite_shadow` is
+        // re-blessed (tests/golden/rows).
+        let reference = expected_png_rgba8(
             &workspace_root().join(format!("tests/golden/chiaro/{}.png", scene.name)),
+            &pixels,
             w,
             h,
         );
@@ -264,27 +268,6 @@ fn scenes_match_chiaro_through_pass_plan_and_post() {
                 compare_rgba8(&pixels, &reference, w, h, &[], &ParityBudget::LOOSE).unwrap();
             loose.print(scene.name, "LOOSE");
             failures.push(format!("{}: {strict:?}", scene.name));
-        }
-        // The row light (ADR 0019) differs from Chiaro's along shadow edges only. Measured
-        // 2026-11-26 (Vulkan, RX 6700 XT): gate_sprite_shadow mean 0.446 of 255 (7.72 while a
-        // lamp on the ground lit half its soft shadow from below the ground); minimal_normal_map 0.
-        let mut rows = settings;
-        rows.light.light_rows = true;
-        frame_once(
-            &device,
-            &mut renderer,
-            &frame,
-            &stores,
-            &rows,
-            Some(&download),
-        );
-        let mut lit = vec![0u8; (w * h * 4) as usize];
-        download.read(&mut lit).unwrap();
-        let report = compare_rgba8(&lit, &reference, w, h, &[], &ParityBudget::STRICT).unwrap();
-        let mean = report.sum_diff as f64 / report.compared as f64;
-        eprintln!("{} with light rows: mean {mean:.4} of 255", scene.name);
-        if mean > 0.5 {
-            failures.push(format!("{} with light rows: mean {mean}", scene.name));
         }
         if let Some(dir) = &out {
             std::fs::create_dir_all(dir).unwrap();

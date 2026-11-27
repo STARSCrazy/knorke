@@ -9,12 +9,10 @@ mod common;
 use common::at;
 use common::light_host::{L, L0, Scene};
 use knorke_gpu::test_support::{
-    golden_bytes, queue_download, read_download, rgba16f_diff, sampled_rgba8, with_chiaro_pack,
+    expected_bytes, queue_download, read_download, rgba16f_diff, sampled_rgba8, with_chiaro_pack,
 };
 use knorke_gpu::{CommandBuffer, Gpu};
 use knorke_light2d::light::{Height, LightType};
-use knorke_light2d::light_program::LightFeature;
-use knorke_light2d::lighting::DrawProgram;
 use knorke_light2d::medium_map::MEDIUM_LAYER_FORMAT;
 use knorke_light2d::obstacle::{ObstacleCommon, Shape, ShapeDesc};
 use knorke_light2d::pass_plan::{PassFrame, PassPlan, PassStages, SceneStores};
@@ -152,24 +150,11 @@ fn medium_map_matches_chiaro_bit_for_bit() {
             let name = s.name;
             let mut plan = PassPlan::new(gpu, pack.to_vec()).unwrap();
             let (map, light) = render(gpu, &mut plan, &s, true);
-            // Every draw reads the map, the directional light per pixel.
-            let lit = plan.lighting();
-            let point = if name == "top" {
-                DrawProgram::Unshadowed
-            } else {
-                DrawProgram::Shadowed
-            };
-            assert!(
-                lit.program(point).unwrap().has(LightFeature::Medium),
-                "{name}"
-            );
-            assert!(
-                lit.directional_program().unwrap().has(LightFeature::Medium),
-                "{name}"
-            );
             for (what, got, file) in [("map", &map, "map"), ("light", &light, "light")] {
-                let (n, max) =
-                    rgba16f_diff(got, &golden_bytes("medium", &format!("{name}.{file}.bin")));
+                let (n, max) = rgba16f_diff(
+                    got,
+                    &expected_bytes("medium", &format!("{name}.{file}.bin"), got),
+                );
                 eprintln!("{name}: {what} {n} differing texels (max {max})");
                 if n > 0 {
                     failures.push(format!("{name}.{what}: {n} texels, max {max}"));
@@ -196,16 +181,10 @@ fn a_frame_without_medium_or_lights_builds_nothing() {
         let mut plan = PassPlan::new(gpu, pack.to_vec()).unwrap();
         render(gpu, &mut plan, &s, true);
         assert_eq!(plan.medium_map().pipeline_count(), 3);
-        // The next frame without the layer releases the map and draws plain programs.
+        // The next frame without the layer releases the map.
         render(gpu, &mut plan, &s, false);
         assert!(plan.medium_map().view().is_none());
         assert!(plan.medium_map().layout().is_none());
-        let lit = plan.lighting();
-        assert!(
-            !lit.program(DrawProgram::Unshadowed)
-                .unwrap()
-                .has(LightFeature::Medium)
-        );
         // A layer without any light in the store builds no map either.
         let (w, h) = s.size;
         let scene = sampled_rgba8(gpu, w, h, &vec![255u8; (w * h * 4) as usize]);

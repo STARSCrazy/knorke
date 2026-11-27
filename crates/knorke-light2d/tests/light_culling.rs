@@ -67,6 +67,18 @@ fn collect(
     list
 }
 
+/// The lights with shadows, in list order.
+fn shadowed(list: &LightList) -> Vec<GpuLight> {
+    let rows = list.rows.iter().filter(|r| r.shadowed);
+    rows.map(|r| r.light).collect()
+}
+
+/// The lights without shadows, in list order.
+fn unshadowed(list: &LightList) -> Vec<GpuLight> {
+    let rows = list.rows.iter().filter(|r| !r.shadowed);
+    rows.map(|r| r.light).collect()
+}
+
 fn plain(store: &LightStore) -> LightList {
     collect(
         store,
@@ -92,11 +104,11 @@ fn inside_obstacle_turns_the_source_radius_in_shadow_x_into_minus_one_minus_r() 
     add_point(&mut store, 64.0, 32.0, true, 6.0); // unmarked: unchanged
 
     let list = plain(&store);
-    assert_eq!(list.shadowed.len(), 3);
-    assert!(near(list.shadowed[0].shadow[0], -7.0));
-    assert_eq!(list.shadowed[1].shadow[0], -1.0);
-    assert!(near(list.shadowed[2].shadow[0], 6.0));
-    assert!(near(list.shadowed[0].shadow[2], 48.0)); // the rest as before
+    assert_eq!(shadowed(&list).len(), 3);
+    assert!(near(shadowed(&list)[0].shadow[0], -7.0));
+    assert_eq!(shadowed(&list)[1].shadow[0], -1.0);
+    assert!(near(shadowed(&list)[2].shadow[0], 6.0));
+    assert!(near(shadowed(&list)[0].shadow[2], 48.0)); // the rest as before
 }
 
 #[test]
@@ -107,22 +119,22 @@ fn shadowed_lights_carry_their_mask_space_shadow_parameters() {
     add_point(&mut store, 100.0, 10.0, true, 0.0);
 
     let list = plain(&store);
-    assert_eq!(list.shadowed.len(), 2);
-    assert_eq!(list.unshadowed.len(), 1);
+    assert_eq!(shadowed(&list).len(), 2);
+    assert_eq!(unshadowed(&list).len(), 1);
     // Margin 32 at scale 1: mask = scene + 32. x = R, y = specular factor (E47), zw = ground
     // position in mask texels.
-    let a = &list.shadowed[0];
+    let a = &shadowed(&list)[0];
     assert!(near(a.shadow[0], 6.0));
     assert_eq!(a.shadow[1], 1.0);
     assert!(near(a.shadow[2], 48.0));
     assert!(near(a.shadow[3], 64.0));
-    let b = &list.shadowed[1];
+    let b = &shadowed(&list)[1];
     assert_eq!(b.shadow[0], 0.0);
     assert_eq!(b.shadow[1], 1.0);
     assert!(near(b.shadow[2], 132.0));
     assert!(near(b.shadow[3], 42.0));
     // Every light carries its specular factor, only shadow casters the rest.
-    assert_eq!(list.unshadowed[0].shadow, [0.0, 1.0, 0.0, 0.0]);
+    assert_eq!(unshadowed(&list)[0].shadow, [0.0, 1.0, 0.0, 0.0]);
 }
 
 #[test]
@@ -182,8 +194,8 @@ fn shadow_parameters_follow_zoom_camera_and_shadow_scale() {
     add_point(&mut store, 12.0, 21.0, true, 6.0);
 
     let list = collect(&store, &settings, &projection, 0.0, &LightModes::default());
-    assert_eq!(list.shadowed.len(), 1);
-    let g = &list.shadowed[0];
+    assert_eq!(shadowed(&list).len(), 1);
+    let g = &shadowed(&list)[0];
     // R = source_radius * axis scale * s = 6 * 2 * 0.5.
     assert!(near(g.shadow[0], 6.0));
     // Scene position: camera centre (64, 32) + 2 * (2, 1) = (68, 34); mask = (scene + 32) * 0.5.
@@ -234,11 +246,8 @@ fn line_and_rect_lights_type_axis_quad_extent_and_mask_space_axes() {
     store.create(&r, &NoResources).unwrap();
 
     let list = plain(&store);
-    assert_eq!(list.ordered.len(), 2);
-    // A shadowed line or rect goes to its own list.
-    assert!(list.shadowed.is_empty());
-    assert_eq!(list.shadowed_area.len(), 1);
-    let line = &list.shadowed_area[0];
+    assert_eq!(list.rows.len(), 2);
+    let line = &shadowed(&list)[0];
     assert_eq!(line.direction_type[3], 2.0);
     assert!(near(line.position_radius[0], 30.0));
     assert!(near(line.area[0], 20.0));
@@ -250,7 +259,7 @@ fn line_and_rect_lights_type_axis_quad_extent_and_mask_space_axes() {
     assert!(near(line.area_mask[0], 20.0));
     assert!(near(line.area_mask[1], 5.0));
     assert_eq!((line.area_mask[2], line.area_mask[3]), (0.0, 0.0));
-    let rect = &list.unshadowed[0];
+    let rect = &unshadowed(&list)[0];
     assert_eq!(rect.direction_type[3], 4.0);
     assert_eq!(rect.area[3], 2.0);
     // Lowest point at z = 3: ground radius sqrt(13^2 - 3^2), plus the half extent 6.
@@ -265,7 +274,7 @@ fn a_line_light_reaching_the_ground_only_near_one_low_end_is_still_drawn() {
     d.set_line_endpoints(v(40.0, 30.0, 2.0), v(60.0, 30.0, 40.0));
     d.radius = 10.0;
     store.create(&d, &NoResources).unwrap();
-    assert_eq!(plain(&store).ordered.len(), 1);
+    assert_eq!(plain(&store).rows.len(), 1);
 }
 
 #[test]
@@ -285,14 +294,14 @@ fn soft_near_field_rides_on_the_type_as_a_share_of_the_source_radius() {
     store.create(&d, &NoResources).unwrap();
 
     let list = plain(&store);
-    assert_eq!(list.ordered.len(), 3);
-    assert_eq!(list.ordered[0].direction_type[3], 1.0);
+    assert_eq!(list.rows.len(), 3);
+    assert_eq!(list.rows[0].light.direction_type[3], 1.0);
     assert!(near(
-        list.ordered[1].direction_type[3],
+        list.rows[1].light.direction_type[3],
         1.0 + NEAR_FIELD_SHARE * 0.1
     ));
-    assert!(near(list.ordered[2].direction_type[3], NEAR_FIELD_SHARE));
-    assert!(list.ordered[2].direction_type[3] < 0.5); // still a point light for the shaders
+    assert!(near(list.rows[2].light.direction_type[3], NEAR_FIELD_SHARE));
+    assert!(list.rows[2].light.direction_type[3] < 0.5); // still a point light for the shaders
 }
 
 // ---- animation ----
@@ -329,15 +338,15 @@ fn lights_without_animation_are_bit_identical_animated_ones_get_factors() {
     let (s, p) = (LightSettings::default(), Projection::IDENTITY);
 
     let list = collect(&lights, &s, &p, 0.0, &modes);
-    assert_eq!(list.ordered.len(), 2);
+    assert_eq!(list.rows.len(), 2);
     // The plain light equals a store without any animation.
     let mut plain_store = LightStore::new();
     plain_store.create(&point(20.0, 20.0), &res).unwrap();
     let only = collect(&plain_store, &s, &p, 0.0, &LightModes::default());
-    assert_eq!(only.ordered.len(), 1);
-    assert_eq!(only.ordered[0], list.ordered[0]);
+    assert_eq!(only.rows.len(), 1);
+    assert_eq!(only.rows[0].light, list.rows[0].light);
 
-    let g = &list.ordered[1];
+    let g = &list.rows[1].light;
     assert!(near(g.color_falloff[0], 1.0 * 2.0 * 0.5));
     assert!(near(g.color_falloff[1], 0.5 * 2.0 * 0.5));
     assert!(near(g.color_falloff[2], 0.25 * 2.0 * 0.5 * 0.5)); // low_color blue 0 at w = 0.5
@@ -345,8 +354,8 @@ fn lights_without_animation_are_bit_identical_animated_ones_get_factors() {
     assert!(near(sample.intensity, 0.5));
     // At the trough the animated light is black and not drawn at all.
     let trough = collect(&lights, &s, &p, -0.5, &modes);
-    assert_eq!(trough.ordered.len(), 1);
-    assert_eq!(only.ordered[0], trough.ordered[0]);
+    assert_eq!(trough.rows.len(), 1);
+    assert_eq!(only.rows[0].light, trough.rows[0].light);
 }
 
 /// Stands in for the profile store of P9: every profile is row 0 of a one-block atlas.
@@ -408,14 +417,14 @@ fn a_beacon_turns_the_spot_direction_and_the_profile_c0_about_z() {
         1.0,
         &modes,
     ); // a quarter turn
-    assert_eq!(list.ordered.len(), 2);
+    assert_eq!(list.rows.len(), 2);
     let len = 1.25f32.sqrt();
-    let s = &list.ordered[0];
+    let s = &list.rows[0].light;
     assert!(s.direction_type[0].abs() < 1e-6);
     assert!(near(s.direction_type[1], 1.0 / len));
     assert!(near(s.direction_type[2], -0.5 / len));
     assert!(near(s.color_falloff[0], 1.0)); // a beacon keeps the intensity
-    let q = &list.ordered[1];
+    let q = &list.rows[1].light;
     // C0 was +x; after a quarter turn it is +y, as with profile_rotation = 90.
     assert!(q.profile[1].abs() < 1e-6);
     assert!(near(q.profile[2], 1.0));
@@ -484,8 +493,8 @@ fn a_beacon_turns_a_rect_lights_normal_and_length_axis() {
         1.0,
         &modes,
     );
-    assert_eq!(list.ordered.len(), 1);
-    let g = &list.ordered[0];
+    assert_eq!(list.rows.len(), 1);
+    let g = &list.rows[0].light;
     assert!(g.direction_type[0].abs() < 1e-6);
     assert!(near(g.direction_type[1], 1.0));
     assert!(near(g.area[0], -3.0));
@@ -512,7 +521,7 @@ fn spot(x: f32, y: f32, z: f32) -> LightDesc {
 }
 
 #[test]
-fn masked_lights_leave_the_plain_lists_for_the_masked_ones() {
+fn masked_lights_carry_their_mask() {
     let animations = AnimationStore::new();
     let mut masks = MaskStore::new();
     let mask = cross_mask(&mut masks);
@@ -538,14 +547,13 @@ fn masked_lights_leave_the_plain_lists_for_the_masked_ones() {
     };
     let (s, p) = (LightSettings::default(), Projection::IDENTITY);
     let list = collect(&store, &s, &p, 0.0, &modes);
-    assert_eq!(list.ordered.len(), 1);
-    assert_eq!(list.masked_ordered.len(), 1);
+    assert_eq!(list.rows.len(), 2);
     assert_eq!(list.masked_lights, 1);
     assert_eq!(list.mask_blocks, 1);
-    assert_eq!(list.masked_shadowed.len() + list.masked_unshadowed.len(), 1);
-    assert_eq!(list.masked_ordered.masks.len(), 1);
-    assert!(near(list.masked_ordered.masks[0].n[2], -1.0)); // projector: the direction
-    assert_eq!(list.masked_ordered.lights[0].position_radius[0], 60.0);
+    assert!(list.rows[0].mask.is_none());
+    let masked = &list.rows[1];
+    assert!(near(masked.mask.unwrap().n[2], -1.0)); // projector: the direction
+    assert_eq!(masked.light.position_radius[0], 60.0);
 
     // Culling counters treat a masked light like an unmasked one: one too high to reach the
     // ground is unreachable even when its window would also leave it dark (placement runs only
@@ -563,12 +571,12 @@ fn masked_lights_leave_the_plain_lists_for_the_masked_ones() {
 
     // Without the mask store masked lights are dropped, never drawn unmasked.
     let list = collect(&store, &s, &p, 0.0, &LightModes::default());
-    assert_eq!(list.ordered.len(), 1);
+    assert_eq!(list.rows.len(), 1);
     assert_eq!(list.masked_lights, 0);
 }
 
 #[test]
-fn caster_filters_split_the_shadowed_lights_and_set_the_class_bits() {
+fn caster_filters_mark_the_rows_and_set_the_class_bits() {
     use knorke_light2d::light::ShadowFilter;
     let mut store = LightStore::new();
     let mut d = LightDesc::new(LightType::Point);
@@ -585,19 +593,10 @@ fn caster_filters_split_the_shadowed_lights_and_set_the_class_bits() {
     store.create(&line, &NoResources).unwrap();
 
     let list = plain(&store);
-    assert_eq!(list.ordered.len(), 3);
-    assert!(list.shadowed.is_empty() && list.shadowed_area.is_empty());
+    let casters: Vec<_> = list.rows.iter().map(|r| r.casters).collect();
     assert_eq!(
-        list.filtered[Casters::Static.filter_index().unwrap()][0].len(),
-        1
-    );
-    assert_eq!(
-        list.filtered[Casters::Dynamic.filter_index().unwrap()][0].len(),
-        1
-    );
-    assert_eq!(
-        list.filtered[Casters::Dynamic.filter_index().unwrap()][1].len(),
-        1
+        casters,
+        [Casters::Static, Casters::Dynamic, Casters::Dynamic]
     );
     assert_eq!(list.caster_classes, 0b11);
 }
@@ -616,7 +615,7 @@ fn lights_outside_the_scene_are_culled_and_disabled_ones_are_skipped() {
     high.height = Height::At(500.0);
     store.create(&high, &NoResources).unwrap();
     let list = plain(&store);
-    assert_eq!(list.ordered.len(), 1);
+    assert_eq!(list.rows.len(), 1);
     assert_eq!(list.unreachable_lights, 1);
     assert_eq!(list.auto_height_lights, 1);
 }
@@ -634,7 +633,7 @@ fn a_one_sided_rect_facing_away_from_everything_is_counted_and_not_drawn() {
     store.create(&r, &NoResources).unwrap();
     let list = plain(&store);
     assert_eq!(list.facing_away_lights, 1);
-    assert!(list.ordered.is_empty());
+    assert!(list.rows.is_empty());
 }
 
 #[test]

@@ -10,7 +10,7 @@ use knorke_contract_tests::parity::{ParityBudget, compare_rgba8};
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
 };
-use knorke_gpu::test_support::{golden_bytes, sampled_rgba8, texture, vulkan_device_with_pack};
+use knorke_gpu::test_support::{expected_bytes, sampled_rgba8, texture, vulkan_device_with_pack};
 use knorke_gpu::{CommandBuffer, DownloadBuffer, Gpu, LiveCounter};
 use knorke_integration::light2d::{Light2dFrame, Light2dRenderer, Light2dSettings};
 use knorke_light2d::light::{Height, LightDesc, LightType};
@@ -144,9 +144,6 @@ fn pattern_scene_matches_chiaro_through_light2d_renderer() {
     let settings = Light2dSettings {
         light: LightSettings {
             ambient: Vec3::new(0.03, 0.03, 0.04),
-            // Chiaro's light: the picture is compared with Chiaro's. The row light differs along
-            // shadow edges (2026-11-26: mean 0.085 of 255, 22 pixels over STRICT's tolerance).
-            light_rows: false,
             ..LightSettings::default()
         },
         post: PostSettings::default(),
@@ -170,7 +167,8 @@ fn pattern_scene_matches_chiaro_through_light2d_renderer() {
     let mut download = download;
     download.read(&mut pixels).unwrap();
 
-    let reference = golden_bytes("pattern", "height.target.bin");
+    // The rows differ from Chiaro's light along shadow edges: re-blessed (tests/golden/rows).
+    let reference = expected_bytes("pattern", "height.target.bin", &pixels);
     let strict = compare_rgba8(&pixels, &reference, W, H, &[], &ParityBudget::STRICT).unwrap();
     strict.print("pattern height", "STRICT");
     drop((renderer, target, scene, download));

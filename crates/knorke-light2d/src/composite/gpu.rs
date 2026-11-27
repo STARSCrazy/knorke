@@ -39,7 +39,7 @@ use super::params::{
     COMPOSITE_PROGRAM_COUNT, COMPOSITE_PROGRAMS, CompositeParams, CompositeParamsInput,
     CompositeProgram, InputColorSpace, composite_layout_of, composite_program_of, medium_nearest,
 };
-use crate::light_program::{LightSampler, LightUniform};
+use crate::binding_layout::{LightSampler, LightUniform};
 use crate::lighting::{DetailMode, LightingResult, LightingStage, PureAmbient};
 use crate::projection::Projection;
 use crate::settings::LightSettings;

@@ -20,10 +20,10 @@
 mod common;
 
 use common::at;
-use common::light_host::{Host, L, L0, Out, Scene, golden_programs, with_host};
+use common::light_host::{Host, L, L0, Out, Scene, with_host};
 use knorke_gpu::test_support::{
-    golden_bytes, half_to_f32, queue_download, read_download, rgba16f_diff, sampled_rgba8,
-    with_chiaro_pack,
+    expected_bytes, golden_bytes, half_to_f32, queue_download, read_download, rgba16f_diff,
+    sampled_rgba8, with_chiaro_pack,
 };
 use knorke_gpu::{CommandBuffer, Gpu, Texture};
 use knorke_light2d::ambient_zone::{AmbientZoneParams, ZoneShape, fold_ambient, make_stored_zone};
@@ -35,7 +35,7 @@ use knorke_light2d::light::{Height, LightType, ProfileId};
 use knorke_light2d::light_culling::{LightModes, collect_lights};
 use knorke_light2d::light_mask::{make_mask_placement, mask_factor};
 use knorke_light2d::light_math::{attenuation, spot_factor};
-use knorke_light2d::lighting::{DetailMode, LightingFrame, PureAmbient};
+use knorke_light2d::lighting::{DetailMode, LightingFrame, LightingRecord, PureAmbient};
 use knorke_light2d::mask::MaskPreset;
 use knorke_light2d::pass_plan::{
     PassFrame, PassPlan, PassPrepared, PassRecord, PassStages, SceneStores,
@@ -323,14 +323,9 @@ fn scenes_match_chiaro() {
             let mut host = fresh();
             let out = host.frame(&scene, 0.0);
             let name = scene.name;
-            assert_eq!(
-                out.programs,
-                golden_programs("atlas", name),
-                "{name}: programs"
-            );
             let (n, max) = rgba16f_diff(
                 &out.light,
-                &golden_bytes("atlas", &format!("{name}.light.bin")),
+                &expected_bytes("atlas", &format!("{name}.light.bin"), &out.light),
             );
             eprintln!("{name}: light buffer {n} differing texels (max {max})");
             if n > 0 {
@@ -339,7 +334,7 @@ fn scenes_match_chiaro() {
             if out.result.detail_mode == DetailMode::Direction {
                 let (n, max) = rgba16f_diff(
                     &out.second,
-                    &golden_bytes("atlas", &format!("{name}.direction.bin")),
+                    &expected_bytes("atlas", &format!("{name}.direction.bin"), &out.second),
                 );
                 eprintln!("{name}: direction buffer {n} differing texels (max {max})");
                 if n > 0 {
@@ -349,7 +344,7 @@ fn scenes_match_chiaro() {
             if out.result.pure_ambient == PureAmbient::Separate {
                 let (n, max) = rgba16f_diff(
                     &out.ambient,
-                    &golden_bytes("atlas", &format!("{name}.ambient.bin")),
+                    &expected_bytes("atlas", &format!("{name}.ambient.bin"), &out.ambient),
                 );
                 eprintln!("{name}: pure ambient {n} differing texels (max {max})");
                 if n > 0 {
@@ -787,7 +782,7 @@ fn a_profiled_light_without_a_profile_atlas_is_refused() {
         };
         let e = host
             .lighting
-            .prepare(&mut host.shaders, &mut host.light_pipelines, &frame)
+            .prepare(&mut host.shaders, &frame)
             .unwrap_err();
         assert_eq!(e.code, knorke_light2d::lighting::LIGHTING_ATLAS_MISSING);
     });
@@ -1792,8 +1787,10 @@ fn pass_plan_matches_chiaro_up_to_the_hdr_buffer() {
             let out = plan_frame(gpu, &mut plan, &s, &plan_stores(&s), &tex);
             let name = s.name;
             for (what, got) in [("light", &out.light), ("hdr", &out.hdr)] {
-                let (n, max) =
-                    rgba16f_diff(got, &golden_bytes("atlas", &format!("{name}.{what}.bin")));
+                let (n, max) = rgba16f_diff(
+                    got,
+                    &expected_bytes("atlas", &format!("{name}.{what}.bin"), got),
+                );
                 eprintln!("{name}: {what} buffer {n} differing texels (max {max})");
                 if n > 0 {
                     failures.push(format!("{name}.{what}: {n} texels, max {max}"));
@@ -1852,7 +1849,10 @@ fn pass_plan_steady_state_reuses_the_mask_and_allocates_nothing() {
             assert_eq!(again.prepared.mask_update, Some(MaskUpdate::Reused));
             assert_eq!(again.prepared.allocations, 0);
             assert_eq!(again.hdr, first.hdr, "bit identical frame to frame");
-            assert_eq!(again.record.lighting, first.record.lighting);
+            // The same draws; the row is kept from the first frame.
+            let (a, b) = (again.record.lighting, first.record.lighting);
+            assert_eq!((a.rows_built, b.rows_built), (0, 1));
+            assert_eq!(LightingRecord { rows_built: 1, ..a }, b);
             assert_eq!(counter.live(), live, "no GPU object per frame");
         }
         let stats = plan.stats();

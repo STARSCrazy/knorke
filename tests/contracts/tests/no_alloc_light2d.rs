@@ -5,11 +5,10 @@
 //! animations, masks, flicker and caster filters) into a reused list, and snapshot round trips
 //! of the animation and mask stores, the shadow cache plan deciding incremental mask updates, and
 //! the obstacle raster collecting triangles, laying out the buffer and staging tile cells,
-//! the lights and suns of the medium stage, and the light pass splitting the list into its draws, writing the light and mask buffer
-//! bytes and its uniform blocks, filling the profile and mask atlas bytes, and culling the
-//! ambient zones, writing their records, vertex texels and uniform blocks, and the light rows
-//! picking their lights, assigning rows and sun maps and writing their blocks (ADR 0006,
-//! ADR 0010, ADR 0019).
+//! the lights and suns of the medium stage, the light pass's uniform blocks, filling the profile
+//! and mask atlas bytes, and culling the ambient zones, writing their records, vertex texels and
+//! uniform blocks, and the light rows assigning rows and sun maps and writing their blocks
+//! (ADR 0006, ADR 0010, ADR 0019).
 //!
 //! Own test binary with a single test, so the process-wide allocation counter is not disturbed
 //! by other tests running concurrently.
@@ -33,10 +32,7 @@ use knorke_light2d::composite::{
 };
 use knorke_light2d::light::{Height, LightDesc, LightType, ShadowFilter};
 use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
-use knorke_light2d::lighting::{
-    DetailMode, DirectionalParams, LightDraws, LightPass, LightPassParams, LightSurfacePassParams,
-    ProgramModes, ShadowDomain, SurfaceParams, SurfaceShadowParams, program_for,
-};
+use knorke_light2d::lighting::{LightSurfacePassParams, ShadowDomain, SurfaceParams};
 use knorke_light2d::mask::{MaskPreset, MaskShape};
 use knorke_light2d::medium_culling::{
     MediumLightList, MediumSun, collect_medium_lights, collect_medium_suns,
@@ -52,7 +48,7 @@ use knorke_light2d::rows::{
     RowMask, RowSpace, SunBands, SunCache, SunParams, SunSource, height_code, sun_bands, sun_plain,
 };
 use knorke_light2d::settings::LightSettings;
-use knorke_light2d::shadow::{MaskPlanInput, MaskUpdateLimits, MaskUpdatePlan, OcclusionDomain};
+use knorke_light2d::shadow::{MaskPlanInput, MaskUpdatePlan, OcclusionDomain};
 use knorke_light2d::zone_pass::{
     ZoneFragParams, ZonePassParams, fill_zone_vertices, write_zones, zone_vertex_bytes,
     zone_vertex_rows,
@@ -154,8 +150,6 @@ fn steady_state_light2d_paths_allocate_nothing() {
     let mut static_set = TriangleSet::new();
     let mut dynamic_set = TriangleSet::new();
     let mut raster_bytes = vec![0u8; 1 << 14];
-    let mut light_bytes = vec![0u8; 1 << 16];
-    let mut mask_bytes = vec![0u8; 1 << 14];
     let mut tile_set: TileSet<()> = TileSet::new();
     let mut texels = vec![0u8; 16];
     // Shadow cache plan: a static wall, dynamic obstacles that move and a panning camera.
@@ -169,11 +163,8 @@ fn steady_state_light2d_paths_allocate_nothing() {
         d.common.dynamic = true;
         shadow_movers.push(shadow_obstacles.create_shape(&d).unwrap());
     }
-    let mut plan = MaskUpdatePlan::new(MaskUpdateLimits {
-        field_grow: 4,
-        seed_grow: 2,
-        full_rebuild_ratio: 1.0,
-    });
+    let mut plan = MaskUpdatePlan::new();
+    plan.set_full_rebuild_ratio(1.0);
 
     // Atlases and ambient zones (P26): profile and mask atlas bytes, the zone list, the record
     // bytes, the vertex texels and the uniform blocks of the zone pass.
@@ -217,7 +208,6 @@ fn steady_state_light2d_paths_allocate_nothing() {
         height: 64,
     };
 
-    let mut row_list = LightList::default();
     let mut row_cache = RowCache::default();
     let mut sun_cache = SunCache::default();
     let mut sun_bands_out = SunBands::default();
@@ -233,7 +223,7 @@ fn steady_state_light2d_paths_allocate_nothing() {
         projection.origin = At::new(Vec2::new(i as f32, 0.5 * i as f32));
         let input = MaskPlanInput::new(&shadow_obstacles, &projection, 128, 64, 1.0);
         let _ = plan.decide(&input);
-        let _ = (plan.mask_rects().area(), plan.seed_rects().area());
+        let _ = plan.mask_rects().area();
         plan.commit();
 
         // Obstacles: move, re-describe in place (same sizes), consume the dirty sets, save.
@@ -296,31 +286,17 @@ fn steady_state_light2d_paths_allocate_nothing() {
             &modes,
             &mut list,
         );
-        // The light rows: the lights that suit them, their rows (the mask changed in the
-        // plan's rectangles) and the blocks of the row programs.
-        let row_modes = LightModes {
-            rows: true,
-            ..modes
-        };
-        collect_lights(
-            &scene,
-            &LightSettings::default(),
-            &Projection::IDENTITY,
-            f64::from(i) / 60.0,
-            128,
-            64,
-            &row_modes,
-            &mut row_list,
-        );
-        assert!(!row_list.rows.is_empty());
+        // The light rows: their rows (the mask changed in the plan's rectangles) and the blocks
+        // of the row programs.
+        assert!(!list.rows.is_empty());
         let row_mask = RowMask {
             size: [row_domain.width, row_domain.height],
             snapped: [i as i32 / 8, 0],
             change: MaskChange::Rects(plan.row_rects()),
         };
         row_cache.begin();
-        assert!(row_list.rows.iter().any(|l| l.is_area() && l.shadowed));
-        for light in &row_list.rows {
+        assert!(list.rows.iter().any(|l| l.is_area() && l.shadowed));
+        for light in &list.rows {
             // A line light's support points, each a lamp of its own.
             for k in 0..light.rows() {
                 let support = light.support(k);
@@ -339,12 +315,12 @@ fn steady_state_light2d_paths_allocate_nothing() {
         row_cache.commit();
         // The suns' maps: their blocks and their slots, built when the mask changed.
         sun_cache.begin();
-        assert!(!row_list.directional.is_empty());
-        let directional = row_list
+        assert!(!list.directional.is_empty());
+        let directional = list
             .directional
             .iter()
-            .zip(&row_list.directional_casters)
-            .zip(&row_list.directional_rise);
+            .zip(&list.directional_casters)
+            .zip(&list.directional_rise);
         for (k, ((g, &casters), &rise)) in directional.enumerate() {
             let _ = sun_plain(g);
             let params = SunParams::new(g, rise, row_mask.size, row_mask.snapped, 0.05, 3.0)
@@ -383,10 +359,6 @@ fn steady_state_light2d_paths_allocate_nothing() {
             &mut medium_list,
         );
         collect_medium_suns(&scene, f64::from(i) / 60.0, &modes, &mut medium_suns);
-        // The light pass: split, buffer bytes, programs and uniform blocks of the frame.
-        let draws = LightDraws::new(&list, i.is_multiple_of(3), true);
-        draws.write_lights(&list, &mut light_bytes);
-        draws.write_masks(&list, &mut mask_bytes);
         // Atlases and the zone pass.
         fill_profile_atlas(&profiles, profile_rows, &mut profile_atlas);
         fill_mask_atlas(&masks, mask_rows, &mut mask_atlas);
@@ -406,22 +378,12 @@ fn steady_state_light2d_paths_allocate_nothing() {
             pad: 0,
         };
         let _ = (written, frag.to_bytes(), pass.to_bytes());
-        let program_modes = ProgramModes {
-            detail: DetailMode::Exact,
-            normal_mode: true,
-            ..ProgramModes::default()
-        };
+        // The light pass's uniform blocks.
         let domain = ShadowDomain::default();
         let settings = LightSettings::default();
         let _ = (
-            draws.draws(),
-            program_for(LightPass::Shadowed, true, &program_modes),
-            LightPassParams::new(&Projection::IDENTITY, 128, 64, &domain, draws.mask_base)
-                .to_bytes(),
             LightSurfacePassParams::new(&Projection::IDENTITY, 128, 64, 4.0, 0).to_bytes(),
             SurfaceParams::new(&Projection::IDENTITY, 128, 64, &settings, &domain, true).to_bytes(),
-            SurfaceShadowParams::new(&domain, true, 3.0, 0.01).to_bytes(),
-            DirectionalParams::new(128, 64, &domain, false, 3.0, 0.01).to_bytes(),
         );
         // Snapshot round trips of the animation and mask stores.
         anim_snap.clear();

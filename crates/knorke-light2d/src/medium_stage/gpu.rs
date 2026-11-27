@@ -1,5 +1,6 @@
 // Origin: chiaro @ 9bc5b9b, src/rendering/MediumStage.hpp and MediumStage.cpp (Prepare,
-// PrepareShafts, PrepareSuns, Record, RecordShafts, RecordSunHeights), src/gpu/PipelineCache.cpp
+// PrepareShafts, PrepareSuns, Record; the shaft rows and sun heights come from the light rows,
+// ADR 0019), src/gpu/PipelineCache.cpp
 // (the medium programs' blending and second target, kMediumGuideFormat).
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any
 // express or implied warranty; the origin must not be misrepresented; altered source versions
@@ -19,19 +20,19 @@ use knorke_math::Vec3;
 use knorke_types::{Diagnostic, DiagnosticCode};
 
 use super::{
-    MediumLightPassParams, MediumMaskLightPassParams, POLAR_ANGLES, PolarQueryParams,
-    PolarRowParams, ShaftRow, SunBlock, SunHeightParams, SunParams, SunShadows, finish_suns,
-    mask_rows, medium_runs, medium_top, plan_shafts, plan_suns, polar_row,
+    MediumLightPassParams, MediumMaskLightPassParams, POLAR_ANGLES, PolarQueryParams, ShaftRow,
+    SunBlock, SunParams, SunShadows, finish_suns, mask_rows, medium_runs, medium_top, plan_shafts,
+    plan_suns, polar_row,
 };
 use crate::LightStore;
 use crate::atlas::LightAtlases;
+use crate::binding_layout::{LightSampler, LightStorage, LightUniform};
 use crate::composite::CompositeMedium;
 use crate::gpu_light::{GpuLight, GpuMask};
-use crate::light_culling::{Casters, LightModes};
-use crate::light_program::{LightSampler, LightStorage, LightUniform};
+use crate::light_culling::LightModes;
 use crate::lighting::{Resources, ShadowMaps, bind_named, height_tolerance};
 use crate::medium_culling::{
-    MediumLightList, MediumSun, Shafts, collect_medium_lights, collect_medium_suns,
+    MediumLightList, MediumSun, collect_medium_lights, collect_medium_suns,
 };
 use crate::medium_map::{
     MediumMapParams, MediumMapView, MediumParams, MediumProgram, medium_layout_of, medium_params,
@@ -50,9 +51,10 @@ pub const MEDIUM_STAGE_NOT_PREPARED: DiagnosticCode =
 pub const SCATTER_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
 /// Format of the guides the pre-filter writes per scatter texel.
 pub const MEDIUM_GUIDE_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
-/// Format of the polar atlas: (distance, top) of two obstacles per angle.
+/// Format of the polar atlas: (distance, top) of two obstacles per angle (`lightrow_polar.frag`
+/// writes it from the rows).
 pub const POLAR_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R16G16B16A16_FLOAT;
-/// Format of the sun shadow height atlas.
+/// Format of the sun shadow height atlas (`lightrow_sun_height.frag` writes it from the maps).
 pub const SUN_HEIGHT_FORMAT: SDL_GPUTextureFormat = SDL_GPU_TEXTUREFORMAT_R16_FLOAT;
 
 const fn desc(program: MediumProgram) -> ProgramDesc {
@@ -73,10 +75,10 @@ const fn desc(program: MediumProgram) -> ProgramDesc {
 }
 
 /// The stage's programs in [`MediumProgram::ALL`] order.
-pub const MEDIUM_PROGRAMS: [ProgramDesc; 8] = {
-    let mut out = [desc(MediumProgram::Base); 8];
+pub const MEDIUM_PROGRAMS: [ProgramDesc; 6] = {
+    let mut out = [desc(MediumProgram::Base); 6];
     let mut i = 0;
-    while i < 8 {
+    while i < 6 {
         out[i] = desc(MediumProgram::ALL[i]);
         i += 1;
     }
@@ -91,16 +93,6 @@ const fn index(program: MediumProgram) -> usize {
         MediumProgram::LightMask => 3,
         MediumProgram::Directional => 4,
         MediumProgram::Filter => 5,
-        MediumProgram::Polar => 6,
-        MediumProgram::SunHeight => 7,
-    }
-}
-
-const fn format_of(program: MediumProgram) -> SDL_GPUTextureFormat {
-    match program {
-        MediumProgram::Polar => POLAR_FORMAT,
-        MediumProgram::SunHeight => SUN_HEIGHT_FORMAT,
-        _ => SCATTER_FORMAT,
     }
 }
 
@@ -132,9 +124,9 @@ pub struct MediumStageFrame<'a> {
     pub pure_ambient: Option<TextureRef<'a>>,
     /// The flat directional sum of the zones.
     pub zone_directional: Vec3,
-    /// With light rows: the light pass's rows and sun maps (prepared, and recorded before this
-    /// stage), which the shaft rows and sun heights are read from instead of the distance field.
-    pub rows: Option<&'a RowLights<'a>>,
+    /// The light pass's rows and sun maps (prepared, and recorded before this stage), which the
+    /// shaft rows and sun heights are read from.
+    pub rows: &'a RowLights<'a>,
 }
 
 /// The lights of a frame's medium stage, read by [`MediumStage::prepare`] only.
@@ -197,8 +189,6 @@ pub struct MediumStage<'d> {
     base_zones: bool,
     /// `Some` after a prepare of a frame that runs the stage.
     prepared: Option<Prepared>,
-    /// The prepared frame reads its shaft rows and sun heights from the light rows.
-    from_rows: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -228,7 +218,7 @@ fn viewport(x: f32, y: f32, w: f32, h: f32) -> SDL_GPUViewport {
 }
 
 impl<'d> MediumStage<'d> {
-    /// A stage without targets; resolves its eight programs in `shaders`.
+    /// A stage without targets; resolves its six programs in `shaders`.
     ///
     /// # Errors
     /// The pack misses a shader of the stage.
@@ -265,7 +255,6 @@ impl<'d> MediumStage<'d> {
             sizes: [0.0; 4],
             base_zones: false,
             prepared: None,
-            from_rows: false,
         })
     }
 
@@ -285,7 +274,7 @@ impl<'d> MediumStage<'d> {
 
     fn pipeline(&self, program: MediumProgram) -> Result<PipelineRef<'_>, Diagnostic> {
         self.pipelines
-            .pipeline(index(program), format_of(program))
+            .pipeline(index(program), SCATTER_FORMAT)
             .ok_or_else(|| missing("a medium pipeline"))
     }
 
@@ -313,7 +302,6 @@ impl<'d> MediumStage<'d> {
         atlases: &mut LightAtlases<'d>,
     ) -> Result<u32, Diagnostic> {
         self.prepared = None;
-        self.from_rows = frame.is_some_and(|f| f.rows.is_some());
         let Some(f) = frame.filter(|f| medium_runs(f.settings, f.layer.is_some())) else {
             self.release();
             return Ok(0);
@@ -347,7 +335,7 @@ impl<'d> MediumStage<'d> {
         };
         for program in [base, MediumProgram::Filter] {
             self.pipelines
-                .get(shaders, index(program), format_of(program))?;
+                .get(shaders, index(program), SCATTER_FORMAT)?;
         }
 
         let top = medium_top(
@@ -377,7 +365,7 @@ impl<'d> MediumStage<'d> {
             ] {
                 if any {
                     self.pipelines
-                        .get(shaders, index(program), format_of(program))?;
+                        .get(shaders, index(program), SCATTER_FORMAT)?;
                 }
             }
             if light_count > mask_base {
@@ -389,7 +377,7 @@ impl<'d> MediumStage<'d> {
             self.lights
                 .reserve(u64::from(light_count) * GpuLight::SIZE as u64)?;
             if let Some(s) = f.shadows {
-                created += self.prepare_shafts(shaders, f, s)?;
+                created += self.prepare_shafts(f, s)?;
             }
             // A version check makes this a no-op when the light pass prepared it.
             if let Some(profiles) = lights.profiles {
@@ -423,23 +411,17 @@ impl<'d> MediumStage<'d> {
         Ok(created)
     }
 
-    /// Chiaro `PrepareShafts`: light shafts need the distance field; a filtered light (E53)
-    /// traces the field of its caster class, which exists only while a ground-visible light
-    /// uses that filter.
+    /// Chiaro `PrepareShafts`: a light has shafts while the light pass built it a row (one of
+    /// its caster class, E53).
     fn prepare_shafts(
         &mut self,
-        shaders: &mut ShaderLibrary<'d>,
         f: &MediumStageFrame<'_>,
         s: &ShadowMaps<'_>,
     ) -> Result<u32, Diagnostic> {
         if !f.settings.haze.shafts {
             return Ok(0);
         }
-        let has_field = |c: Casters| c.filter_index().is_none_or(|i| s.casters[i].is_some());
-        let traced = |sh: &Shafts| match f.rows {
-            Some(rows) => rows.row_of(sh.key).is_some(),
-            None => has_field(sh.casters),
-        };
+        let traced = |key: u64| f.rows.row_of(key).is_some();
         plan_shafts(&self.shafts, traced, &mut self.rows);
         for r in 0..self.rows.len() {
             let light = self.rows[r].light as usize;
@@ -451,13 +433,6 @@ impl<'d> MediumStage<'d> {
         // Rows grow, never shrink: a frame with fewer shaft lights keeps the atlas.
         let height = self.polar.height().max(self.rows.len() as u32);
         let created = u32::from(self.polar.ensure(POLAR_ANGLES, height, POLAR_FORMAT)?);
-        if f.rows.is_none() {
-            self.pipelines.get(
-                shaders,
-                index(MediumProgram::Polar),
-                format_of(MediumProgram::Polar),
-            )?;
-        }
         let [x, y] = mask_rows(f.projection, &s.domain, s.remainder);
         self.query = PolarQueryParams {
             mask_x: [x[0], x[1], x[2], 0.0],
@@ -474,7 +449,8 @@ impl<'d> MediumStage<'d> {
 
     /// Chiaro `PrepareSuns`: every directional light with haze scatters in one fullscreen draw;
     /// one with shadows in height mode (E24) gets a block of sun shadow heights when the frame
-    /// has heights, shafts are on and (E53) its caster class has a field and heights.
+    /// has heights, shafts are on, (E53) its caster class has heights and the light pass gave
+    /// it a map (or it stands straight overhead). Returns the textures created.
     fn prepare_suns(
         &mut self,
         shaders: &mut ShaderLibrary<'d>,
@@ -485,11 +461,8 @@ impl<'d> MediumStage<'d> {
         if self.suns.is_empty() {
             return Ok(0);
         }
-        self.pipelines.get(
-            shaders,
-            index(MediumProgram::Directional),
-            format_of(MediumProgram::Directional),
-        )?;
+        self.pipelines
+            .get(shaders, index(MediumProgram::Directional), SCATTER_FORMAT)?;
         let shadows = f.shadows.map(|s| SunShadows {
             domain: s.domain,
             scene_max_top: s.scene_max_top,
@@ -505,13 +478,12 @@ impl<'d> MediumStage<'d> {
                     .and_then(|s| s.casters[i])
                     .is_some_and(|m| m.height.is_some())
             });
-            // With rows: from its map, or straight overhead from the heights.
+            // From its map, or straight overhead from the heights.
             let overhead = sun.to_light.x == 0.0 && sun.to_light.y == 0.0;
-            class && f.rows.is_none_or(|r| overhead || r.has_sun_map(sun.key))
+            class && (overhead || f.rows.has_sun_map(sun.key))
         };
         self.block = plan_suns(
             &self.suns,
-            f.projection,
             f.settings,
             shadows.as_ref(),
             shafts,
@@ -529,13 +501,6 @@ impl<'d> MediumStage<'d> {
             .height()
             .max(self.block.1 * self.blocks.len() as u32);
         let created = u32::from(self.sun_heights.ensure(width, height, SUN_HEIGHT_FORMAT)?);
-        if f.rows.is_none() {
-            self.pipelines.get(
-                shaders,
-                index(MediumProgram::SunHeight),
-                format_of(MediumProgram::SunHeight),
-            )?;
-        }
         finish_suns(
             &mut self.sun_params,
             mask_rows(f.projection, &s.domain, s.remainder),
@@ -549,12 +514,6 @@ impl<'d> MediumStage<'d> {
     /// The prepared frame runs the stage.
     pub fn is_active(&self) -> bool {
         self.prepared.is_some()
-    }
-
-    /// The prepared frame reads the occlusion field: it builds shaft rows or sun shadow heights
-    /// without light rows.
-    pub fn reads_field(&self) -> bool {
-        self.is_active() && !self.from_rows && !(self.rows.is_empty() && self.blocks.is_empty())
     }
 
     /// The composite's input of the prepared frame; `None` if the stage does not run.
@@ -638,8 +597,8 @@ impl<'d> MediumStage<'d> {
         let nearest = samplers.sampler(Filter::Nearest);
         let linear = samplers.sampler(Filter::Linear);
         // Shaft rows and sun blocks exist only with shadows.
-        if let (Some(s), false) = (frame.shadows, self.rows.is_empty()) {
-            out.draws += self.record_shafts(cmd, samplers, frame, s)?;
+        if frame.shadows.is_some() && !self.rows.is_empty() {
+            out.draws += self.record_shafts(cmd, samplers, frame.rows)?;
         }
         if let (Some(s), false) = (frame.shadows, self.blocks.is_empty()) {
             out.draws += self.record_sun_heights(cmd, samplers, s, frame.rows)?;
@@ -825,82 +784,38 @@ impl<'d> MediumStage<'d> {
         Ok(out)
     }
 
-    /// One pass, one draw per row: the row's viewport, the field of its caster class, its
-    /// light in the uniforms. Rows past this frame's count keep stale content; no light reads
-    /// them.
+    /// One pass, one draw per row: the row's viewport, the light's row of the light pass
+    /// converted to the polar atlas (`RowLights::record_polar`). Rows past this frame's count
+    /// keep stale content; no light reads them.
     fn record_shafts(
         &self,
         cmd: &mut CommandBuffer<'_>,
         samplers: &Samplers<'_>,
-        frame: &MediumStageFrame<'_>,
-        s: &ShadowMaps<'_>,
+        rows: &RowLights<'_>,
     ) -> Result<u32, Diagnostic> {
         let polar = self
             .polar
             .texture_ref()
             .ok_or_else(|| missing("the polar atlas"))?;
         let mut pass = cmd.render_pass(&[ColorTarget::new(polar, Load::DontCare)])?;
-        if let Some(rows) = frame.rows {
-            for (r, row) in self.rows.iter().enumerate() {
-                let light = self.light(row.light as usize);
-                let length = polar_row(&self.query, light, false)[3];
-                pass.set_viewport(&viewport(0.0, r as f32, POLAR_ANGLES as f32, 1.0));
-                let height = light.position_radius[2];
-                rows.record_polar(&mut pass, samplers, row.shafts.key, height, length)?;
-            }
-            return Ok(self.rows.len() as u32);
-        }
-        let program = MediumProgram::Polar;
-        let pipeline = self.pipeline(program)?;
-        let layout = medium_layout_of(program);
-        let (nearest, linear) = (
-            samplers.sampler(Filter::Nearest),
-            samplers.sampler(Filter::Linear),
-        );
-        let mut params = PolarRowParams {
-            mask_x: self.query.mask_x,
-            mask_y: self.query.mask_y,
-            light: [0.0; 4],
-            domain: [
-                s.domain.width as f32,
-                s.domain.height as f32,
-                if s.height_mode { 1.0 } else { 0.0 },
-                POLAR_ANGLES as f32,
-            ],
-        };
-        let mut res = Resources::new(SamplerBinding::new(frame.scene, nearest));
         for (r, row) in self.rows.iter().enumerate() {
-            let maps = s.maps(row.shafts.casters)?;
-            res.set(LightSampler::OcclusionMask, Some(maps.mask), nearest);
-            res.set(LightSampler::DistanceField, Some(maps.field), linear);
-            // Read only in height mode.
-            res.set(
-                LightSampler::OcclusionHeight,
-                Some(maps.height.unwrap_or(maps.field)),
-                nearest,
-            );
-            params.light = polar_row(
-                &self.query,
-                self.light(row.light as usize),
-                row.shafts.inside,
-            );
-            let bytes = params.to_bytes();
+            let light = self.light(row.light as usize);
+            let length = polar_row(&self.query, light)[3];
             pass.set_viewport(&viewport(0.0, r as f32, POLAR_ANGLES as f32, 1.0));
-            let extra = Some((LightUniform::PolarRow, &bytes[..]));
-            bind_named(&mut pass, pipeline, &program, &layout, &res, None, extra)?;
-            pass.draw_fullscreen()?;
+            let height = light.position_radius[2];
+            rows.record_polar(&mut pass, samplers, row.key, height, length)?;
         }
         Ok(self.rows.len() as u32)
     }
 
-    /// One pass, one draw per block: the block's viewport, the field of its caster class, its
-    /// march in the uniforms.
+    /// One pass, one draw per block: the block's viewport, the sun's map of the light pass
+    /// converted to shadow heights (`RowLights::record_sun_height`).
     fn record_sun_heights(
         &self,
         cmd: &mut CommandBuffer<'_>,
         samplers: &Samplers<'_>,
         s: &ShadowMaps<'_>,
-        rows: Option<&RowLights<'_>>,
+        rows: &RowLights<'_>,
     ) -> Result<u32, Diagnostic> {
         let target = self
             .sun_heights
@@ -908,45 +823,10 @@ impl<'d> MediumStage<'d> {
             .ok_or_else(|| missing("the sun height atlas"))?;
         let mut pass = cmd.render_pass(&[ColorTarget::new(target, Load::DontCare)])?;
         let (bw, bh) = self.block;
-        if let Some(rows) = rows {
-            for (b, block) in self.blocks.iter().enumerate() {
-                pass.set_viewport(&viewport(0.0, (b as u32 * bh) as f32, bw as f32, bh as f32));
-                let key = self.suns[block.sun as usize].key;
-                rows.record_sun_height(&mut pass, samplers, s, key, block.casters)?;
-            }
-            return Ok(self.blocks.len() as u32);
-        }
-        let program = MediumProgram::SunHeight;
-        let pipeline = self.pipeline(program)?;
-        let layout = medium_layout_of(program);
-        let (nearest, linear) = (
-            samplers.sampler(Filter::Nearest),
-            samplers.sampler(Filter::Linear),
-        );
-        let mut params = SunHeightParams {
-            march: [0.0; 4],
-            domain: [
-                s.domain.width as f32,
-                s.domain.height as f32,
-                s.scene_max_top,
-                0.0,
-            ],
-        };
-        let mut res = Resources::new(SamplerBinding::new(s.mask, nearest));
         for (b, block) in self.blocks.iter().enumerate() {
             pass.set_viewport(&viewport(0.0, (b as u32 * bh) as f32, bw as f32, bh as f32));
-            let maps = s.maps(block.casters)?;
-            let height = maps
-                .height
-                .ok_or_else(|| missing("the occlusion heights"))?;
-            res.set(LightSampler::OcclusionMask, Some(maps.mask), nearest);
-            res.set(LightSampler::DistanceField, Some(maps.field), linear);
-            res.set(LightSampler::OcclusionHeight, Some(height), nearest);
-            params.march = block.march;
-            let bytes = params.to_bytes();
-            let extra = Some((LightUniform::SunHeight, &bytes[..]));
-            bind_named(&mut pass, pipeline, &program, &layout, &res, None, extra)?;
-            pass.draw_fullscreen()?;
+            let key = self.suns[block.sun as usize].key;
+            rows.record_sun_height(&mut pass, samplers, s, key, block.casters)?;
         }
         Ok(self.blocks.len() as u32)
     }

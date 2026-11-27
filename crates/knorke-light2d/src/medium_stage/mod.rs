@@ -52,8 +52,6 @@ use knorke_math::{det, uniform_block};
 pub const POLAR_ANGLES: u32 = 512;
 /// The sun height atlas never grows taller: further directional lights scatter unshaded.
 pub const MAX_SUN_ATLAS_HEIGHT: u32 = 8192;
-/// A sun at or below the horizon still rises this much per unit (as `MediumTransmitToward`).
-const MIN_SUN_Z: f32 = 0.05;
 
 /// The stage runs this frame (Chiaro `MediumRuns`): haze or a medium layer. The light pass asks
 /// too: with zones it then keeps the pure ambient for the base pass (the dual path).
@@ -164,82 +162,51 @@ uniform_block! {
     }
 }
 
-uniform_block! {
-    /// `cbuffer PolarRowParams` (`medium_polar.frag`): one row of the polar atlas.
-    #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    pub struct PolarRowParams [64] {
-        /// xyz: mask texel x.
-        pub mask_x: [f32; 4],
-        /// xyz: mask texel y.
-        pub mask_y: [f32; 4],
-        /// xyz light position in world units, w march length in mask texels (negative: the
-        /// light sits inside an obstacle, E147).
-        pub light: [f32; 4],
-        /// xy mask size in texels, z 1 = height texture, w angles per row.
-        pub domain: [f32; 4],
-    }
-}
-
-uniform_block! {
-    /// `cbuffer SunHeightParams` (`medium_sun_height.frag`): one block of the sun height atlas.
-    #[derive(Clone, Copy, Debug, Default, PartialEq)]
-    pub struct SunHeightParams [32] {
-        /// xy unit direction toward the light in mask texels, z rise per mask texel.
-        pub march: [f32; 4],
-        /// xy mask size in texels, z highest finite obstacle top.
-        pub domain: [f32; 4],
-    }
-}
-
 /// One row of the polar atlas: the light (index into the stage's light list, masked lights
-/// after the others) and the caster class whose field it traces.
+/// after the others) and its row key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShaftRow {
     /// Index of the light.
     pub light: u32,
-    /// Its shafts.
-    pub shafts: Shafts,
+    /// Its [`Shafts::key`].
+    pub key: u64,
 }
 
-/// The shaft rows of a frame (Chiaro `PrepareShafts`): one per light with [`Shafts`] that can
-/// be traced this frame (`traced`: its caster class has a field, or with light rows the light a
-/// row), in light order. The light of row `r`
-/// then carries `shadow[0] = r + 1` (`medium_light.vert`); the others scatter unshaded.
+/// The shaft rows of a frame (Chiaro `PrepareShafts`): one per light with [`Shafts`] whose row
+/// exists this frame (`has_row`, by its key), in light order. The light of row `r` then carries
+/// `shadow[0] = r + 1` (`medium_light.vert`); the others scatter unshaded.
 pub fn plan_shafts<'a>(
     shafts: impl IntoIterator<Item = &'a Option<Shafts>>,
-    traced: impl Fn(&Shafts) -> bool,
+    has_row: impl Fn(u64) -> bool,
     rows: &mut Vec<ShaftRow>,
 ) {
     rows.clear();
     for (i, s) in shafts.into_iter().enumerate() {
-        if let Some(s) = s.filter(|s| traced(s)) {
+        if let Some(s) = s.filter(|s| has_row(s.key)) {
             rows.push(ShaftRow {
                 light: i as u32,
-                shafts: s,
+                key: s.key,
             });
         }
     }
 }
 
-/// The march length of a polar row in mask texels: the light's radius times the Frobenius norm
-/// of world to mask (it bounds the stretch); negative marks a light inside an obstacle.
-pub fn polar_row(query: &PolarQueryParams, light: &GpuLight, inside: bool) -> [f32; 4] {
+/// The march length of a polar row in mask texels (w; xyz the light's position): the light's
+/// radius times the Frobenius norm of world to mask (it bounds the stretch).
+pub fn polar_row(query: &PolarQueryParams, light: &GpuLight) -> [f32; 4] {
     let (x, y) = (query.mask_x, query.mask_y);
     let stretch = (x[0] * x[0] + x[1] * x[1] + y[0] * y[0] + y[1] * y[1]).sqrt();
     let p = light.position_radius;
-    let reach = p[3] * stretch;
-    [p[0], p[1], p[2], if inside { -reach } else { reach }]
+    [p[0], p[1], p[2], p[3] * stretch]
 }
 
-/// One block of the sun height atlas: the sun (index into the sun list) and its march.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// One block of the sun height atlas: the sun (index into the sun list) and its caster class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SunBlock {
     /// Index of the sun.
     pub sun: u32,
     /// Its caster class.
     pub casters: Casters,
-    /// [`SunHeightParams::march`].
-    pub march: [f32; 4],
 }
 
 /// The shadow inputs of the sun blocks.
@@ -260,7 +227,6 @@ pub struct SunShadows {
 #[allow(clippy::too_many_arguments)]
 pub fn plan_suns(
     suns: &[MediumSun],
-    p: &Projection,
     settings: &LightSettings,
     shadows: Option<&SunShadows>,
     shafts: bool,
@@ -272,13 +238,8 @@ pub fn plan_suns(
     blocks.clear();
     let r = settings.resolutions();
     let divisor = sun_map_divisor(r.shadow, r.medium);
-    let (dw, dh, tps, top) = shadows.map_or((0, 0, [0.0; 2], 0.0), |s| {
-        (
-            s.domain.width,
-            s.domain.height,
-            s.domain.texels_per_scene,
-            s.scene_max_top,
-        )
+    let (dw, dh, top) = shadows.map_or((0, 0, 0.0), |s| {
+        (s.domain.width, s.domain.height, s.scene_max_top)
     });
     let block = (dw.div_ceil(divisor).max(1), dh.div_ceil(divisor).max(1));
     let max_blocks = if shafts {
@@ -293,22 +254,9 @@ pub fn plan_suns(
             ..Default::default()
         };
         if s.shadows && blocks.len() < max_blocks && has_heights(s) {
-            // Like the directional light (E24): moving 1 toward the light moves the ground
-            // point by (lx, ly) in the world and by m in the mask; the ray rises lz / |m| per
-            // mask texel.
-            let (lx, ly) = (s.to_light.x, s.to_light.y);
-            let lz = det::max(s.to_light.z, MIN_SUN_Z);
-            let mx = (lx * p.x_axis.x + ly * p.y_axis.x) * tps[0];
-            let my = (lx * p.x_axis.y + ly * p.y_axis.y) * tps[1];
-            let m = det::hypot(mx, my);
-            let mut march = [0.0; 4];
-            if m > 1e-6 {
-                march = [mx / m, my / m, lz / m, 0.0];
-            }
             blocks.push(SunBlock {
                 sun: i as u32,
                 casters: s.casters,
-                march,
             });
             sp.color[3] = blocks.len() as f32;
         }
@@ -351,8 +299,6 @@ mod tests {
         assert_eq!(size_of::<SunParams>(), 96);
         assert_eq!(size_of::<MediumLightPassParams>(), 48);
         assert_eq!(size_of::<MediumMaskLightPassParams>(), 64);
-        assert_eq!(size_of::<PolarRowParams>(), 64);
-        assert_eq!(size_of::<SunHeightParams>(), 32);
     }
 
     /// Chiaro `MediumTests.cpp`: "the sun height map spans about two scatter texels per texel".
@@ -383,25 +329,13 @@ mod tests {
         assert_eq!(medium_top(true, 0.01, 0.1, 10.0, 3.0), 25.0);
     }
 
-    fn shafts(casters: Casters) -> Option<Shafts> {
-        Some(Shafts {
-            casters,
-            inside: false,
-            key: 0,
-        })
-    }
-
     #[test]
-    fn shaft_rows_skip_lights_without_a_field() {
-        let entries = [
-            shafts(Casters::All),
-            None,
-            shafts(Casters::Dynamic),
-            shafts(Casters::Static),
-        ];
+    fn shaft_rows_skip_lights_without_a_row() {
+        let entries = [1, 0, 2, 3].map(|key| (key > 0).then_some(Shafts { key }));
         let mut rows = Vec::new();
-        plan_shafts(&entries, |s| s.casters != Casters::Dynamic, &mut rows);
+        plan_shafts(&entries, |key| key != 2, &mut rows);
         assert_eq!(rows.iter().map(|r| r.light).collect::<Vec<_>>(), [0, 3]);
+        assert_eq!(rows[1].key, 3);
     }
 
     #[test]
@@ -415,8 +349,7 @@ mod tests {
             position_radius: [1.0, 2.0, 3.0, 2.0],
             ..Default::default()
         };
-        assert_eq!(polar_row(&q, &light, false), [1.0, 2.0, 3.0, 10.0]);
-        assert_eq!(polar_row(&q, &light, true)[3], -10.0);
+        assert_eq!(polar_row(&q, &light), [1.0, 2.0, 3.0, 10.0]);
     }
 
     fn sun(z: f32, shadows: bool, casters: Casters) -> MediumSun {
@@ -452,7 +385,6 @@ mod tests {
         let (mut params, mut blocks) = (Vec::new(), Vec::new());
         let block = plan_suns(
             &suns,
-            &p,
             &settings,
             Some(&s),
             true,
@@ -468,9 +400,7 @@ mod tests {
             [1.0, 0.0, 2.0, 0.0]
         );
         assert_eq!(params[0].to_light, [0.6, 0.0, 0.8, 8.0]);
-        // Identity projection at 0.5: m = 0.3, a unit step in x; the low sun rises 0.05.
-        assert_eq!(blocks[0].march, [1.0, 0.0, 0.8 / 0.3, 0.0]);
-        assert_eq!(blocks[1].march[2], 0.05 / 0.3);
+        assert_eq!(blocks[1].casters, Casters::Static);
         finish_suns(
             &mut params,
             mask_rows(&p, &domain, [0.0; 2]),
@@ -483,7 +413,6 @@ mod tests {
         // Without shafts no blocks, the top stays; without shadows it is 0.
         plan_suns(
             &suns,
-            &p,
             &settings,
             Some(&s),
             false,
@@ -495,7 +424,6 @@ mod tests {
         assert_eq!(params[0].to_light[3], 8.0);
         plan_suns(
             &suns,
-            &p,
             &settings,
             None,
             false,
@@ -513,7 +441,6 @@ mod tests {
 
     #[test]
     fn sun_blocks_stop_at_the_atlas_height() {
-        let p = Projection::default();
         let settings = LightSettings::default();
         // A domain 3000 texels tall at divisor 4: blocks of 750, at most 10 in 8192.
         let domain = OcclusionDomain::new(2000, 2000, 1.0);
@@ -525,7 +452,6 @@ mod tests {
         let (mut params, mut blocks) = (Vec::new(), Vec::new());
         let block = plan_suns(
             &suns,
-            &p,
             &settings,
             Some(&s),
             true,

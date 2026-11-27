@@ -8,7 +8,7 @@ Plan §5.1 verlangt vor dem vollständigen Port einen Nachweis: Kann ein nativer
 
 ## Befund (gemessen 2026-11-24, AMD Radeon RX 6700 XT, Treiber 32.0.21045.16010, Windows 11, Vulkan)
 
-- **Bildgleichheit:** bitgleich. `minimal_normal_map` (Punktlicht + Normal Map, 64×64) und `gate_sprite_shadow` (weiches Punktlicht, Okklusionsmaske, Jump-Flooding-Distanzfeld, SDF-Schatten; 192×128, 12 Passes wie in C++): Max-Abweichung 0, 0 Pixel über Toleranz.
+- **Bildgleichheit:** bitgleich. `minimal_normal_map` (Punktlicht + Normal Map, 64×64) und `gate_sprite_shadow` (weiches Punktlicht, Okklusionsmaske, Jump-Flooding-Distanzfeld, SDF-Schatten; 192×128, 12 Passes wie in C++): Max-Abweichung 0, 0 Pixel über Toleranz. (Nachtrag 2026-11-27: mit ADR 0019 nimmt der Schatten den Weg der Lichtzeilen, das Distanzfeld ist gelöscht; `gate_sprite_shadow` hat ein neues Referenzbild unter `tests/golden/rows/`, Mittel 0,40, 1,75 % Pixel über 8 gegen Chiaro.)
 - Abweichung vom Auftrag: Statt `wet_street`/`iso_night_hard` eine eigene C++-Referenz `tests/golden/chiaro/gate/gate_ref.c` über die Chiaro-C-API. Die beiden Demo-Szenen brauchen Hindernis-Store, Tile-Gitter und Höhen-/Oberflächenpuffer (P13, P14, P22) – mehrere kLOC, kein Spike. Der Schattenkern ist trotzdem abgedeckt.
 - **Zeit:** gleich innerhalb des Rauschens (Wand-Uhr pro Frame inkl. Submit+Warten, 3 × 3000 Frames: Rust 189–212 µs Median vs. C++ 187–208 µs; Schattenszene 405–427 µs vs. 412–510 µs). Reine GPU-Passzeiten nicht messbar: SDL-GPU hat keine Timestamp-Queries.
 - **Aufwand:** Spike ~630 LOC, 8 `unsafe`-Blöcke + 2 `unsafe fn`; inkrementeller Build von `knorke-light2d` 0,55 s → 0,93 s mit `gpu`.

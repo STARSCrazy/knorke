@@ -4,7 +4,7 @@
 //! The tests play the host (ADR 0002); the dumpers are `tests/golden/chiaro/{light,atlas}/*.cpp`.
 
 use knorke_gpu::test_support::{
-    golden_bytes, half_to_f32, queue_download, read_download, sampled_rgba8, with_chiaro_pack,
+    half_to_f32, queue_download, read_download, sampled_rgba8, with_chiaro_pack,
 };
 use knorke_gpu::{
     CommandBuffer, DownloadBuffer, Filter, Gpu, PipelineCache, Samplers, ShaderLibrary, Texture,
@@ -17,8 +17,6 @@ use knorke_light2d::animation::AnimationStore;
 use knorke_light2d::atlas::LightAtlases;
 use knorke_light2d::light::{Height, LightDesc, LightType, MaskMode, ProfileId};
 use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
-use knorke_light2d::light_pipelines::LightPipelines;
-use knorke_light2d::light_program::{LIGHT_PROGRAMS, LightBase, LightProgram};
 use knorke_light2d::lighting::{
     DetailMode, LightingFrame, LightingRecord, LightingResult, LightingStage, ShadowMaps,
 };
@@ -29,6 +27,7 @@ use knorke_light2d::occluder_raster::{
     thin_circle_radius,
 };
 use knorke_light2d::occlusion::{MaskPrograms, OcclusionMask};
+use knorke_light2d::pass_plan::any_shadow_caster;
 use knorke_light2d::profile::{ProfilePreset, ProfileShape, build_shape_profile};
 use knorke_light2d::settings::{LightSettings, Quality, Resolutions};
 use knorke_light2d::shadow::{MaskPlanInput, MaskUpdate};
@@ -173,8 +172,6 @@ impl Scene {
     pub(crate) fn golden(name: &'static str, ambient: Vec3, light_resolution: f32) -> Self {
         let mut s = Self::new(name, 0.0, light_resolution);
         s.settings.ambient = ambient;
-        // Chiaro's light: the scene is compared with Chiaro's pictures.
-        s.settings.light_rows = false;
         s.size = (W, H);
         s
     }
@@ -284,7 +281,6 @@ pub(crate) struct Out {
     pub(crate) second: Vec<u8>,
     /// The pure ambient target, if the zone pass wrote one.
     pub(crate) ambient: Vec<u8>,
-    pub(crate) programs: Vec<LightProgram>,
     pub(crate) profile_atlas: Option<AtlasDump>,
     pub(crate) mask_atlas: Option<AtlasDump>,
     /// GPU objects alive after the frame.
@@ -308,7 +304,6 @@ pub(crate) struct Host<'d> {
     pub(crate) gpu: Gpu<'d>,
     pub(crate) shaders: ShaderLibrary<'d>,
     pub(crate) pipelines: PipelineCache<'d>,
-    pub(crate) light_pipelines: LightPipelines<'d>,
     pub(crate) samplers: Samplers<'d>,
     pub(crate) geometry: OccluderGeometry<'d>,
     pub(crate) tiles: TileOccluders<'d>,
@@ -319,25 +314,14 @@ pub(crate) struct Host<'d> {
     pub(crate) zone_list: AmbientZoneList,
 }
 
-/// Chiaro `AnyShadowCaster` (OcclusionStage.cpp).
-pub(crate) fn any_shadow_caster(l: &LightList) -> bool {
-    !(l.shadowed.is_empty()
-        && l.shadowed_area.is_empty()
-        && l.masked_shadowed.is_empty()
-        && l.directional_shadows == 0
-        && l.caster_classes == 0)
-}
-
 impl<'d> Host<'d> {
     pub(crate) fn new(gpu: Gpu<'d>, pack: &[u8]) -> Self {
         let shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
         let pipelines = PipelineCache::new(&shaders, &programs()).unwrap();
-        let light_pipelines = LightPipelines::new(&shaders).unwrap();
         Self {
             gpu,
             shaders,
             pipelines,
-            light_pipelines,
             samplers: Samplers::new(gpu).unwrap(),
             geometry: OccluderGeometry::new(gpu, OccluderPrograms::default()),
             tiles: TileOccluders::new(gpu, OccluderPrograms::default()),
@@ -403,7 +387,8 @@ impl<'d> Host<'d> {
         );
         let active = s.obstacles.iter().any(|(_, o)| o.is_active());
         let shadows = any_shadow_caster(&self.list) && active;
-        let height_mode = s.obstacles.any_finite_height() || normal_mode;
+        // As the pass plan: rows are built from the height texture, so shadows always have one.
+        let height_mode = true;
         let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
         let input = MaskPlanInput::new(&s.obstacles, &s.projection, w, h, shadow_scale);
         if shadows {
@@ -453,7 +438,6 @@ impl<'d> Host<'d> {
             domain: input.domain,
             remainder: input.anchor.remainder,
             mask: self.occlusion.mask().unwrap(),
-            field: self.occlusion.field().unwrap(),
             height: self.occlusion.height(),
             height_mode,
             any_partial: s.obstacles.any_partial(),
@@ -496,24 +480,13 @@ impl<'d> Host<'d> {
         };
         let mut result = self
             .lighting
-            .prepare_with_zones(
-                &mut self.shaders,
-                &mut self.light_pipelines,
-                &frame,
-                Some(zones),
-            )
+            .prepare_with_zones(&mut self.shaders, &frame, Some(zones))
             .unwrap();
         result.allocations += std::mem::take(&mut atlas_created);
         let record = self
             .lighting
-            .record(&mut cmd, &self.light_pipelines, &self.samplers, &frame)
+            .record(&mut cmd, &self.samplers, &frame)
             .unwrap();
-        let mut programs: Vec<LightProgram> = LIGHT_PROGRAMS
-            .iter()
-            .map(|i| i.program())
-            .filter(|&p| self.light_pipelines.contains(p))
-            .collect();
-        programs.sort();
         let light_tex = self.lighting.light_buffer();
         let light_size = light_tex.map_or((0, 0), |t| (t.width(), t.height()));
         let light = light_tex.map(|t| queue_download(self.gpu, &mut cmd, t));
@@ -542,7 +515,6 @@ impl<'d> Host<'d> {
             light_size,
             second: second.map_or_else(Vec::new, read_download),
             ambient: ambient.map_or_else(Vec::new, read_download),
-            programs,
             profile_atlas: read_atlas(profile_atlas),
             mask_atlas: read_atlas(mask_atlas),
             live: self.gpu.counter().live(),
@@ -556,30 +528,4 @@ pub(crate) type Fresh<'a, 'd> = &'a mut dyn FnMut() -> Host<'d>;
 
 pub(crate) fn with_host(body: impl for<'d> FnOnce(Fresh<'_, 'd>)) {
     with_chiaro_pack(|gpu, pack| body(&mut || Host::new(gpu, pack)));
-}
-
-/// The programs a scene used according to `programs.txt` (`base:features`).
-pub(crate) fn golden_programs(dir: &str, name: &str) -> Vec<LightProgram> {
-    let text = String::from_utf8(golden_bytes(dir, "programs.txt")).unwrap();
-    let line = text
-        .lines()
-        .find(|l| l.split(' ').next() == Some(name))
-        .unwrap();
-    let mut v: Vec<LightProgram> = line
-        .split(' ')
-        .skip(1)
-        .map(|p| {
-            let (b, f) = p.split_once(':').unwrap();
-            let base = LightBase::ALL[b.parse::<usize>().unwrap()];
-            LIGHT_PROGRAMS
-                .iter()
-                .map(|i| i.program())
-                .find(|q| {
-                    q.base == base && u32::from(q.features.bits()) == f.parse::<u32>().unwrap()
-                })
-                .unwrap()
-        })
-        .collect();
-    v.sort();
-    v
 }

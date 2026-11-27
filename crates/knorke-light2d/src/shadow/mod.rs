@@ -1,5 +1,5 @@
-//! Shadow cache plan (P16): which parts of the occlusion mask and its distance field a frame must
-//! redraw. GPU-free; the GPU mask, field and cache that consume the plan are P23.
+//! Shadow cache plan (P16): which parts of the occlusion mask a frame must redraw. GPU-free; the
+//! GPU mask and cache that consume the plan are P23.
 //!
 //! | Module | Content | Chiaro source |
 //! |---|---|---|
@@ -20,13 +20,13 @@
 //! - with a sprite mask, its previous scene rectangle and the current one grown by
 //!   [`SPRITE_PAN_ALLOWANCE`].
 //!
-//! Field rectangles are these, plus the static and unchanged dynamic obstacles that a pan pushed
-//! out of the mask, grown by `field_grow`; seed rectangles are the field rectangles grown by
-//! `seed_grow` and merged again. Full rebuild: no comparable recorded frame, a changed
-//! [`MaskLayout`] (it contains [`ObstacleStore::static_version`](crate::ObstacleStore::static_version),
-//! so every static change rebuilds), a pan of more than half the mask, more than
-//! [`DirtyRectList::MAX_DIRTY_RECTS`] changed rectangles, or field rectangles above
-//! `full_rebuild_ratio` of the mask.
+//! Row rectangles (what the rows and sun maps see change) are these without the exposed strips,
+//! plus the obstacles in the strips a pan exposed or pushed out. Full rebuild: no comparable
+//! recorded frame, a changed [`MaskLayout`] (it contains
+//! [`ObstacleStore::static_version`](crate::ObstacleStore::static_version), so every static
+//! change rebuilds), a pan of more than half the mask, more than
+//! [`DirtyRectList::MAX_DIRTY_RECTS`] changed rectangles, or changed rectangles above
+//! [`FULL_REBUILD_RATIO`] of the mask.
 //!
 //! # Redesign against the C++ version
 //!
@@ -44,6 +44,9 @@
 //! - The plan is a cache of what the GPU textures hold, not simulation state: it has no
 //!   snapshot. After a restore or new textures call [`MaskUpdatePlan::invalidate`] (or set
 //!   [`MaskPlanInput::force_full`]).
+//! - No field or seed rectangles: the rows read the mask, not a distance field (plan 17.13 L7),
+//!   so the changed rectangles are not grown by a field bound, and the full rebuild ratio
+//!   compares them, not Chiaro's field rectangles.
 //! - Projection math is done in `f64` with explicit comparisons and rotations through
 //!   [`knorke_math::det`], so the rectangles are identical on every platform.
 
@@ -58,5 +61,5 @@ pub use dirty_rects::{
 pub use domain::{MaskAnchor, OcclusionDomain};
 pub use plan::{
     CellLog, DynamicFootprint, FULL_REBUILD_RATIO, MaskLayout, MaskPlanInput, MaskUpdate,
-    MaskUpdateLimits, MaskUpdatePlan, NoCellLog, SPRITE_PAN_ALLOWANCE, sprite_grid_rect,
+    MaskUpdatePlan, NoCellLog, SPRITE_PAN_ALLOWANCE, sprite_grid_rect,
 };

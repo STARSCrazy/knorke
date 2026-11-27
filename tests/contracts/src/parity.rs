@@ -13,7 +13,7 @@
 //! Inputs are tightly packed RGBA8 buffers; alpha is ignored. Rectangles can be excluded
 //! (HUD text of the demos, which shows a frame time).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// An axis-aligned pixel rectangle `x, y, w, h` excluded from a comparison.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,6 +143,39 @@ pub fn load_png_rgba8(path: &Path, width: u32, height: u32) -> Vec<u8> {
             .collect(),
         png::ColorType::Rgba => px.to_vec(),
         other => panic!("{}: unexpected colour type {other:?}", path.display()),
+    }
+}
+
+/// What a picture of the Chiaro golden `chiaro` (`.../tests/golden/chiaro/<rest>`) must match:
+/// the re-blessed `.../tests/golden/rows/<rest>` where the light rows (ADR 0019) draw the scene
+/// differently, else the Chiaro golden ([`load_png_rgba8`]).
+///
+/// Side effect: with `KNORKE_BLESS=1` it writes `actual` as the re-blessed golden (removes it when
+/// `actual` equals Chiaro's) and returns `actual`.
+pub fn expected_png_rgba8(chiaro: &Path, actual: &[u8], width: u32, height: u32) -> Vec<u8> {
+    let text = chiaro.to_string_lossy().replace('\\', "/");
+    let rows = PathBuf::from(text.replacen("golden/chiaro/", "golden/rows/", 1));
+    assert_ne!(rows, PathBuf::from(&text), "not a Chiaro golden: {text}");
+    if std::env::var_os("KNORKE_BLESS").is_some() {
+        let rgb = |px: &[u8]| -> Vec<u8> {
+            px.as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|p| [p[0], p[1], p[2]])
+                .collect()
+        };
+        if rgb(&load_png_rgba8(chiaro, width, height)) == rgb(actual) {
+            let _ = std::fs::remove_file(&rows);
+        } else {
+            std::fs::create_dir_all(rows.parent().unwrap()).unwrap();
+            save_png_rgba8(&rows, actual, width, height);
+        }
+        return actual.to_vec();
+    }
+    if rows.exists() {
+        load_png_rgba8(&rows, width, height)
+    } else {
+        load_png_rgba8(chiaro, width, height)
     }
 }
 

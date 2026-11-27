@@ -58,8 +58,7 @@ uniform_block! {
 }
 
 uniform_block! {
-    /// A directional light drawn per pixel (E24); the first three rows of `DirectionalParams` in
-    /// `directional.frag`.
+    /// A directional light (E24); the first three rows of `SunParams` in `lightrow_sun.hlsli`.
     #[derive(Clone, Copy, Debug, Default, PartialEq)]
     pub struct GpuDirectional[48] {
         /// xy unit direction toward the light in mask texels, z height per texel, w penumbra per

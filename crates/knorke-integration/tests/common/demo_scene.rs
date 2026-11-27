@@ -691,7 +691,7 @@ impl Demo<'_> {
     fn render(&self, gpu: Gpu<'_>, pack: &[u8], settings: &dyn Fn(&Scene) -> Light2dSettings) {
         let mut pixels = Vec::new();
         let parity = self.with_frames(gpu, pack, settings, &mut |f| pixels = f.frame().0);
-        let golden = scene_common::fixture(".", self.golden, OUT);
+        let golden = scene_common::expected(".", self.golden, &pixels, OUT);
         let strict = compare_rgba8(
             &pixels,
             &golden,
@@ -748,18 +748,25 @@ impl DemoFrames<'_, '_> {
 
     /// Median wall-clock microseconds per frame of `runs` runs of `frames` frames each, the
     /// target not read back; it waits for the GPU every 100 frames (`gpu_lightrow_probe.rs`).
-    /// The host times frames: wall clock is a host tool.
+    /// `scroll` moves the camera one mask texel (2 scene pixels) a frame along x, 30 texels to
+    /// and fro, and puts it back afterwards. The host times frames: wall clock is a host tool.
     #[allow(clippy::disallowed_methods)]
-    pub(crate) fn time_frames(&mut self, frames: usize, runs: usize) -> f64 {
+    pub(crate) fn time_frames(&mut self, frames: usize, runs: usize, scroll: bool) -> f64 {
+        let origin = self.projection.origin;
         let mut times: Vec<f64> = (0..runs)
             .map(|_| {
                 let start = std::time::Instant::now();
                 for k in 1..=frames {
+                    if scroll {
+                        let step = (k % 60).min(60 - k % 60) as f32;
+                        self.projection.origin = At::new(origin.raw() + Vec2::new(2.0 * step, 0.0));
+                    }
                     self.submit(k.is_multiple_of(100) || k == frames);
                 }
                 start.elapsed().as_secs_f64() * 1e6 / frames as f64
             })
             .collect();
+        self.projection.origin = origin;
         times.sort_by(f64::total_cmp);
         times[runs / 2]
     }

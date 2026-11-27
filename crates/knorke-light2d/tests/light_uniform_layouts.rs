@@ -1,6 +1,5 @@
-//! The uniform blocks and storage records of the light pass (P25) and of the light rows (ADR
-//! 0019) against the compiled shaders: for every shader of the 92 light programs and of the row
-//! programs in the SPIR-V pack, the member offsets the
+//! The uniform blocks and storage records of the light rows (ADR 0019) against the compiled
+//! shaders: for every shader of the row programs in the SPIR-V pack, the member offsets the
 //! compiler gave each `cbuffer` and `StructuredBuffer` element (`OpMemberDecorate Offset`)
 //! must equal the offsets of the Rust structs, member by member. A slot or field written at the
 //! wrong place gives silent image errors; this catches it without a GPU.
@@ -14,11 +13,8 @@ use core::mem::{offset_of, size_of};
 use knorke_gpu::kpak::ShaderPack;
 use knorke_gpu::test_support::chiaro_pack;
 use knorke_gpu::test_support::spirv::decode;
-use knorke_light2d::gpu_light::{GpuDirectional, GpuLight, GpuMask};
-use knorke_light2d::light_program::LIGHT_PROGRAMS;
-use knorke_light2d::lighting::{
-    DirectionalParams, LightPassParams, LightSurfacePassParams, SurfaceParams, SurfaceShadowParams,
-};
+use knorke_light2d::gpu_light::{GpuLight, GpuMask};
+use knorke_light2d::lighting::{LightSurfacePassParams, SurfaceParams};
 use knorke_light2d::pattern_occluders::{GpuPattern, GpuPatternObstacle, PatternParams};
 use knorke_light2d::rows::{RowBuildParams, RowEdgeParams, RowLamp, RowLookupParams};
 
@@ -46,32 +42,6 @@ const GPU_MASK: Layout = &[
     f!(GpuMask, "p", p, 4),
     f!(GpuMask, "q", q, 4),
 ];
-const LIGHT_PASS: Layout = &[
-    f!(LightPassParams, "OriginXAxis", origin_x_axis, 4),
-    f!(LightPassParams, "YAxisSceneSize", y_axis_scene_size, 4),
-    f!(LightPassParams, "MaskTexelScale", mask_texel_scale, 2),
-    f!(LightPassParams, "MaskMargin", mask_margin, 1),
-    f!(LightPassParams, "InstanceOffset", instance_offset, 1),
-    f!(LightPassParams, "MaskRemainder", mask_remainder, 2),
-    f!(LightPassParams, "MaskBase", mask_base, 1),
-];
-const SURFACE_PASS: Layout = &[
-    f!(LightSurfacePassParams, "OriginXAxis", origin_x_axis, 4),
-    f!(
-        LightSurfacePassParams,
-        "YAxisSceneSize",
-        y_axis_scene_size,
-        4
-    ),
-    f!(
-        LightSurfacePassParams,
-        "ZAxisMaxHeight",
-        z_axis_max_height,
-        4
-    ),
-    f!(LightSurfacePassParams, "InstanceOffset", instance_offset, 1),
-    f!(LightSurfacePassParams, "MaskBase", mask_base, 1),
-];
 const SURFACE: Layout = &[
     f!(SurfaceParams, "InvAxes", inv_axes, 4),
     f!(SurfaceParams, "OriginZAxis", origin_z_axis, 4),
@@ -83,36 +53,6 @@ const SURFACE: Layout = &[
     f!(SurfaceParams, "ScreenRight", screen_right, 4),
     f!(SurfaceParams, "ZAxisSpec", z_axis_spec, 4),
     f!(SurfaceParams, "Wet", wet, 4),
-];
-const SHADOW: Layout = &[
-    f!(SurfaceShadowParams, "DomainSize", domain_size, 4),
-    f!(SurfaceShadowParams, "HeightParams", height_params, 4),
-];
-const DIRECTIONAL: Layout = &[
-    (
-        "DirSlope",
-        offset_of!(DirectionalParams, light) + offset_of!(GpuDirectional, dir_slope),
-        16,
-    ),
-    (
-        "Color",
-        offset_of!(DirectionalParams, light) + offset_of!(GpuDirectional, color),
-        16,
-    ),
-    (
-        "World",
-        offset_of!(DirectionalParams, light) + offset_of!(GpuDirectional, world),
-        16,
-    ),
-    f!(DirectionalParams, "SceneSizeMargin", scene_size_margin, 4),
-    f!(
-        DirectionalParams,
-        "TexelScaleRemainder",
-        texel_scale_remainder,
-        4
-    ),
-    f!(DirectionalParams, "DomainSize", domain_size, 4),
-    f!(DirectionalParams, "HeightParams", height_params, 4),
 ];
 
 const ROW_LAMP: Layout = &[
@@ -192,7 +132,7 @@ const ROW_SHADERS: [&str; 12] = [
 ];
 
 /// SPIR-V struct name, Rust layout, Rust size in bytes.
-const STRUCTS: [(&str, Layout, usize); 15] = [
+const STRUCTS: [(&str, Layout, usize); 11] = [
     ("RowLamp", ROW_LAMP, size_of::<RowLamp>()),
     (
         "type.LightRowPass",
@@ -208,27 +148,7 @@ const STRUCTS: [(&str, Layout, usize); 15] = [
     ),
     ("GpuLight", GPU_LIGHT, size_of::<GpuLight>()),
     ("GpuMask", GPU_MASK, size_of::<GpuMask>()),
-    (
-        "type.LightPassParams",
-        LIGHT_PASS,
-        size_of::<LightPassParams>(),
-    ),
-    (
-        "type.LightSurfacePassParams",
-        SURFACE_PASS,
-        size_of::<LightSurfacePassParams>(),
-    ),
     ("type.SurfaceParams", SURFACE, size_of::<SurfaceParams>()),
-    (
-        "type.ShadowParams",
-        SHADOW,
-        size_of::<SurfaceShadowParams>(),
-    ),
-    (
-        "type.DirectionalParams",
-        DIRECTIONAL,
-        size_of::<DirectionalParams>(),
-    ),
     (
         "type.PatternParams",
         PATTERN_PARAMS,
@@ -243,16 +163,10 @@ const STRUCTS: [(&str, Layout, usize); 15] = [
 ];
 
 #[test]
-fn rust_layouts_match_every_light_shader() {
+fn rust_layouts_match_every_row_shader() {
     let Some(bytes) = chiaro_pack() else { return };
     let pack = ShaderPack::parse(&bytes).unwrap();
-    let mut shaders: Vec<&str> = LIGHT_PROGRAMS
-        .iter()
-        .flat_map(|p| [p.vertex, p.fragment])
-        .chain(ROW_SHADERS)
-        .collect();
-    shaders.sort_unstable();
-    shaders.dedup();
+    let shaders = ROW_SHADERS;
     let mut seen = [0usize; STRUCTS.len()];
     let mut members_seen: Vec<(&str, &str)> = Vec::new();
     for shader in &shaders {

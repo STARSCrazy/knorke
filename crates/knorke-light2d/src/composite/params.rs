@@ -17,7 +17,7 @@
 use knorke_math::Vec3;
 use knorke_math::uniform_block;
 
-use crate::light_program::{LayoutBuilder, LightLayout, LightSampler as S, LightUniform as U};
+use crate::binding_layout::{LayoutBuilder, LightLayout, LightSampler as S, LightUniform as U};
 use crate::material::{screen_right, view_direction};
 use crate::projection::Projection;
 use crate::settings::{GlowColor, LightSettings};
@@ -280,7 +280,7 @@ mod tests {
     use core::mem::{offset_of, size_of};
 
     use super::*;
-    use crate::light_program::LightSampler;
+    use crate::binding_layout::LightSampler;
 
     #[test]
     fn size_matches_chiaro_static_assert() {

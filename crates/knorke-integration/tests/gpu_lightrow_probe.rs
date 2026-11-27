@@ -1,5 +1,5 @@
 //! Measuring tool for the light rows (ADR 0019, plan 17.13): picture and frame time of the row
-//! lights of `knorke-light2d` against the Chiaro light and against a reference picture, on
+//! lights of `knorke-light2d` against a reference picture, on
 //! `iso_night_hard` cut down to what rows can draw: the point and spot lights that cast shadows
 //! (13), no profile, mask, pattern, animation, flicker, medium, sun, zones, material. Hard
 //! shadows, and soft ones with the lamp sizes of `plain.txt`; each as it is ("normal") and with
@@ -13,23 +13,22 @@
 //! alone, which are all of them (a caster filter, "filter"); every lamp reaching 1200 mask
 //! texels, its row of 2048 angles ("weit").
 //!
-//! - Today: [`Light2dRenderer`] with `light_rows` off.
-//! - New: the same with `light_rows` on.
+//! - New: [`Light2dRenderer`].
 //! - True: the same light with an exact march per pixel (`lightrow_truth.frag`), the only part
 //!   this file draws itself; a lamp with a size and a line or rect light's emitter are
 //!   `KNORKE_PROBE_POINTS` squared points (default 8).
 //!
-//! The test always checks that the rows are closer to the reference than today's light.
-//! `KNORKE_PROBE_OUT=<dir>` writes `<scene>_heute.png`, `<scene>_neu.png`, `<scene>_wahr.png`,
-//! the differences times 8 and `messung.txt`; `KNORKE_PROBE_FRAMES=<n>` times n frames per run
-//! (wall clock: prepare + record + submit, in batches of [`BATCH`] frames that wait once at their
-//! end, so the GPU stays busy), `KNORKE_PROBE_RUNS` runs per case (default 5), the cases in
-//! turn: today, rows with resting lamps, rows with every lamp moved every frame (all rows built),
-//! and a frame without lights (what no light stage can save). `KNORKE_PROBE_ONLY=<prefix>` runs
-//! only the lamp cases whose name begins so.
+//! The test checks the rows against the reference within [`BOUNDS`].
+//! `KNORKE_PROBE_OUT=<dir>` writes `<scene>_neu.png`, `<scene>_wahr.png`, the difference times 8
+//! and `messung.txt`; `KNORKE_PROBE_FRAMES=<n>` times n frames per run (wall clock: prepare +
+//! record + submit, in batches of [`BATCH`] frames that wait once at their end, so the GPU stays
+//! busy), `KNORKE_PROBE_RUNS` runs per case (default 5), the cases in turn: rows with resting
+//! lamps, rows with every lamp moved every frame (all rows built), a frame without lights (what
+//! no light stage can save) and the camera scrolling. `KNORKE_PROBE_ONLY=<prefix>` runs only the
+//! lamp cases whose name begins so.
 //!
-//! [`sun_map_against_chiaro_and_the_reference`] does the same for the moon of the demo with its
-//! shadow from a sun map (plan 17.13, L3).
+//! [`sun_map_against_the_reference`] does the same for the moon of the demo with its shadow from
+//! a sun map (plan 17.13, L3).
 #![cfg(feature = "gpu")]
 
 #[path = "common/gpu.rs"]
@@ -297,7 +296,6 @@ fn settings(shadow: f32) -> Light2dSettings {
                 ..QualitySettings::default()
             },
             surface_height_step: HEIGHT_STEP,
-            light_rows: false, // today's light; the rows are switched on where they are drawn
             ..LightSettings::default()
         },
         post: PostSettings::default(),
@@ -389,7 +387,6 @@ impl<'d> Truth<'d> {
             height_mode: true,
             normal_mode: true,
             max_height: top,
-            rows: true,
             ..LightModes::default()
         };
         let mut list = LightList::default();
@@ -583,9 +580,7 @@ impl<'d> Truth<'d> {
     }
 }
 
-/// Prepares, records and submits one frame of `renderer`. With light rows (plan 17.13 L7) no
-/// frame builds the distance field and no light takes a Chiaro shadow program: every probe frame
-/// counts both.
+/// Prepares, records and submits one frame of `renderer`.
 fn draw(
     gpu: Gpu<'_>,
     renderer: &mut Light2dRenderer<'_>,
@@ -603,10 +598,6 @@ fn draw(
         cmd.submit_and_wait().unwrap();
     } else {
         cmd.submit().unwrap();
-    }
-    if settings.light.light_rows {
-        let (field, chiaro) = (record.mask.field_texels, record.lighting.field_lights);
-        assert_eq!((field, chiaro), (0, 0), "field texels and Chiaro shadows");
     }
     record
 }
@@ -684,42 +675,19 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 
 /// Most the rows may differ from the reference per scene (mean of 255, percent of the pixels
 /// over 8): what was measured on 2026-11-26 (Vulkan, RX 6700 XT) plus a tenth. Measured:
-/// 0.348 / 0.66, 0.626 / 1.59, 0.631 / 2.31, 0.856 / 3.03; today's light 0.921 / 1.74,
-/// 1.808 / 4.22, 1.662 / 5.44, 1.699 / 5.24; "hart halb", the fences as 50 % walls: 0.250 / 0.88,
-/// today 0.724 / 2.56; "flächen" 0.002 / 0.01, today 0.020 / 0.11 (bound rounded up: a tenth of
-/// so little is below what a driver may change); "zaun", the fences with their patterns, hard
-/// 0.554 / 1.25, today 1.004 / 2.06, soft 1.395 / 5.62, today 2.228 / 8.55; "gitter", the fences
-/// as tile grids with patterns ([`fence_grid`], 2026-11-27), hard 0.817 / 1.59, today
-/// 1.658 / 3.75, soft 1.148 / 3.71, today 2.333 / 7.31. (Part of today's distance there is
-/// Chiaro's own: a lamp beside the tower stands in a widened strip of its hollow cells, whose
-/// crossing Chiaro reads while the rows and the reference skip the obstacle a lamp stands in.)
-/// "nebel", the walls in [`fog_layer`]'s fog (the medium world map; 2026-11-27): hard
-/// 0.284 / 0.51, today 0.751 / 1.43, soft 0.485 / 1.81, today 1.195 / 3.67. "hoch", the walls
-/// three times as tall (tops to 60, so the rows store heights in fiftieths), hard 0.364 / 0.71,
-/// today 0.983 / 1.83; "viele", every lamp 20 times (260 rows) as bright as four, hard
-/// 0.683 / 2.35, today 1.719 / 4.77; "mast", every lamp on a mast 0.8 thick up to 1 above it
-/// and marked `inside_obstacle` (E147), hard 0.360 / 0.72, today 1.629 / 2.49, soft
-/// 0.626 / 2.30, today 3.924 / 14.69; "filter", every lamp static-only (E53) and every obstacle
-/// static: the rows as "normal", today as there too (2026-11-27). "weit", each lamp reaching
-/// about 1200 mask texels (2048 angles in half texels, `WIDE_REACH`; 2026-11-27): hard
-/// 0.257 / 1.29, today 0.874 / 4.07, soft 1.040 / 3.56, today 1.325 / 5.45.
-///
-/// Timed 2026-11-27 (240 frames, 5 runs, release, medians in us), today / rows resting / rows
-/// all built / today scrolling / rows scrolling (the camera one mask texel a frame, 30 to and
-/// fro; no row rebuilt, as no obstacle comes within a lamp's reach through the pan's strips,
-/// and no distance field while every shadow is a row's): "hart normal"
-/// 286 / 175 / 290 / 344 / 193, "hart last" 877 / 399 / 744 / 944 / 414, "weich normal"
-/// 306 / 216 / 403 / 365 / 230, "weich last" 941 / 562 / 1046 / 1018 / 623, "hart halb"
-/// 308 / 177 / 311 / 358 / 194, "flächen" 138 / 140 / 220 / 196 / 160, "linie pfosten"
-/// 110 / 110 / 169 / 175 / 131, "zaun hart" 416 / 181 / 320 / 471 / 202, "zaun weich"
-/// 456 / 219 / 433 / 501 / 235, "gitter hart" 870 / 216 / 388 / 785 / 233, "gitter weich"
-/// 896 / 254 / 492 / 884 / 266, "nebel hart" 427 / 320 / 443 / 481 / 334, "nebel weich"
-/// 442 / 366 / 555 / 498 / 374, "hoch hart" 239 / 174 / 297 / 301 / 194, "viele hart"
-/// 3832 / 1644 / 2703 / 3921 / 1634, "mast hart" 321 / 180 / 297 / 378 / 198, "mast weich"
-/// 335 / 221 / 411 / 391 / 235, "filter hart" 362 / 182 / 308 / 424 / 196, "filter weich"
-/// 386 / 221 / 419 / 432 / 236 (today: the class field). Before (1.9 of 13 rows rebuilt a
-/// frame, the field kept), rows scrolling: "hart normal" 356, "weich normal" 438, "nebel weich"
-/// 581.
+/// 0.348 / 0.66, 0.626 / 1.59, 0.631 / 2.31, 0.856 / 3.03; "hart halb", the fences as 50 %
+/// walls: 0.250 / 0.88; "flächen" 0.002 / 0.01 (bound rounded up: a tenth of so little is below
+/// what a driver may change); "zaun", the fences with their patterns, hard 0.554 / 1.25, soft
+/// 1.395 / 5.62; "gitter", the fences as tile grids with patterns ([`fence_grid`], 2026-11-27),
+/// hard 0.817 / 1.59, soft 1.148 / 3.71. "nebel", the walls in [`fog_layer`]'s fog (the medium
+/// world map; 2026-11-27): hard 0.284 / 0.51, soft 0.485 / 1.81. "hoch", the walls three times
+/// as tall (tops to 60, so the rows store heights in fiftieths), hard 0.364 / 0.71; "viele",
+/// every lamp 20 times (260 rows) as bright as four, hard 0.683 / 2.35; "mast", every lamp on a
+/// mast 0.8 thick up to 1 above it and marked `inside_obstacle` (E147), hard 0.360 / 0.72, soft
+/// 0.626 / 2.30; "filter", every lamp static-only (E53) and every obstacle static: as "normal"
+/// (2026-11-27). "weit", each lamp reaching about 1200 mask texels (2048 angles in half texels,
+/// `WIDE_REACH`; 2026-11-27): hard 0.257 / 1.29, soft 1.040 / 3.56. Chiaro's light was 1.5 to 6
+/// times as far from the reference in every case (plan 17.13, L7).
 const BOUNDS: [(&str, f64, f64); 21] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),
@@ -865,7 +833,7 @@ fn target(gpu: Gpu<'_>) -> Texture<'_> {
 }
 
 #[test]
-fn light_rows_against_chiaro_and_the_reference() {
+fn light_rows_against_the_reference() {
     let out: Option<PathBuf> = std::env::var("KNORKE_PROBE_OUT").ok().map(PathBuf::from);
     let frames: usize = env("KNORKE_PROBE_FRAMES", 0);
     let runs: usize = env("KNORKE_PROBE_RUNS", 5);
@@ -873,16 +841,14 @@ fn light_rows_against_chiaro_and_the_reference() {
         let text = String::from_utf8(golden_bytes("iso_night", "hard.txt")).unwrap();
         let plain = String::from_utf8(golden_bytes("iso_night", "plain.txt")).unwrap();
         let projection = Projection::iso(At::new(Vec2::new(18.0, 14.0)), 10.0, 1.0, W, H);
-        let today = settings(0.5);
-        let mut rows = today;
-        rows.light.light_rows = true;
+        let rows = settings(0.5);
         let mut report = format!("{frames} frames per run\n");
         let mut full = String::new();
 
         let (clear, foggy) = (demo_layers(gpu, false), demo_layers(gpu, true));
-        let targets = [target(gpu), target(gpu), target(gpu)];
+        let targets = [target(gpu), target(gpu)];
         // Frame k of the camera scrolling along x one mask texel a frame, 30 texels to and fro.
-        let domain = OcclusionDomain::new(W, H, today.light.resolutions().shadow);
+        let domain = OcclusionDomain::new(W, H, rows.light.resolutions().shadow);
         let texel = 1.0 / domain.texels_per_scene[0];
         let scrolled = |k: u32| {
             let mut p = projection;
@@ -1013,11 +979,11 @@ fn light_rows_against_chiaro_and_the_reference() {
             let patterns =
                 (!matches!(fence, Fences::Walls(_) | Fences::Tall(_))).then_some(&patterns);
             let new = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
-            let mut renderers = [new(), new(), new(), new()];
+            let mut renderers = [new(), new(), new()];
             let all = descs.len() as u32;
             let rows_all = all * supports;
 
-            let mut timed: [Vec<(f64, f64)>; 6] = Default::default();
+            let mut timed: [Vec<(f64, f64)>; 4] = Default::default();
             let mut scroll_rows = 0;
             let mut step = 0u32;
             for run in 0..=runs {
@@ -1026,11 +992,8 @@ fn light_rows_against_chiaro_and_the_reference() {
                 if n == 0 {
                     break;
                 }
-                let [r_today, r_rest, r_moved, r_none] = &mut renderers;
+                let [r_rest, r_moved, r_none] = &mut renderers;
                 let stores = stores_of(&lights, &obstacles, patterns);
-                let t = time(n, |wait| {
-                    draw(gpu, r_today, &frame(0), &stores, &today, wait);
-                });
                 let moved = time(n, |wait| {
                     step += 1;
                     let x = if step.is_multiple_of(2) { NUDGE } else { 0.0 };
@@ -1039,93 +1002,61 @@ fn light_rows_against_chiaro_and_the_reference() {
                         moving.set_position(id, at, d.height).unwrap();
                     }
                     let stores = stores_of(&moving, &obstacles, patterns);
-                    let record = draw(gpu, r_moved, &frame(2), &stores, &rows, wait);
+                    let record = draw(gpu, r_moved, &frame(1), &stores, &rows, wait);
                     assert_eq!(record.lighting.rows_built, rows_all);
                 });
                 let floor = time(n, |wait| {
                     let stores = stores_of(&none, &obstacles, patterns);
-                    draw(gpu, r_none, &frame(2), &stores, &rows, wait);
+                    draw(gpu, r_none, &frame(1), &stores, &rows, wait);
                 });
                 // The first frame builds the rows, from then on the lamps rest.
-                let first = draw(gpu, r_rest, &frame(1), &stores, &rows, true).lighting;
-                assert_eq!(first.row_lights, all, "every lamp is a row light");
+                let first = draw(gpu, r_rest, &frame(0), &stores, &rows, true).lighting;
+                assert_eq!(first.lights_drawn, all, "every lamp");
                 let medium = r_rest.plan().medium_map().view().is_some();
                 assert_eq!(medium, fog, "{name}: the medium world map");
                 assert_eq!(first.rows_built, if run == 0 { rows_all } else { 0 });
                 let rest = time(n, |wait| {
-                    let record = draw(gpu, r_rest, &frame(1), &stores, &rows, wait);
+                    let record = draw(gpu, r_rest, &frame(0), &stores, &rows, wait);
                     assert_eq!(record.lighting.rows_built, 0);
                 });
                 if run > 0 {
                     let mut k = 0;
-                    let t_scroll = time(n, |wait| {
-                        k += 1;
-                        draw(
-                            gpu,
-                            r_today,
-                            &frame_at!(0, &scrolled(k)),
-                            &stores,
-                            &today,
-                            wait,
-                        );
-                    });
-                    let mut k = 0;
                     let scroll = time(n, |wait| {
                         k += 1;
                         let p = scrolled(k);
-                        let f = frame_at!(1, &p);
+                        let f = frame_at!(0, &p);
                         scroll_rows += draw(gpu, r_rest, &f, &stores, &rows, wait)
                             .lighting
                             .rows_built;
                     });
                     // Back where the next run begins, untimed.
-                    draw(gpu, r_today, &frame(0), &stores, &today, true);
-                    draw(gpu, r_rest, &frame(1), &stores, &rows, true);
-                    let all = [t, rest, moved, floor, t_scroll, scroll];
+                    draw(gpu, r_rest, &frame(0), &stores, &rows, true);
+                    let all = [rest, moved, floor, scroll];
                     for (list, value) in timed.iter_mut().zip(all) {
                         list.push(value);
                     }
                     eprintln!(
-                        "{name} run {run}: today {:.1} / {:.1}, rows resting {:.1} / {:.1}, rows all built {:.1} / {:.1}, no lights {:.1} / {:.1}, scrolling today {:.1} / {:.1}, rows {:.1} / {:.1} us (median / p95)",
-                        t.0,
-                        t.1,
-                        rest.0,
-                        rest.1,
-                        moved.0,
-                        moved.1,
-                        floor.0,
-                        floor.1,
-                        t_scroll.0,
-                        t_scroll.1,
-                        scroll.0,
-                        scroll.1
+                        "{name} run {run}: rows resting {:.1} / {:.1}, rows all built {:.1} / {:.1}, no lights {:.1} / {:.1}, scrolling {:.1} / {:.1} us (median / p95)",
+                        rest.0, rest.1, moved.0, moved.1, floor.0, floor.1, scroll.0, scroll.1
                     );
                 }
             }
-            (truth.frame(gpu, &frame(2), &lights, &obstacles, &today, &renderers[0])).unwrap();
-            let pictures = ["heute", "neu", "wahr"]
+            (truth.frame(gpu, &frame(1), &lights, &obstacles, &rows, &renderers[0])).unwrap();
+            let pictures = ["neu", "wahr"]
                 .into_iter()
                 .zip(targets.iter().map(|t| read_texture(gpu, t.texture_ref())))
                 .collect::<Vec<_>>();
-            let mut diffs = Vec::new();
-            let mut numbers = Vec::new();
-            for (i, j) in [(0, 2), (1, 2), (0, 1)] {
-                let ((first, a), (second, b)) = (&pictures[i], &pictures[j]);
-                let (mean, over, diff) = compare(a, b);
-                let _ = writeln!(
-                    report,
-                    "{name:12} {all} lamps, {first} against {second}: mean absolute difference {mean:.3} of 255, {over:.2} % of the pixels differ by more than 8"
-                );
-                diffs.push((format!("diff_{first}_{second}_x8"), diff));
-                numbers.push((mean, over));
-            }
+            let (mean, over, diff) = compare(&pictures[0].1, &pictures[1].1);
+            let _ = writeln!(
+                report,
+                "{name:12} {all} lamps, neu against wahr: mean absolute difference {mean:.3} of 255, {over:.2} % of the pixels differ by more than 8"
+            );
+            let diffs = [("diff_neu_wahr_x8".to_owned(), diff)];
             if frames > 0 {
                 let cases = [
-                    "today",
                     "rows, lamps rest",
                     "rows, all built",
                     "no lights",
-                    "today scrolling",
                     "rows scrolling",
                 ];
                 for (case, list) in cases.into_iter().zip(&timed) {
@@ -1146,7 +1077,7 @@ fn light_rows_against_chiaro_and_the_reference() {
                 }
             }
             let facade = (name == "zaun hart")
-                .then(|| region_mean(&pictures[1].1, &pictures[2].1, FACADE.0));
+                .then(|| region_mean(&pictures[0].1, &pictures[1].1, FACADE.0));
             if let Some(facade) = facade {
                 let _ = writeln!(
                     report,
@@ -1154,14 +1085,10 @@ fn light_rows_against_chiaro_and_the_reference() {
                 );
             }
             eprint!("{report}");
-            let (old, rows) = (numbers[0], numbers[1]);
             assert!(
-                rows.0 < old.0 && rows.1 < old.1,
-                "{name}: the rows are not closer to the reference than today's light"
-            );
-            assert!(
-                rows.0 <= bound.1 && rows.1 <= bound.2,
-                "{name}: rows against the reference {rows:?}, bound {bound:?}"
+                mean <= bound.1 && over <= bound.2,
+                "{name}: rows against the reference {:?}, bound {bound:?}",
+                (mean, over)
             );
             assert!(
                 facade.is_none_or(|f| f <= FACADE.1),
@@ -1193,31 +1120,16 @@ const SUN_FENCES: [(&str, Fences, bool); 5] = [
 
 /// The most the sun map may differ from the reference (mean of 255, percent of the pixels over
 /// 8), per fences ([`SUN_FENCES`]), moon (hard, soft) and camera: what was measured plus a
-/// tenth. Measured on 2026-11-26 (Vulkan, RX 6700 XT), map against today's light: "mauer" hard
-/// A 0.0413 / 0.176 (today 0.0763 / 0.321), B 0.0284 / 0.120 (today 0.0638 / 0.291); soft
-/// (bilinear, the ends widened) A 0.0692 / 0.211 (today 0.1473 / 0.703), B 0.0769 / 0.187
-/// (today 0.1491 / 0.664). "zaun" hard A 0.0417 / 0.171 (today 0.0824 / 0.332), B
-/// 0.0393 / 0.147 (today 0.0760 / 0.306); soft A 0.1107 / 0.424 (today 0.1893 / 0.889), B
-/// 0.1279 / 0.477 (today 0.1974 / 0.879). "halb" hard A 0.0380 / 0.146 (today
-/// 0.0678 / 0.270), B 0.0305 / 0.147 (today 0.0542 / 0.228); soft A 0.0708 / 0.165 (today
-/// 0.1441 / 0.570), B 0.0780 / 0.159 (today 0.1462 / 0.522).
-///
-/// Timed on A (240 frames, 5 runs, release; medians of today / map kept / map built every
-/// frame / scrolling one mask texel a frame today / map +x / map -x, us), 2026-11-26 with
-/// partly transparent runs: "mauer" hard 207 / 118 / 1273 / 278 / 204 / 195, soft
-/// 250 / 134 / 1503 / 311 / 213 / 209; "zaun" hard 289 / 125 / 1922 / 343 / 227 / 214, soft
-/// 324 / 162 / 2022 / 360 / 259 / 245; "halb" hard 217 / 125 / 1928 / 292 / 209 / 208, soft
-/// 240 / 149 / 2011 / 314 / 237 / 231. ("mauer" earlier that day, before partly transparent
-/// runs: hard 181 / 97 / 1103 / 243 / 173 / 166, soft 215 / 112 / 1273 / 264 / 184 / 175; the
-/// later runs were slower as a whole, today's light too.) "gitter" (the fences as tile grids
-/// with patterns, 2026-11-27): hard A 0.1147 / 0.567 (today 0.1726 / 0.638), B 0.1048 / 0.535
-/// (today 0.1682 / 0.626); soft A 0.1372 / 0.620 (today 0.2317 / 1.007), B 0.1463 / 0.619
-/// (today 0.2420 / 0.989); timed hard 362 / 110 / 1614 / 320 / 193 / 183, soft
-/// 394 / 160 / 1702 / 342 / 228 / 220. While "zaun" or "gitter" scrolls, the map is built whole in 5 of 2400
-/// frames: a fence leaves the mask and the other's record index moves. "nebel" (2026-11-27):
-/// hard A 0.0267 / 0.086 (today 0.0521 / 0.181), B 0.0191 / 0.069 (today 0.0405 / 0.147);
-/// soft A 0.0521 / 0.155 (today 0.1114 / 0.480), B 0.0582 / 0.139 (today 0.1139 / 0.462);
-/// timed hard 269 / 205 / 1191 / 333 / 274 / 273, soft 293 / 224 / 1360 / 349 / 286 / 290.
+/// tenth. Measured on 2026-11-26 (Vulkan, RX 6700 XT): "mauer" hard A 0.0413 / 0.176, B
+/// 0.0284 / 0.120; soft (bilinear, the ends widened) A 0.0692 / 0.211, B 0.0769 / 0.187. "zaun"
+/// hard A 0.0417 / 0.171, B 0.0393 / 0.147; soft A 0.1107 / 0.424, B 0.1279 / 0.477. "halb"
+/// hard A 0.0380 / 0.146, B 0.0305 / 0.147; soft A 0.0708 / 0.165, B 0.0780 / 0.159. "gitter"
+/// (the fences as tile grids with patterns, 2026-11-27): hard A 0.1147 / 0.567, B
+/// 0.1048 / 0.535; soft A 0.1372 / 0.620, B 0.1463 / 0.619. While "zaun" or "gitter" scrolls,
+/// the map is built whole in 5 of 2400 frames: a fence leaves the mask and the other's record
+/// index moves. "nebel" (2026-11-27): hard A 0.0267 / 0.086, B 0.0191 / 0.069; soft A
+/// 0.0521 / 0.155, B 0.0582 / 0.139. Chiaro's light was 1.2 to 2.2 times as far from the
+/// reference in every case (plan 17.13, L3).
 const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 5] = [
     [
         [(0.046, 0.194), (0.032, 0.132)],
@@ -1242,17 +1154,11 @@ const SUN_BOUNDS: [[[(f64, f64); 2]; 2]; 5] = [
 ];
 
 /// As [`SUN_BOUNDS`] for the hard moon from below the horizon ("unten"), per fences and camera.
-/// Measured on 2026-11-27 (Vulkan, RX 6700 XT), map against today's light: "mauer" A
-/// 0.0168 / 0.042 (today 0.0249 / 0.063), B 0.0087 / 0.022 (today 0.0590 / 0.135); "zaun" A
-/// 0.0198 / 0.048 (today 0.0341 / 0.083), B 0.0215 / 0.051 (today 0.0504 / 0.111); "halb" A
-/// 0.0209 / 0.071 (today 0.0272 / 0.076), B 0.0179 / 0.079 (today 0.0325 / 0.122); "gitter" A
-/// 0.0782 / 0.328 (today 0.1342 / 0.343), B 0.0762 / 0.335 (today 0.1417 / 0.361); "nebel" A
-/// 0.0082 / 0.026 (today 0.0199 / 0.056), B 0.0081 / 0.022 (today 0.0405 / 0.095).
-/// Timed (240 frames, 5 runs, release, medians in us), today / map kept / map built every frame
-/// / today scrolling / map scrolling +x: "mauer" 159 / 101 / 1808 / 238 / 124, "zaun"
-/// 201 / 113 / 2661 / 280 / 139, "halb" 163 / 106 / 2676 / 242 / 129, "gitter"
-/// 305 / 118 / 2674 / 283 / 164, "nebel" 241 / 188 / 1893 / 317 / 211 (a ray that does not rise
-/// walks the whole mask: a map built every frame costs more than from above).
+/// Measured on 2026-11-27 (Vulkan, RX 6700 XT): "mauer" A 0.0168 / 0.042, B 0.0087 / 0.022;
+/// "zaun" A 0.0198 / 0.048, B 0.0215 / 0.051; "halb" A 0.0209 / 0.071, B 0.0179 / 0.079;
+/// "gitter" A 0.0782 / 0.328, B 0.0762 / 0.335; "nebel" A 0.0082 / 0.026, B 0.0081 / 0.022 (a
+/// ray that does not rise walks the whole mask: a map built every frame costs more than from
+/// above).
 const SUN_LOW_BOUNDS: [[(f64, f64); 2]; 5] = [
     [(0.019, 0.047), (0.010, 0.025)],
     [(0.022, 0.053), (0.024, 0.057)],
@@ -1295,28 +1201,23 @@ const TURN: f32 = 0.002;
 const DISC: usize = 8;
 
 /// The moon of `iso_night_hard` alone (the demo's only directional light, a hard one; and with
-/// the size of `plain.txt`'s moon, soft), with the fences of [`SUN_FENCES`]: its shadow from the sun map
-/// (`light_rows` on) against today's light (Chiaro's march per pixel through the distance field)
-/// and against an exact march per pixel (`lightrow_sun_truth.frag`; soft: the mean over the
-/// directions of the moon's disc), on both [`SUN_CAMERAS`]. The map must be closer to the
-/// reference than today's light. `KNORKE_PROBE_OUT` writes
-/// `sonne_<fences>_<moon>_<camera>_{heute,neu,wahr}.png`, the differences times 8 and `sonne.txt`; with
-/// `KNORKE_PROBE_FRAMES` camera A times today, the rows with the map kept and with the map built
-/// every frame (the moon turning), and today and the map with the camera scrolling one mask
-/// texel a frame (the map updated in bands).
+/// the size of `plain.txt`'s moon, soft), with the fences of [`SUN_FENCES`]: its shadow from the
+/// sun map against an exact march per pixel (`lightrow_sun_truth.frag`; soft: the mean over the
+/// directions of the moon's disc), on both [`SUN_CAMERAS`]. `KNORKE_PROBE_OUT` writes
+/// `sonne_<fences>_<moon>_<camera>_{neu,wahr}.png`, the difference times 8 and `sonne.txt`; with
+/// `KNORKE_PROBE_FRAMES` camera A times the map kept and built every frame (the moon turning),
+/// and the camera scrolling one mask texel a frame (the map updated in bands).
 #[test]
-fn sun_map_against_chiaro_and_the_reference() {
+fn sun_map_against_the_reference() {
     let out: Option<PathBuf> = std::env::var("KNORKE_PROBE_OUT").ok().map(PathBuf::from);
     let frames: usize = env("KNORKE_PROBE_FRAMES", 0);
     let runs: usize = env("KNORKE_PROBE_RUNS", 5);
     with_chiaro_pack(|gpu, pack| {
         let text = String::from_utf8(golden_bytes("iso_night", "hard.txt")).unwrap();
         let plain = String::from_utf8(golden_bytes("iso_night", "plain.txt")).unwrap();
-        let today = settings(0.5);
-        let mut rows = today;
-        rows.light.light_rows = true;
+        let rows = settings(0.5);
         let (clear, foggy) = (demo_layers(gpu, false), demo_layers(gpu, true));
-        let targets = [target(gpu), target(gpu), target(gpu)];
+        let targets = [target(gpu), target(gpu)];
         let (moons, _, _) = parse(&text, false, Fences::Walls(1.0), "2");
         assert_eq!(moons.len(), 1, "the scene's moon");
         let hard = moons[0].clone();
@@ -1328,7 +1229,7 @@ fn sun_map_against_chiaro_and_the_reference() {
             ..hard.clone()
         };
         assert!(soft.source_radius > 0.0, "the moon's size");
-        let domain = OcclusionDomain::new(W, H, today.light.resolutions().shadow);
+        let domain = OcclusionDomain::new(W, H, rows.light.resolutions().shadow);
         let mut truth = Truth::new(gpu, pack).unwrap();
         let (mut report, mut results) = (String::new(), Vec::new());
         // The hard moon from below the horizon: its rays toward it fall.
@@ -1364,17 +1265,10 @@ fn sun_map_against_chiaro_and_the_reference() {
                 let projection = Projection::iso(At::new(Vec2::new(x, y)), 10.0, 1.0, W, H);
                 let frame =
                     |i: usize| layers.frame(targets[i].texture_ref(), &projection, LayerSet::NONE);
-                let new = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
-                let (mut r_today, mut r_rows) = (new(), new());
+                let mut r_rows = Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
                 let stores = stores_of(&lights, &obstacles, patterns);
-                let old = draw(gpu, &mut r_today, &frame(0), &stores, &today, true).lighting;
-                let now = draw(gpu, &mut r_rows, &frame(1), &stores, &rows, true).lighting;
-                assert_eq!(old.row_suns, 0, "today: Chiaro's moon");
-                assert_eq!(
-                    (now.row_suns, now.suns_built),
-                    (suns, suns),
-                    "every sun a map"
-                );
+                let now = draw(gpu, &mut r_rows, &frame(0), &stores, &rows, true).lighting;
+                assert_eq!((now.suns, now.suns_built), (suns, suns), "every sun a map");
                 let medium = r_rows.plan().medium_map().view().is_some();
                 assert_eq!(medium, fog, "{kind}: the medium world map");
                 let list = r_rows.plan().lights();
@@ -1392,27 +1286,22 @@ fn sun_map_against_chiaro_and_the_reference() {
                 .with_partial(obstacles.any_partial(), patterns.is_some());
                 let rays = disc(moon, &projection, &obstacles, &rows.light);
                 truth
-                    .sun(gpu, &frame(2), &params, &rays, &rows, &r_rows)
+                    .sun(gpu, &frame(1), &params, &rays, &rows, &r_rows)
                     .unwrap();
                 let name = format!("{}_{camera}", kind.replace(' ', "_"));
-                let pictures: Vec<(&str, Vec<u8>)> = ["heute", "neu", "wahr"]
+                let pictures: Vec<(&str, Vec<u8>)> = ["neu", "wahr"]
                     .into_iter()
                     .zip(targets.iter().map(|t| read_texture(gpu, t.texture_ref())))
                     .collect();
-                let mut numbers = Vec::new();
-                for (i, j) in [(0, 2), (1, 2), (0, 1)] {
-                    let ((first, a), (second, b)) = (&pictures[i], &pictures[j]);
-                    let (mean, over, diff) = compare(a, b);
-                    let _ = writeln!(
-                        report,
-                        "sonne {kind} {camera} {first} against {second}: mean absolute difference {mean:.4} of 255, {over:.3} % of the pixels differ by more than 8"
-                    );
-                    numbers.push((mean, over));
-                    if let Some(dir) = &out {
-                        std::fs::create_dir_all(dir).unwrap();
-                        let file = dir.join(format!("sonne_{name}_diff_{first}_{second}_x8.png"));
-                        save_png_rgba8(&file, &diff, OUT.0, OUT.1);
-                    }
+                let (mean, over, diff) = compare(&pictures[0].1, &pictures[1].1);
+                let _ = writeln!(
+                    report,
+                    "sonne {kind} {camera} neu against wahr: mean absolute difference {mean:.4} of 255, {over:.3} % of the pixels differ by more than 8"
+                );
+                if let Some(dir) = &out {
+                    std::fs::create_dir_all(dir).unwrap();
+                    let file = dir.join(format!("sonne_{name}_diff_neu_wahr_x8.png"));
+                    save_png_rgba8(&file, &diff, OUT.0, OUT.1);
                 }
                 if let Some(dir) = &out {
                     for (picture, px) in &pictures {
@@ -1424,17 +1313,15 @@ fn sun_map_against_chiaro_and_the_reference() {
                     let (timed, rebuilt) = time_sun(
                         gpu,
                         (moon, late, &obstacles, patterns),
-                        (&mut r_today, &mut r_rows),
-                        (&today, &rows),
+                        &mut r_rows,
+                        &rows,
                         (layers, &targets),
                         &projection,
                         (frames, runs),
                     );
                     let cases = [
-                        "today",
                         "map kept",
                         "map built every frame",
-                        "today scrolling",
                         "map scrolling +x",
                         "map scrolling -x",
                     ];
@@ -1447,7 +1334,7 @@ fn sun_map_against_chiaro_and_the_reference() {
                         "sonne {kind}: map built whole while scrolling in {rebuilt} frames (a pattern obstacle left the mask and another's record index moved)"
                     );
                 }
-                results.push((name, numbers[0], numbers[1], (mean_bound, over_bound)));
+                results.push((name, (mean, over), (mean_bound, over_bound)));
             }
         }
         if frames > 0 {
@@ -1470,32 +1357,26 @@ fn sun_map_against_chiaro_and_the_reference() {
                 let mut lights = LightStore::new();
                 lights.create(moon, &NoResources).unwrap();
                 let stores = stores_of(&lights, &obstacles, None);
-                let new = || Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
-                let (mut r_today, mut r_rows) = (new(), new());
-                let (mut old, mut now) = (Vec::new(), Vec::new());
+                let mut r_rows = Light2dRenderer::new(gpu, pack.to_vec()).unwrap();
+                let mut now = Vec::new();
                 for _ in 0..runs {
-                    old.push(time(frames, |wait| {
-                        draw(gpu, &mut r_today, &frame(0), &stores, &today, wait);
-                    }));
                     now.push(time(frames, |wait| {
-                        let r = draw(gpu, &mut r_rows, &frame(1), &stores, &rows, wait).lighting;
-                        assert_eq!((r.row_suns, r.suns_built), (1, 0), "{kind}: no map");
+                        let r = draw(gpu, &mut r_rows, &frame(0), &stores, &rows, wait).lighting;
+                        assert_eq!((r.suns, r.suns_built), (1, 0), "{kind}: no map");
                     }));
                 }
-                for (case, list) in [("today", &old), ("rows", &now)] {
-                    let _ = writeln!(report, "{}", summary(&format!("sonne {kind}"), case, list));
-                }
+                let _ = writeln!(
+                    report,
+                    "{}",
+                    summary(&format!("sonne {kind}"), "rows", &now)
+                );
             }
         }
         eprint!("{report}");
         if let Some(dir) = &out {
             std::fs::write(dir.join("sonne.txt"), &report).unwrap();
         }
-        for (name, old, new, bound) in results {
-            assert!(
-                new.0 < old.0 && new.1 < old.1,
-                "{name}: the sun map {new:?} is not closer to the reference than today's light {old:?}"
-            );
+        for (name, new, bound) in results {
             assert!(
                 new.0 <= bound.0 && new.1 <= bound.1,
                 "{name}: the sun map against the reference {new:?}, bound {bound:?}"
@@ -1555,18 +1436,18 @@ fn disc(
 }
 
 /// The timed cases of the sun case on camera `projection` (see
-/// [`sun_map_against_chiaro_and_the_reference`]), each `runs` runs of `frames` frames: today,
-/// map kept, map built every frame, today scrolling, map scrolling +x, map scrolling -x; and in
-/// how many scrolling frames the map was built whole instead of updated in part.
+/// [`sun_map_against_the_reference`]), each `runs` runs of `frames` frames: map kept, map built
+/// every frame, map scrolling +x, map scrolling -x; and in how many scrolling frames the map was
+/// built whole instead of updated in part.
 fn time_sun(
     gpu: Gpu<'_>,
     (moon, late, obstacles, patterns): (&LightDesc, bool, &ObstacleStore, Option<&PatternStore>),
-    (r_today, r_rows): (&mut Light2dRenderer<'_>, &mut Light2dRenderer<'_>),
-    (today, rows): (&Light2dSettings, &Light2dSettings),
-    (layers, targets): (&Layers<'_>, &[Texture<'_>; 3]),
+    r_rows: &mut Light2dRenderer<'_>,
+    rows: &Light2dSettings,
+    (layers, targets): (&Layers<'_>, &[Texture<'_>; 2]),
     projection: &Projection,
     (frames, runs): (usize, usize),
-) -> ([Vec<(f64, f64)>; 6], u32) {
+) -> ([Vec<(f64, f64)>; 4], u32) {
     // A frame of target i seen through p (a closure cannot return the frame borrowing p).
     macro_rules! frame {
         ($i:expr, $p:expr) => {
@@ -1580,10 +1461,10 @@ fn time_sun(
     let turning = sky(&mut moving, moon, late);
     let suns = if late { 3 } else { 1 };
     let mut step = 0u32;
-    let mut timed: [Vec<(f64, f64)>; 6] = Default::default();
+    let mut timed: [Vec<(f64, f64)>; 4] = Default::default();
     let mut rebuilt = 0;
     // The camera scrolling along x by one mask texel a frame, `sign` the way.
-    let domain = OcclusionDomain::new(W, H, today.light.resolutions().shadow);
+    let domain = OcclusionDomain::new(W, H, rows.light.resolutions().shadow);
     let texel = 1.0 / domain.texels_per_scene[0];
     let origin = projection.origin.raw();
     let scrolled = |k: usize, sign: f32| {
@@ -1592,12 +1473,9 @@ fn time_sun(
         p
     };
     for _ in 0..runs {
-        let t = time(frames, |wait| {
-            draw(gpu, r_today, &frame!(0, projection), &stores, today, wait);
-        });
         let rest = time(frames, |wait| {
-            let r = draw(gpu, r_rows, &frame!(1, projection), &stores, rows, wait);
-            assert_eq!((r.lighting.row_suns, r.lighting.suns_built), (suns, 0));
+            let r = draw(gpu, r_rows, &frame!(0, projection), &stores, rows, wait);
+            assert_eq!((r.lighting.suns, r.lighting.suns_built), (suns, 0));
         });
         let built = time(frames, |wait| {
             step += 1;
@@ -1610,42 +1488,29 @@ fn time_sun(
             };
             moving.update(turning, &desc, &NoResources).unwrap();
             let stores = stores_of(&moving, obstacles, patterns);
-            let r = draw(gpu, r_rows, &frame!(1, projection), &stores, rows, wait);
-            assert_eq!((r.lighting.row_suns, r.lighting.suns_built), (suns, 1));
+            let r = draw(gpu, r_rows, &frame!(0, projection), &stores, rows, wait);
+            assert_eq!((r.lighting.suns, r.lighting.suns_built), (suns, 1));
         });
         if !step.is_multiple_of(2) {
             // Back to the resting moon, untimed.
-            draw(gpu, r_rows, &frame!(1, projection), &stores, rows, true);
+            draw(gpu, r_rows, &frame!(0, projection), &stores, rows, true);
         }
-        let mut k = 0;
-        let today_scrolling = time(frames, |wait| {
-            k += 1;
-            draw(
-                gpu,
-                r_today,
-                &frame!(0, &scrolled(k, 1.0)),
-                &stores,
-                today,
-                wait,
-            );
-        });
-        draw(gpu, r_today, &frame!(0, projection), &stores, today, true);
         let mut scroll = |sign: f32| {
             let mut k = 0;
             let timed = time(frames, |wait| {
                 k += 1;
                 let p = scrolled(k, sign);
-                let f = frame!(1, &p);
+                let f = frame!(0, &p);
                 let r = draw(gpu, r_rows, &f, &stores, rows, wait).lighting;
-                assert_eq!((r.row_suns, r.suns_built + r.suns_updated), (suns, suns));
+                assert_eq!((r.suns, r.suns_built + r.suns_updated), (suns, suns));
                 rebuilt += r.suns_built;
             });
             // Back, untimed (a jump that far builds the map whole).
-            draw(gpu, r_rows, &frame!(1, projection), &stores, rows, true);
+            draw(gpu, r_rows, &frame!(0, projection), &stores, rows, true);
             timed
         };
         let (ahead, back) = (scroll(1.0), scroll(-1.0));
-        let all = [t, rest, built, today_scrolling, ahead, back];
+        let all = [rest, built, ahead, back];
         for (list, value) in timed.iter_mut().zip(all) {
             list.push(value);
         }

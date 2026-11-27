@@ -16,8 +16,8 @@ use knorke_gpu::sys::gpu::{
     SDL_GPUTextureFormat,
 };
 use knorke_gpu::test_support::{
-    golden_bytes, half_to_f32, queue_download, read_download, rgba16f_diff, sampled, sampled_rgba8,
-    with_chiaro_pack,
+    expected_bytes, half_to_f32, queue_download, read_download, rgba16f_diff, sampled,
+    sampled_rgba8, with_chiaro_pack,
 };
 use knorke_gpu::{CommandBuffer, Gpu, Samplers, ShaderLibrary, Texture};
 use knorke_light2d::codec::surface_pixel;
@@ -27,7 +27,6 @@ use knorke_light2d::composite::{
 };
 use knorke_light2d::light::{Height, LightDesc, LightType};
 use knorke_light2d::light_culling::{LightList, LightModes, collect_lights};
-use knorke_light2d::light_pipelines::LightPipelines;
 use knorke_light2d::lighting::{DetailMode, LightingFrame, LightingResult, LightingStage};
 use knorke_light2d::settings::{GlowColor, LightSettings, Quality, Resolutions};
 use knorke_light2d::{LightStore, NoResources, Projection};
@@ -305,7 +304,6 @@ impl Scene {
 struct Host<'d> {
     gpu: Gpu<'d>,
     shaders: ShaderLibrary<'d>,
-    light_pipelines: LightPipelines<'d>,
     samplers: Samplers<'d>,
     lighting: LightingStage<'d>,
     composite: CompositeStage<'d>,
@@ -317,7 +315,6 @@ impl<'d> Host<'d> {
         let shaders = ShaderLibrary::new(gpu, pack.to_vec()).unwrap();
         Self {
             gpu,
-            light_pipelines: LightPipelines::new(&shaders).unwrap(),
             samplers: Samplers::new(gpu).unwrap(),
             lighting: LightingStage::new(gpu),
             composite: CompositeStage::new(gpu, &shaders).unwrap(),
@@ -385,20 +382,11 @@ impl<'d> Host<'d> {
         };
         let result = self
             .lighting
-            .prepare(
-                &mut self.shaders,
-                &mut self.light_pipelines,
-                &lighting_frame,
-            )
+            .prepare(&mut self.shaders, &lighting_frame)
             .unwrap();
         let mut cmd = CommandBuffer::acquire(self.gpu.device()).unwrap();
         self.lighting
-            .record(
-                &mut cmd,
-                &self.light_pipelines,
-                &self.samplers,
-                &lighting_frame,
-            )
+            .record(&mut cmd, &self.samplers, &lighting_frame)
             .unwrap();
         let frame = CompositeFrame {
             scene: scene_tex.texture_ref(),
@@ -446,8 +434,10 @@ fn hdr_buffers_match_chiaro() {
                 "{name}: specular"
             );
             assert_eq!(program, CompositeProgram::Base, "{name}: program");
-            let (n, max) =
-                rgba16f_diff(&hdr, &golden_bytes("composite", &format!("{name}.hdr.bin")));
+            let (n, max) = rgba16f_diff(
+                &hdr,
+                &expected_bytes("composite", &format!("{name}.hdr.bin"), &hdr),
+            );
             eprintln!("{name}: HDR buffer {n} differing texels (max {max})");
             if n > 0 {
                 failures.push(format!("{name}: {n} texels, max {max}"));

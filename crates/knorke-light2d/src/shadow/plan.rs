@@ -1,11 +1,11 @@
 // Origin: chiaro @ 9bc5b9b, src/shadows/MaskUpdatePlan.hpp and MaskUpdatePlan.cpp (MaskUpdate,
-// MaskLayout, DynamicFootprint, MaskUpdateLimits, MaskPlanInput, MaskUpdatePlan, SpriteGridRect).
+// MaskLayout, DynamicFootprint, MaskPlanInput, MaskUpdatePlan, SpriteGridRect).
 // Copyright (C) 2026 Manuel Vögele. zlib license: this software is provided 'as-is', without any
 // express or implied warranty; the origin must not be misrepresented; altered source versions
 // must be plainly marked as such (this file is a Rust port) and this notice may not be removed or
 // altered from any source distribution. Full text: LICENSE-CHIARO-ZLIB.txt.
 
-//! The CPU half of the incremental mask and field update (E21).
+//! The CPU half of the incremental mask update (E21).
 
 use super::dirty_rects::{
     CellRect, DirtyRect, DirtyRectList, clamp_texel_coord, exposed_strips, obstacle_grid_rect,
@@ -17,7 +17,7 @@ use crate::obstacle::{ObstacleId, ObstacleStore};
 use knorke_math::{At, Vec2, World2};
 use knorke_types::Revision;
 
-/// How the occlusion stage brings mask and distance field up to date in a frame with shadows.
+/// How the occlusion stage brings the mask up to date in a frame with shadows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaskUpdate {
     /// Unchanged since the last frame: nothing is drawn.
@@ -28,7 +28,8 @@ pub enum MaskUpdate {
     Full,
 }
 
-/// A local update whose field rectangles cover more than this share of the mask rebuilds fully.
+/// A local update whose changed rectangles cover more than this share of the mask rebuilds
+/// fully.
 pub const FULL_REBUILD_RATIO: f64 = 0.5;
 
 /// With a sprite mask, its current scene rectangle is redrawn grown by this many mask texels on
@@ -98,17 +99,6 @@ impl DynamicFootprint {
             && self.position.raw().y == b.position.raw().y
             && self.rotation == b.rotation
     }
-}
-
-/// The rectangle rules' parameters.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct MaskUpdateLimits {
-    /// Field rectangles = changed mask rectangles grown by this (the field bound).
-    pub field_grow: i32,
-    /// Seed rectangles = field rectangles grown by this (jump flooding span + 2).
-    pub seed_grow: i32,
-    /// Field rectangles covering more than this share of the mask: full rebuild.
-    pub full_rebuild_ratio: f64,
 }
 
 /// Changes of tile cells (`set_tile_cells`) since a version; the tile grid editing of P14
@@ -214,8 +204,8 @@ struct State {
     revision: Revision,
 }
 
-/// Decides how a frame with shadows updates mask and field and, for a local update, which
-/// rectangles change. See the [module docs](super) for the rules.
+/// Decides how a frame with shadows updates the mask and, for a local update, which rectangles
+/// change. See the [module docs](super) for the rules.
 ///
 /// [`decide`](Self::decide) prepares a frame; [`commit`](Self::commit) adopts it once it is
 /// recorded. A frame that is decided but never committed leaves the recorded state untouched.
@@ -223,7 +213,8 @@ struct State {
 /// obstacles in use.
 #[derive(Clone, Debug)]
 pub struct MaskUpdatePlan {
-    limits: MaskUpdateLimits,
+    /// Changed rectangles covering more than this share of the mask: full rebuild.
+    full_rebuild_ratio: f64,
     /// The last recorded frame, valid if `drawn_valid`.
     drawn: State,
     /// The decided frame.
@@ -235,8 +226,6 @@ pub struct MaskUpdatePlan {
     mask_rects: DirtyRectList,
     /// Changed mask contents ([`row_rects`](Self::row_rects)).
     row_rects: DirtyRectList,
-    field_rects: DirtyRectList,
-    seed_rects: DirtyRectList,
     /// One per enabled static obstacle, for `grid_layout`.
     static_grid_rects: Vec<DirtyRect>,
     /// Unchanged dynamic obstacles of the decided frame.
@@ -255,11 +244,17 @@ fn find(footprints: &[DynamicFootprint], id: ObstacleId) -> Option<&DynamicFootp
         .filter(|f| f.handle == id)
 }
 
+impl Default for MaskUpdatePlan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MaskUpdatePlan {
     /// A plan without recorded frame: the first decision is [`MaskUpdate::Full`].
-    pub fn new(limits: MaskUpdateLimits) -> Self {
+    pub fn new() -> Self {
         Self {
-            limits,
+            full_rebuild_ratio: FULL_REBUILD_RATIO,
             drawn: State::default(),
             next: State::default(),
             drawn_valid: false,
@@ -267,8 +262,6 @@ impl MaskUpdatePlan {
             changed: DirtyRectList::new(),
             mask_rects: DirtyRectList::new(),
             row_rects: DirtyRectList::new(),
-            field_rects: DirtyRectList::new(),
-            seed_rects: DirtyRectList::new(),
             static_grid_rects: Vec::new(),
             dynamic_grid_rects: Vec::new(),
             grid_scratch: Vec::new(),
@@ -277,9 +270,10 @@ impl MaskUpdatePlan {
         }
     }
 
-    /// Replaces the limits (tests, settings changes).
-    pub fn set_limits(&mut self, limits: MaskUpdateLimits) {
-        self.limits = limits;
+    /// Replaces [`FULL_REBUILD_RATIO`] (tests reach local updates that are never cheaper at
+    /// small sizes).
+    pub fn set_full_rebuild_ratio(&mut self, ratio: f64) {
+        self.full_rebuild_ratio = ratio;
     }
 
     /// Forgets the recorded frame: the next decision is [`MaskUpdate::Full`]. Call it when the
@@ -290,7 +284,7 @@ impl MaskUpdatePlan {
         self.grid_valid = false;
     }
 
-    /// Decides how the frame `input` updates mask and field.
+    /// Decides how the frame `input` updates the mask.
     pub fn decide(&mut self, input: &MaskPlanInput<'_>) -> MaskUpdate {
         if self.next.footprints.capacity() < DirtyRectList::MAX_DIRTY_RECTS {
             // Once: commit swaps the two states, both keep this storage.
@@ -343,8 +337,9 @@ impl MaskUpdatePlan {
             self.shift = [0; 2];
             return MaskUpdate::Full;
         }
-        if dx == 0 && dy == 0 && self.field_rects.rects().is_empty() {
-            return MaskUpdate::Reused; // nothing changed within reach of the mask
+        if dx == 0 && dy == 0 && self.mask_rects.rects().is_empty() {
+            self.clear_rects();
+            return MaskUpdate::Reused; // nothing changed within the mask
         }
         MaskUpdate::Incremental
     }
@@ -375,16 +370,6 @@ impl MaskUpdatePlan {
         &self.row_rects
     }
 
-    /// Field texels to recompute, merged (valid for an incremental frame).
-    pub fn field_rects(&self) -> &DirtyRectList {
-        &self.field_rects
-    }
-
-    /// Seed and step pass area (valid for an incremental frame).
-    pub fn seed_rects(&self) -> &DirtyRectList {
-        &self.seed_rects
-    }
-
     /// Footprints of the last committed frame, sorted by slot index.
     pub fn footprints(&self) -> &[DynamicFootprint] {
         &self.drawn.footprints
@@ -393,8 +378,6 @@ impl MaskUpdatePlan {
     fn clear_rects(&mut self) {
         self.mask_rects.clear();
         self.row_rects.clear();
-        self.field_rects.clear();
-        self.seed_rects.clear();
     }
 
     /// Fills `next.footprints` from the store; reuses the drawn rectangle of an unchanged
@@ -437,8 +420,7 @@ impl MaskUpdatePlan {
         let [sx, sy] = self.next.snapped;
         let to_mask = |r: DirtyRect| r.offset(sx, sy);
 
-        // Changed mask rectangles in this frame's mask texels, unclipped: obstacles just outside
-        // the mask still reach into the field.
+        // Changed mask rectangles in this frame's mask texels, unclipped (`row_rects`).
         self.changed.clear();
         self.changed
             .add_exposed_strips(self.shift[0], self.shift[1], w, h);
@@ -521,10 +503,8 @@ impl MaskUpdatePlan {
         self.mask_rects.clone_from(&self.changed);
         self.mask_rects.expand(0, w, h); // clip
         self.mask_rects.merge();
-        // Field: every changed mask texel moves the field up to the bound around it, including
-        // obstacles the shift pushed out of the mask.
-        self.field_rects.clone_from(&self.changed);
         if self.shift != [0, 0] {
+            // The obstacles in the strips a pan exposed or pushed out change what a row sees.
             self.update_static_grid_rects(input);
             let offset = self.next.snapped;
             let [a, b] = exposed_strips(self.shift, w, h);
@@ -534,34 +514,10 @@ impl MaskUpdatePlan {
                     self.row_rects.add_parts_in(rects, offset, &strip);
                 }
             }
-            self.field_rects.add_vanished_content(
-                &self.static_grid_rects,
-                offset,
-                self.shift,
-                w,
-                h,
-            );
-            self.field_rects.add_vanished_content(
-                &self.dynamic_grid_rects,
-                offset,
-                self.shift,
-                w,
-                h,
-            );
         }
-        self.field_rects.expand(self.limits.field_grow, w, h);
-        self.field_rects.merge();
         let mask_area = f64::from(w) * f64::from(h);
-        if self.mask_rects.overflowed()
-            || self.field_rects.overflowed()
-            || self.field_rects.area() as f64 > self.limits.full_rebuild_ratio * mask_area
-        {
-            return false;
-        }
-        self.seed_rects.clone_from(&self.field_rects);
-        self.seed_rects.expand(self.limits.seed_grow, w, h);
-        self.seed_rects.merge(); // grown rectangles overlap again
-        true
+        !(self.mask_rects.overflowed()
+            || self.mask_rects.area() as f64 > self.full_rebuild_ratio * mask_area)
     }
 
     /// Grid rectangles of the enabled static obstacles, recomputed when the layout changed.

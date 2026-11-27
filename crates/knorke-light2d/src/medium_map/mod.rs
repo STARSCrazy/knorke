@@ -38,8 +38,8 @@ pub use gpu::{
     MediumMapView,
 };
 
+use crate::binding_layout::{LayoutBuilder, LightLayout, LightSampler, LightStorage, LightUniform};
 use crate::codec::MEDIUM_COUNT;
-use crate::light_program::{LayoutBuilder, LightLayout, LightSampler, LightStorage, LightUniform};
 use crate::material::view_direction;
 use crate::medium_table::MediumTable;
 use crate::settings::LightSettings;
@@ -359,23 +359,17 @@ pub enum MediumProgram {
     Directional,
     /// `medium_filter.frag`: pre-filter and guides of the scatter buffer.
     Filter,
-    /// `medium_polar.frag`: one row of the light shaft atlas.
-    Polar,
-    /// `medium_sun_height.frag`: the sun shadow heights of one directional light.
-    SunHeight,
 }
 
 impl MediumProgram {
     /// Every program.
-    pub const ALL: [Self; 8] = [
+    pub const ALL: [Self; 6] = [
         Self::Base,
         Self::BaseZones,
         Self::Light,
         Self::LightMask,
         Self::Directional,
         Self::Filter,
-        Self::Polar,
-        Self::SunHeight,
     ];
 
     /// Vertex shader name in the pack.
@@ -396,8 +390,6 @@ impl MediumProgram {
             Self::LightMask => "medium_light_mask.frag",
             Self::Directional => "medium_directional.frag",
             Self::Filter => "medium_filter.frag",
-            Self::Polar => "medium_polar.frag",
-            Self::SunHeight => "medium_sun_height.frag",
         }
     }
 }
@@ -450,16 +442,6 @@ pub const fn medium_layout_of(program: MediumProgram) -> LightLayout {
             b.sampler(S::Surface);
             b.sampler(S::MediumTex);
             b.uniform(U::MediumParams);
-        }
-        P::Polar | P::SunHeight => {
-            b.sampler(S::OcclusionMask);
-            b.sampler(S::DistanceField);
-            b.sampler(S::OcclusionHeight);
-            b.uniform(if matches!(program, P::Polar) {
-                U::PolarRow
-            } else {
-                U::SunHeight
-            });
         }
     }
     b.finish()
@@ -647,8 +629,5 @@ mod tests {
         let z = medium_layout_of(MediumProgram::BaseZones);
         assert_eq!(z.sampler(LightSampler::PureAmbient), Some(2));
         assert_eq!(z.uniform(LightUniform::Zone), Some(1));
-        let s = medium_layout_of(MediumProgram::SunHeight);
-        assert_eq!(s.uniform(LightUniform::SunHeight), Some(0));
-        assert_eq!(s.uniform(LightUniform::PolarRow), None);
     }
 }

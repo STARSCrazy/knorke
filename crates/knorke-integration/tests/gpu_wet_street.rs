@@ -153,8 +153,6 @@ fn settings() -> Light2dSettings {
                 ..QualitySettings::default()
             },
             surface_height_step: HEIGHT_STEP,
-            // Chiaro's light: the scene is compared with Chiaro's pictures.
-            light_rows: false,
             ..LightSettings::default()
         },
         post: PostSettings::default(),
@@ -229,7 +227,7 @@ fn wet_street_matches_chiaro() {
         cmd.submit_and_wait().unwrap();
         let pixels = read_texture(gpu, target.texture_ref());
 
-        let golden = scene_common::fixture(".", "wet_street", OUT);
+        let golden = scene_common::expected(".", "wet_street", &pixels, OUT);
         let strict =
             compare_rgba8(&pixels, &golden, OUT.0, OUT.1, &[], &ParityBudget::STRICT).unwrap();
         strict.print("wet_street", "STRICT");
