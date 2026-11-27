@@ -10,6 +10,7 @@ use knorke_integration::light2d::Light2dSettings;
 use knorke_light2d::projection::Projection;
 use knorke_light2d::settings::{GlowColor, LightSettings, Quality, QualitySettings, Resolutions};
 use knorke_math::{At, Vec2, Vec3};
+use knorke_post::color::kelvin;
 use knorke_post::output_rect::ScaleMode;
 use knorke_post::settings::{CrtPreset, CrtSettings, Filter, PostSettings};
 
@@ -78,11 +79,12 @@ pub(crate) fn settings(scene: &Scene) -> Light2dSettings {
     s.light.haze.density = if scene.media.is_empty() { 0.0 } else { 0.012 };
     s.light.haze.color = Vec3::new(0.8, 0.85, 1.0);
     if let Some((o, crt)) = &scene.grade {
-        // The tint is Chiaro's `Kelvin(8000)`, which Knorke does not compute.
         let out = &mut s.post.output;
         out.saturation = o[0];
         out.contrast = o[1];
-        out.tint = [o[2], o[3], o[4]];
+        let tint = kelvin(8000.0, 1.0);
+        out.tint = [tint.r, tint.g, tint.b];
+        assert_eq!(out.tint[..], o[2..5], "Kelvin(8000) differs from Chiaro's");
         out.vignette.strength = o[5];
         out.vignette.radius = o[6];
         out.vignette.softness = o[7];

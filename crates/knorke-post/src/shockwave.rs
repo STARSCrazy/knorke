@@ -21,16 +21,16 @@
 //! Shockwaves (E140 to E144): the wave list, its validation, the time and size helpers, the culling and
 //! the CPU mirrors of the two shader steps (displacement and ring light).
 //!
-//! Differences to the C++ original: the light colour is a [`LinearRgba`] that the caller passes in
-//! (`CHI_Kelvin` is not ported, so the orange default of `CHI_InitShockwaveDesc()` is not built in),
-//! [`ExplosionParams::kelvin`] carries the colour temperature instead of a colour, and validation errors
-//! are a [`ShockwaveError`] value instead of an SDL error string.
+//! Differences to the C++ original: [`make_shockwave`] takes the light colour from the caller (Chiaro
+//! always uses the default orange), and validation errors are a [`ShockwaveError`] value instead of an
+//! SDL error string.
 
 use knorke_math::{LinearRgba, Vec2, det};
 
 use core::f32::consts::PI;
 
 use crate::clamp;
+use crate::color::kelvin;
 
 /// Capacity of the wave list (`CHI_MAX_SHOCKWAVES`).
 pub const MAX_SHOCKWAVES: usize = 16;
@@ -75,7 +75,7 @@ pub struct Shockwave {
 }
 
 impl Default for Shockwave {
-    /// No distortion, no ring light, width 1. The light colour is black (see the module docs).
+    /// No distortion, no ring light, width 1, light the orange of a fire ball (2000 K).
     fn default() -> Self {
         Self {
             x: 0.0,
@@ -83,12 +83,7 @@ impl Default for Shockwave {
             radius: 0.0,
             width: 1.0,
             strength: 0.0,
-            light: LinearRgba {
-                r: 0.0,
-                g: 0.0,
-                b: 0.0,
-                a: 1.0,
-            },
+            light: kelvin(2000.0, 1.0),
             light_intensity: 0.0,
         }
     }
@@ -105,8 +100,8 @@ pub struct ExplosionParams {
     pub strength: f32,
     /// Factor of the ring light.
     pub light_intensity: f32,
-    /// Colour temperature of the ring light in kelvin (to be turned into a colour by the caller).
-    pub kelvin: f32,
+    /// Colour of the ring light: 1800 K for small blasts up to 3700 K (yellower) for large ones.
+    pub light: LinearRgba,
 }
 
 /// `S(p) = (1 - e^-p) / (1 - e^-1)`, 1 at power 1, saturating at 1.58. `p` is clamped to
@@ -129,7 +124,7 @@ pub fn explosion_law(power: f32, reach: f32) -> ExplosionParams {
         duration: 0.6 * p.sqrt(),
         strength: 0.1 * reach * s,
         light_intensity: 4.0 * s,
-        kelvin: 1800.0 + 1200.0 * s,
+        light: kelvin(1800.0 + 1200.0 * s, 1.0),
     }
 }
 
@@ -190,14 +185,7 @@ pub fn make_shockwave(
 }
 
 /// The wave of an explosion (`CHI_ExplosionShockwave()`), with the size law of [`explosion_law`].
-/// `light` is the colour of the ring light, built by the caller from [`ExplosionParams::kelvin`].
-pub fn make_explosion_shockwave(
-    origin: Vec2,
-    age: f32,
-    power: f32,
-    reach: f32,
-    light: LinearRgba,
-) -> Shockwave {
+pub fn make_explosion_shockwave(origin: Vec2, age: f32, power: f32, reach: f32) -> Shockwave {
     let e = explosion_law(power, reach);
     let mut d = make_shockwave(
         origin,
@@ -206,7 +194,7 @@ pub fn make_explosion_shockwave(
         e.max_radius,
         e.strength,
         e.light_intensity,
-        light,
+        e.light,
     );
     if e.max_radius == 0.0 && reach.is_finite() {
         d.width = if reach > 0.0 { reach * 0.35 } else { 1.0 }; // power 0: a valid wave without effect
@@ -484,7 +472,7 @@ mod tests {
     use crate::testing::{approx, near};
 
     // Port of tests/unit/ShockwaveTests.cpp. Not ported: the `flags` checks and the sizeof check (no flags
-    // field), the colour-temperature checks (CHI_Kelvin is not ported) and the C++ wrapper test.
+    // field) and the C++ wrapper test.
 
     fn white() -> LinearRgba {
         LinearRgba {
@@ -506,7 +494,7 @@ mod tests {
         let mut light = 0.0f32;
         for i in 0..=2000 {
             let age = duration * i as f32 / 2000.0;
-            let d = make_explosion_shockwave(origin(0.0, 0.0), age, power, reach, white());
+            let d = make_explosion_shockwave(origin(0.0, 0.0), age, power, reach);
             strength = det::max(strength, d.strength);
             light = det::max(light, d.light_intensity);
         }
@@ -549,6 +537,8 @@ mod tests {
         assert_eq!(d.width, 1.0);
         assert_eq!(d.strength, 0.0);
         assert_eq!(d.light_intensity, 0.0);
+        assert_eq!(d.light.r, 1.0);
+        assert!(d.light.r > d.light.g && d.light.g > d.light.b);
         assert!(validate_shockwave(&d, 0).is_ok());
     }
 
@@ -630,8 +620,8 @@ mod tests {
         assert!(near(large.duration, 0.805, 0.01));
         // The radius grows faster than the duration.
         assert!(large.max_radius / small.max_radius > large.duration / small.duration);
-        // Large blasts are hotter: a higher colour temperature than small ones.
-        assert!(large.kelvin > small.kelvin);
+        // Large blasts are yellower: more green relative to red.
+        assert!(large.light.g / large.light.r > small.light.g / small.light.r);
     }
 
     #[test]
@@ -659,7 +649,7 @@ mod tests {
         assert_eq!(huge, four);
 
         // The wave of an explosion is the wave of make_shockwave with the law's numbers.
-        let a = make_explosion_shockwave(origin(1.0, 2.0), 0.3, 1.8, 10.0, white());
+        let a = make_explosion_shockwave(origin(1.0, 2.0), 0.3, 1.8, 10.0);
         let e = explosion_law(1.8, 10.0);
         let b = make_shockwave(
             origin(1.0, 2.0),
@@ -674,10 +664,11 @@ mod tests {
         assert_eq!(a.width, b.width);
         assert_eq!(a.strength, b.strength);
         assert_eq!(a.light_intensity, b.light_intensity);
+        assert_eq!(a.light, e.light);
 
         // No power, no effect; still valid.
         for p in [0.0f32, -1.0, f32::NAN] {
-            let a = make_explosion_shockwave(origin(1.0, 2.0), 0.1, p, 10.0, white());
+            let a = make_explosion_shockwave(origin(1.0, 2.0), 0.1, p, 10.0);
             assert_eq!(a.strength, 0.0, "power {p}");
             assert_eq!(a.light_intensity, 0.0, "power {p}");
             assert!(validate_shockwave(&a, 0).is_ok());

@@ -45,6 +45,58 @@ pub fn linear_to_srgb(c: f32) -> f32 {
     }
 }
 
+/// Linear sRGB of the black body at `kelvin` (Kim et al. 2002 Planckian locus, 1667 ... 25000 K), Y = 1
+/// (`CHI_PlanckRGB_`). The operations keep Chiaro's order, so the result is bit-equal.
+// The constants are Chiaro's digits, kept as written so they read the same as the source.
+#[allow(clippy::excessive_precision)]
+fn planck_rgb(kelvin: f32) -> [f32; 3] {
+    let t = clamp(kelvin, 1667.0, 25000.0);
+    let t1 = 1000.0 / t;
+    let t2 = t1 * t1;
+    let t3 = t2 * t1;
+    let x = if t <= 4000.0 {
+        -0.2661239 * t3 - 0.2343589 * t2 + 0.8776956 * t1 + 0.179910
+    } else {
+        -3.0258469 * t3 + 2.1070379 * t2 + 0.2226347 * t1 + 0.240390
+    };
+    let x2 = x * x;
+    let x3 = x2 * x;
+    let y = if t <= 2222.0 {
+        -1.1063814 * x3 - 1.34811020 * x2 + 2.18555832 * x - 0.20219683
+    } else if t <= 4000.0 {
+        -0.9549476 * x3 - 1.37418593 * x2 + 2.09137015 * x - 0.16748867
+    } else {
+        3.0817580 * x3 - 5.8733867 * x2 + 3.75112997 * x - 0.37001483
+    };
+    let big_x = x / y;
+    let big_z = (1.0 - x - y) / y;
+    [
+        3.2404542 * big_x - 1.5371385 - 0.4985314 * big_z,
+        -0.9692660 * big_x + 1.8760108 + 0.0415560 * big_z,
+        0.0556434 * big_x - 0.2040259 + 1.0572252 * big_z,
+    ]
+}
+
+/// Linear colour of a black body at `kelvin` (`CHI_Kelvin`): white-balanced so that 6500 K is neutral
+/// white, the brightest channel 1, times `scale`. Outside 1667 ... 25000 K the nearest end of that range.
+/// 1800 K candle, 2700 K bulb, 4000 K neon, 6500 K daylight, 10000+ K blue sky. Alpha is 1.
+pub fn kelvin(kelvin: f32, scale: f32) -> LinearRgba {
+    let w = planck_rgb(6500.0);
+    let c = planck_rgb(kelvin);
+    let ch = |i: usize| {
+        let v = c[i] / w[i];
+        if v > 0.0 { v } else { 0.0 }
+    };
+    let (r, g, b) = (ch(0), ch(1), ch(2));
+    let m = det::max(det::max(r, g), b);
+    LinearRgba {
+        r: r / m * scale,
+        g: g / m * scale,
+        b: b / m * scale,
+        a: 1.0,
+    }
+}
+
 /// Linear multiplier for an exposure given in photographic stops (EV).
 pub fn exposure_scale(ev: f32) -> f32 {
     det::exp2(ev)
@@ -218,6 +270,47 @@ mod tests {
         assert!(near(tonemap_aces(1.0), 0.8038, 1e-3));
         assert!(near(tonemap_aces(4.0), 0.9734, 1e-3));
         assert_eq!(tonemap_aces(100.0), 1.0);
+    }
+
+    // Port of the CHI_Kelvin tests of tests/unit/ColorTests.cpp.
+
+    #[test]
+    fn kelvin_is_white_at_6500_red_at_1000_blue_at_20000() {
+        let max = |c: LinearRgba| det::max(det::max(c.r, c.g), c.b);
+        let white = kelvin(6500.0, 1.0);
+        assert!(approx(max(white), 1.0));
+        for v in [white.r, white.g, white.b] {
+            assert!(near(v, 1.0, 0.02));
+        }
+        let red = kelvin(1000.0, 1.0);
+        assert!(approx(red.r, 1.0));
+        assert!(red.g < 0.5 * red.r && red.b < red.g && red.b >= 0.0);
+        let warm = kelvin(2700.0, 1.0);
+        assert!(approx(warm.r, 1.0) && warm.g < warm.r && warm.b < warm.g);
+        let blue = kelvin(20000.0, 1.0);
+        assert!(approx(blue.b, 1.0) && blue.r < blue.b);
+        // Monotonic: warmer is redder relative to blue.
+        let mut last = 1e9f32;
+        let mut k = 1000.0f32;
+        while k <= 40000.0 {
+            let c = kelvin(k, 1.0);
+            assert!(c.r.is_finite() && approx(max(c), 1.0), "k {k}");
+            let ratio = c.r / det::max(c.b, 1e-6);
+            assert!(ratio <= last + 1e-4, "k {k}");
+            last = ratio;
+            k += 500.0;
+        }
+    }
+
+    #[test]
+    fn kelvin_scale_multiplies_and_out_of_range_temperatures_are_clamped() {
+        let one = kelvin(3000.0, 1.0);
+        let two = kelvin(3000.0, 2.5);
+        assert!(
+            approx(two.r, one.r * 2.5) && approx(two.g, one.g * 2.5) && approx(two.b, one.b * 2.5)
+        );
+        assert_eq!(kelvin(10.0, 1.0).g, kelvin(1000.0, 1.0).g);
+        assert_eq!(kelvin(1e6, 1.0).r, kelvin(40000.0, 1.0).r);
     }
 
     // Port of the CPU-mirror and dither tests of tests/unit/OutputGradeTests.cpp.

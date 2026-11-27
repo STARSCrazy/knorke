@@ -21,9 +21,6 @@
 //!   `CHI_OutputSettings`), the settings store, the SDL error strings, the output flags or the C++
 //!   wrapper: the same checks run here on the Rust types (field names and values), the struct/flag/
 //!   error-string parts are dropped.
-//! - `CHI_Kelvin` / `CHI_PlanckRGB_` (colour temperature): not in P4 or P17. Shockwaves take the light colour
-//!   from the caller, and [`shockwave::ExplosionParams::kelvin`] carries the temperature, so the colour-ratio
-//!   checks of the C tests are not ported.
 //! - `MediumCloud` tests in `OutputGradeTests.cpp`: a package of their own (E112).
 //!
 //! Simulation-safe math goes through `knorke_math::det` (clippy forbids the `std` variants).

@@ -62,7 +62,7 @@ use knorke_light2d::{
     AnimationDesc, AnimationStore, LightStore, MaskStore, ObstacleStore, PatternStore,
     StoreResources,
 };
-use knorke_math::{At, LinearRgba, Vec2, Vec3};
+use knorke_math::{At, Vec2, Vec3};
 use knorke_post::shockwave::{
     Projection as PostProjection, Shockwave, ShockwaveFrame, ShockwaveList, collect_shockwaves,
     make_explosion_shockwave,
@@ -308,19 +308,20 @@ impl Scene {
                 "crt" => s.grade.as_mut().unwrap().1 = f.iter().map(|s| num(s)).collect(),
                 "explosion" => {
                     let v: Vec<f32> = f.iter().map(|s| num(s)).collect();
-                    // The ring light's colour is Chiaro's `CHI_Kelvin`, which Knorke does not
-                    // compute: it comes from the `shockwave` line, checked there.
                     let origin = Vec2::new(v[0], v[1]);
-                    let white = LinearRgba::new(1.0, 1.0, 1.0, 1.0);
                     s.waves
-                        .push(make_explosion_shockwave(origin, v[2], v[3], v[4], white));
+                        .push(make_explosion_shockwave(origin, v[2], v[3], v[4]));
                 }
                 "shockwave" => {
                     let v: Vec<f32> = f.iter().map(|s| num(s)).collect();
                     let w = s.waves.last_mut().expect("`explosion` comes first");
-                    w.light = LinearRgba::new(v[5], v[6], v[7], 1.0);
-                    let got = [w.x, w.y, w.radius, w.width, w.strength, w.light_intensity];
-                    let want = [v[0], v[1], v[2], v[3], v[4], v[8]];
+                    let got = [w.x, w.y, w.radius, w.width, w.strength];
+                    let got = [
+                        &got[..],
+                        &[w.light.r, w.light.g, w.light.b, w.light_intensity],
+                    ]
+                    .concat();
+                    let want = [v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8]];
                     assert_eq!(got, want, "the explosion's shockwave differs from Chiaro's");
                 }
                 _ => panic!("unknown scene item {kind}"),
