@@ -621,11 +621,14 @@ impl<'d> LightingStage<'d> {
     /// Chiaro's, not the row lights or a sun map.
     pub fn reads_field(&self) -> bool {
         let reads = |p: Option<LightProgram>| {
-            p.is_some_and(|p| light_layout_of(p).sampler(LightSampler::DistanceField).is_some())
+            p.is_some_and(|p| {
+                light_layout_of(p)
+                    .sampler(LightSampler::DistanceField)
+                    .is_some()
+            })
         };
         let chiaro_suns = self.draws.directional > self.rows.frame().suns;
-        (self.draws.draws().iter())
-            .any(|d| d.count > 0 && reads(self.programs[slot(d.program)]))
+        (self.draws.draws().iter()).any(|d| d.count > 0 && reads(self.programs[slot(d.program)]))
             || (chiaro_suns && reads(self.programs[DIRECTIONAL]))
     }
 

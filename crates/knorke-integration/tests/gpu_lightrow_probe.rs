@@ -683,13 +683,16 @@ fn compare(a: &[u8], b: &[u8]) -> (f64, f64, Vec<u8>) {
 ///
 /// Timed 2026-11-27 (240 frames, 5 runs, release, medians in us), today / rows resting / rows
 /// all built / today scrolling / rows scrolling (the camera one mask texel a frame, 30 to and
-/// fro; 1.9 of 13 rows rebuilt a frame): "hart normal" 284 / 177 / 303 / 348 / 356, "hart
-/// last" 836 / 404 / 691 / 888 / 602, "weich normal" 310 / 219 / 410 / 364 / 438, "weich
-/// last" 900 / 564 / 992 / 940 / 789, "hart halb" 299 / 174 / 311 / 356 / 372, "zaun hart"
-/// 416 / 176 / 317 / 465 / 379, "zaun weich" 449 / 216 / 431 / 496 / 455, "gitter hart"
-/// 794 / 212 / 381 / 777 / 435, "gitter weich" 820 / 246 / 482 / 803 / 508, "nebel hart"
-/// 430 / 320 / 448 / 484 / 498, "nebel weich" 448 / 368 / 556 / 496 / 581 (scrolling slower
-/// than today, as without fog: "hart normal" 345 / 357, "weich normal" 361 / 436 that day).
+/// fro; no row rebuilt, as no obstacle comes within a lamp's reach through the pan's strips,
+/// and no distance field while every shadow is a row's): "hart normal"
+/// 286 / 175 / 290 / 344 / 193, "hart last" 877 / 399 / 744 / 944 / 414, "weich normal"
+/// 306 / 216 / 403 / 365 / 230, "weich last" 941 / 562 / 1046 / 1018 / 623, "hart halb"
+/// 308 / 177 / 311 / 358 / 194, "flächen" 138 / 140 / 220 / 196 / 160, "linie pfosten"
+/// 110 / 110 / 169 / 175 / 131, "zaun hart" 416 / 181 / 320 / 471 / 202, "zaun weich"
+/// 456 / 219 / 433 / 501 / 235, "gitter hart" 870 / 216 / 388 / 785 / 233, "gitter weich"
+/// 896 / 254 / 492 / 884 / 266, "nebel hart" 427 / 320 / 443 / 481 / 334, "nebel weich"
+/// 442 / 366 / 555 / 498 / 374. Before (1.9 of 13 rows rebuilt a frame, the field kept),
+/// rows scrolling: "hart normal" 356, "weich normal" 438, "nebel weich" 581.
 const BOUNDS: [(&str, f64, f64); 13] = [
     ("hart normal", 0.39, 0.73),
     ("hart last", 0.71, 1.76),

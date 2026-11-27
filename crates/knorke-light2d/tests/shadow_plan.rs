@@ -590,7 +590,10 @@ fn row_rects_hold_obstacles_in_the_strips_of_a_pan_not_the_empty_strips() {
     let rects = p.plan.row_rects().rects();
     let left = |r: &DirtyRect| r.x1 <= 0 && r.y0 < 30 && r.y1 > 30;
     let right = |r: &DirtyRect| r.x0 >= 95 && r.x1 <= 100 && r.y0 < 60 && r.y1 > 60;
-    assert!(rects.iter().any(left) && rects.iter().any(right), "{rects:?}");
+    assert!(
+        rects.iter().any(left) && rects.iter().any(right),
+        "{rects:?}"
+    );
     assert!(rects.iter().all(|r| left(r) || right(r)), "{rects:?}");
 }
 

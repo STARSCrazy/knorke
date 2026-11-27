@@ -775,10 +775,13 @@ fn the_field_is_built_only_for_chiaros_shadows() {
                         d.cast_shadows &= row || d.kind == LightType::Directional;
                     });
                 }
-                let mut check = |f: &mut DemoFrames<'_, '_>, what: &str| {
+                let check = |f: &mut DemoFrames<'_, '_>, what: &str| {
                     let (pixels, record) = f.frame();
                     let (max, ..) = diff(&pixels, &f.fresh_frame(pack));
-                    eprintln!("{what}: {} field texels, {max}/255", record.mask.field_texels);
+                    eprintln!(
+                        "{what}: {} field texels, {max}/255",
+                        record.mask.field_texels
+                    );
                     assert_eq!(max, 0, "{what}");
                     record.mask.field_texels
                 };

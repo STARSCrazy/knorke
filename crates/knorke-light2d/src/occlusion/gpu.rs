@@ -494,7 +494,8 @@ impl<'d> OcclusionMask<'d> {
             if self.field_needed && self.field_stale {
                 let t = self.target;
                 let (mask, field) = (view(&self.mask[t], "mask")?, view(&self.field[t], "field")?);
-                out.field_texels = self.record_field(cmd, pipelines, nearest, mask, field, false)?;
+                out.field_texels =
+                    self.record_field(cmd, pipelines, nearest, mask, field, false)?;
                 self.field_stale = false;
             }
             self.record_casters(cmd, pipelines, nearest, geometry, tiles, sprite, &mut out)?;

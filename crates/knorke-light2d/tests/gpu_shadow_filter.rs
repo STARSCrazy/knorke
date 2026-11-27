@@ -209,7 +209,9 @@ fn caster_fields_count_up_and_back_to_none_in_one_plan() {
         for (n, filter) in FILTERS.into_iter().enumerate() {
             ids.push(fx.light(Some(filter), [8.0, 24.0, 28.0][n]));
             let (record, _) = fx.render();
-            assert!(record.mask.field_texels > 0);
+            // The unfiltered light is a row light: it reads no field. Filtered ones draw their
+            // caster fields.
+            assert_eq!(record.mask.field_texels > 0, n > 0, "{filter:?}");
             assert_eq!(record.mask.caster_fields, n as u32);
         }
         // The same frame again creates nothing.
