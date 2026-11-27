@@ -50,9 +50,7 @@
 //!   their culling are `knorke-post`'s); step 4 draws them after the lights.
 //! - The medium world map (P29) needs [`PassFrame::medium`] and a light in the store; it makes
 //!   every light draw a `*_medium` program. Without a layer nothing of it is created or bound.
-//! - Not built (and not blocked): the medium stage (P30, scattering). Its inputs are fields
-//!   still to come in [`PassFrame`] and [`SceneStores`] and stages between steps 3b and 5; the
-//!   stages already take `None` for them.
+//! - The medium stage (P30, scattering) runs as step 4b with haze or a medium layer.
 
 #[cfg(feature = "gpu")]
 mod gpu;

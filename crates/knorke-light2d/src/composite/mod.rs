@@ -18,8 +18,7 @@
 //!   setting lives in the post settings (`knorke-post`), which this crate does not know. The
 //!   host passes it to both.
 //! - The medium programs are in the program table, the layout and the pipelines, and the stage
-//!   binds the medium inputs a frame hands it; the medium stage itself (P29) does not exist yet,
-//!   so that path is not covered by an image test.
+//!   binds the medium inputs a frame hands it (the medium stage, P30).
 //! - The uniform block is a `#[repr(C)]` struct with a byte writer; its layout is pinned by
 //!   tests against Chiaro's struct and the member offsets in the SPIR-V of the six shaders
 //!   (`tests/composite_uniform_layouts.rs`).

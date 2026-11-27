@@ -63,7 +63,7 @@ pub enum Layer {
     /// Unlit HUD over the result. Empty: 0.
     Overlay,
     /// Density, height span and kind of medium. Empty: 0. With a light it builds the medium
-    /// world map (P29); the scattering (P30) is not ported yet.
+    /// world map (P29) and the scattering of the medium stage (P30).
     Medium,
 }
 
@@ -269,7 +269,7 @@ impl<'d> Layers<'d> {
 
     /// A frame into `target` with every layer in its slot, except those in `skip` and an
     /// occlusion layer nothing was drawn into since its clear: an empty one gives the same
-    /// image, but as a sprite mask it would rebuild the shadow field every frame (E79).
+    /// image, but as a sprite mask it would rebuild the occlusion mask every frame (E79).
     /// The scene is never skipped.
     pub fn frame<'a>(
         &'a self,
