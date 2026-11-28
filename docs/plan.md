@@ -582,6 +582,7 @@ Details in den ADRs unter `docs/adr/`, Inventuren unter `docs/inventory/`. **Aus
 | Audio Stufe 1 (2026-11-27): `knorke-audio` als Mischpult ohne Gerät: Stimmen, Busse mit Ducking, Raumklang nach Wizardry-7-Modell, Messwerte. | `knorke-audio` | 0020 |
 | Audio am Gerät (2026-11-27): `knorke-audio-sdl` öffnet das Standard-Ausgabegerät über SDL3, Rückruf wartet nie und alloziert nicht; am echten Gerät gelaufen. | `knorke-audio-sdl` | 0020 |
 | Audio Stufe 2 (2026-11-27): Middleware-Lücken geschlossen: sample-genauer Start, Schall-Laufzeit, Höchstzahl je Klang, Filter pro Bus, Ducking; Messwerte. | `knorke-audio` | 0020 |
+| Retro-Synthesizer Stufe 1 (2026-11-28): `knorke_audio::chip` rendert Noten im Stil von NES, Game Boy, C64, AdLib und Amiga in einen Host-Puffer (mono PCM für den Mixer), deterministisch über `det`; Tests `tests/chip.rs`, Beispiel `chiptune`. FM ist eine Nachahmung, kein OPL-Emulator. | `knorke-audio` | 0020 |
 | Shader-Paket ohne Chiaro-Ordner (2026-11-27): Shader-Paket `knorke-chiaro` baut nur noch aus dem Repo, 48 genutzte Chiaro-Programme übernommen. | `knorke-integration`, `knorke-light2d`, `knorke-gpu`, `xtask` | 0019 |
 | Letzte Chiaro-Lücken, Port abgeschlossen (2026-11-27): Port abgeschlossen: Farbtemperatur `kelvin` bitgleich und weitere letzte Chiaro-Lücken. | `knorke-post`, `knorke-light2d` | 0014 |
 | Shader aufgeräumt (2026-11-27): Sieben doppelte Shader-Hilfsdateien liegen einmal in `shaders/shared`, toter Code entfernt. | `knorke-integration` (Shader), `xtask` | 0019 |
@@ -652,7 +653,8 @@ Entscheidungen aus Gesprächen:
 | **GPU-Timings** | offen | SDL3-GPU-Möglichkeiten prüfen (ADR 0007) |
 | **Hot-Reload** von Assets, Shadern, Parametern | geplant | mit `knorke-scene`, Anwendung an Sync-Punkten |
 | **Entity-Relationen** („Kind von“, „zielt auf“) als eigene Struktur | offen | bei Bedarf in KI/Szenengraph |
-| **Asset-System** (asynchrones Laden, Referenzzählung, Streaming) | geplant | Phase 3 mit `knorke-scene` |
+| **Kleines Asset-System** (Einschätzung A2): PNG und WAV über Asset-IDs aus einem Ordner, genaue Schreibweise auf allen Systemen, synchron beim Start, Diagnosen `knorke.assets.*` | vorbereitet (ADR 0023, Vorschlag, 2026-11-28); zwei offene Fragen an Manuel (eigener WAV-Leser oder `hound`; IDs aus Dateinamen oder Liste) | nächster Schritt nach ADR 0022; Schritt 4 erst nach dem laufenden Ton-Chat |
+| **Asset-System** (asynchrones Laden, Referenzzählung, Streaming) | geplant | Phase 3 mit `knorke-scene`, baut auf den IDs aus ADR 0023 auf |
 | **Frame-Scratch-Allocator** | offen | nur wenn Messungen zeigen, dass Host-Puffer nicht reichen |
 | **`knorke-abi`** (`repr(C)`-Slice-/Strided-Views für C/C#/WASM) | offen | erster FFI-Verbraucher |
 | **Billigere Profiling-Uhr** (heute 68 ns pro Scope) | offen | wenn feinere Scopes gebraucht werden |
@@ -794,7 +796,7 @@ Quellen: Unreal 5 Doku (MetaSounds, Audio Modulation, Quartz, Sound Concurrency)
 | Reaktion auf Spiel-Events | Event „Tür auf“, „Alarm“, „Treffer“ → Klang; Abbildung Event → Klang als Daten | Spiel/Host; Engine nimmt nur Commands |
 | Sound verfälschen | Funk-, Telefon-, Unterwasser-, Betäubt-Filter; Zeitlupe senkt Tonhöhe | Engine (Effekte), Spiel (wann) |
 | Debug | Anzeige aktiver Stimmen, Pegel je Bus, Verdeckungsstrahlen; Aufnahme des Mix für Tests | Engine (`Inspect`, `Probe`) |
-| Retro-Synthesizer (8/16 Bit) | niedrige Priorität (Wunsch 2026-11-27). Chiptune-Klänge nachahmen: Rechteck mit Pulsbreite, Dreieck, Rauschen, Hüllkurven, Arpeggio, Bitcrusher/Sample-Rate-Reduktion; FM-Klang wie AdLib/OPL kommt über den OPL-Emulator (siehe „Alte Formate“). Sound-Blaster-Familie: FM-Teil = OPL2 (AdLib, SB 1/2), 2× OPL2 links/rechts (SB Pro 1), OPL3 (SB Pro 2, SB16) – ein OPL3-Emulator deckt alles ab; Digital-Teil (VOC) ist normales PCM, Klangcharakter der alten Karte optional über Bitcrusher + Tiefpass | Engine als optionaler Baustein im Klanggraph (eigene Crate erst bei Verbraucher), Spiel liefert Klänge/Noten |
+| Retro-Synthesizer (8/16 Bit) | Stufe 1 erledigt 2026-11-28 (`knorke_audio::chip`: Puls mit PWM, Stufen-Dreieck, Säge, NES-Rauschen, 2-Operator-FM, ADSR, Arpeggio, Vibrato, Slide; Chip-Charakter NES/Game Boy/C64/AdLib/Amiga über Lautstärkestufen, Bits, Sample-and-Hold, Tiefpass; rendert Noten in PCM für den Mixer; Beispiel `chiptune` schreibt WAVs). Offen: echter OPL-Emulator, SID-Filter mit Resonanz, Ringmodulation/Sync, Tracker-Format, Abspielen als Datenstrom. Wunsch 2026-11-27: Chiptune-Klänge nachahmen: Rechteck mit Pulsbreite, Dreieck, Rauschen, Hüllkurven, Arpeggio, Bitcrusher/Sample-Rate-Reduktion; FM-Klang wie AdLib/OPL kommt über den OPL-Emulator (siehe „Alte Formate“). Sound-Blaster-Familie: FM-Teil = OPL2 (AdLib, SB 1/2), 2× OPL2 links/rechts (SB Pro 1), OPL3 (SB Pro 2, SB16) – ein OPL3-Emulator deckt alles ab; Digital-Teil (VOC) ist normales PCM, Klangcharakter der alten Karte optional über Bitcrusher + Tiefpass | Engine als optionaler Baustein im Klanggraph (eigene Crate erst bei Verbraucher), Spiel liefert Klänge/Noten |
 
 **Umsetzungsstand dieser Liste (2026-11-27, Stufe 2, siehe Abschnitt 16):**
 

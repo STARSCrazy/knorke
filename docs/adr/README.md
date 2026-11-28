@@ -25,3 +25,5 @@ Bindend für alle Änderungen (`CLAUDE.md`). Neue Grundsatzentscheidung → neue
 | [0019](0019-lichtzeilen-2d-licht.md) | 2D-Licht neu: eine Lichtzeile pro Lampe statt Strahl-Marsch pro Pixel | angenommen 2026-11-27 (umgesetzt, Plan 17.13 L1–L7) |
 | [0020](0020-audio.md) | Audio: `knorke-audio` als Mischpult ohne Gerät, Steuerung über Commands, Raumklang Stufe 1 | angenommen (Stufe 1 umgesetzt) |
 | [0021](0021-3d-engine-aus-pixelraum.md) | 3D-Engine aus pixelraum: eine Szene, zwei Renderwege (CPU/GPU), Einsatzprofile Dungeon und Shooter | angenommen 2026-11-27 |
+| [0022](0022-fenster-echtzeit-eingabe-sdl3.md) | Fenster, Echtzeit-Schleife und Eingabe auf SDL3: `knorke-host` und `knorke-input` als oberste, abnehmbare Schicht | angenommen 2026-11-28 (Schritte 1–8 umgesetzt) |
+| [0023](0023-kleines-asset-system.md) | Kleines Asset-System: PNG und WAV über IDs aus einem Ordner | vorgeschlagen 2026-11-28 (zwei offene Fragen) |
