@@ -58,6 +58,67 @@ fn rgba8<'d>(
 /// Pixels per cell.
 pub const PX: u32 = 16;
 
+/// Bytes of one tile or sprite: `PX * PX` RGBA8 pixels.
+pub const TILE_BYTES: usize = (PX * PX * 4) as usize;
+
+/// What the yard looks like: one tile per cell kind and one sprite per actor kind, each
+/// [`TILE_BYTES`] of RGBA8 (sRGB bytes). A sprite pixel draws where its alpha is above 0.
+/// The game fills it from the files the scene names (`knorke.stealth.assets/1`); tools
+/// without an asset folder use [`Look::plain`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Look {
+    /// Floor tiles, alternating like a chessboard: `[light, dark]`.
+    pub floor: [Vec<u8>; 2],
+    /// Wall tile.
+    pub wall: Vec<u8>,
+    /// Guard sprite.
+    pub guard: Vec<u8>,
+    /// Intruder sprite.
+    pub intruder: Vec<u8>,
+}
+
+impl Look {
+    /// Plain colours: grey chessboard floor, dark walls, a blue disc per guard, a red one
+    /// for the intruder. The yard's asset files were made from this.
+    pub fn plain() -> Self {
+        let fill = |c: [u8; 4]| c.repeat((PX * PX) as usize);
+        let disc = |c: [u8; 4]| {
+            let mut out = vec![0; TILE_BYTES];
+            for (i, px) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let dx = ((i as u32 % PX) as f32 + 0.5) / PX as f32 - 0.5;
+                let dy = ((i as u32 / PX) as f32 + 0.5) / PX as f32 - 0.5;
+                if dx * dx + dy * dy < 0.4 * 0.4 {
+                    *px = c;
+                }
+            }
+            out
+        };
+        Self {
+            floor: [fill([150, 150, 140, 255]), fill([135, 135, 126, 255])],
+            wall: fill([70, 62, 58, 255]),
+            guard: disc([60, 110, 210, 255]),
+            intruder: disc([200, 60, 50, 255]),
+        }
+    }
+
+    fn check(&self) -> Result<(), Diagnostic> {
+        let tiles = [
+            &self.floor[0],
+            &self.floor[1],
+            &self.wall,
+            &self.guard,
+            &self.intruder,
+        ];
+        match tiles.iter().find(|t| t.len() != TILE_BYTES) {
+            Some(t) => Err(invalid(format!(
+                "look: a tile has {} bytes, needs {TILE_BYTES} ({PX} x {PX} RGBA8)",
+                t.len()
+            ))),
+            None => Ok(()),
+        }
+    }
+}
+
 /// Where the actors are drawn, in cells (fractions between two ticks).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pose {
@@ -132,16 +193,31 @@ pub struct View<'d> {
     /// The yard without actors, and the canvas the actors are painted onto; reused.
     ground: Vec<u8>,
     canvas: Vec<u8>,
+    look: Look,
     /// Picture size in pixels.
     size: (u32, u32),
 }
 
 impl<'d> View<'d> {
+    /// [`View::with_look`] with [`Look::plain`].
+    ///
+    /// # Errors
+    /// As [`View::with_look`].
+    pub fn new(gpu: Gpu<'d>, pack: Vec<u8>, scene: &Scene) -> Result<Self, Diagnostic> {
+        Self::with_look(gpu, pack, scene, Look::plain())
+    }
+
     /// Sets up the textures and lamps for a valid `scene`. `pack` is the shader pack.
     ///
     /// # Errors
-    /// [`INVALID_SCENE`], or what the GPU reports.
-    pub fn new(gpu: Gpu<'d>, pack: Vec<u8>, scene: &Scene) -> Result<Self, Diagnostic> {
+    /// [`INVALID_SCENE`] (also for a tile of the wrong size), or what the GPU reports.
+    pub fn with_look(
+        gpu: Gpu<'d>,
+        pack: Vec<u8>,
+        scene: &Scene,
+        look: Look,
+    ) -> Result<Self, Diagnostic> {
+        look.check()?;
         let Some((_, yard)) = scene.each::<Yard>().next() else {
             return Err(invalid("no yard"));
         };
@@ -150,16 +226,16 @@ impl<'d> View<'d> {
         let mut mask = ground.clone();
         let pixels = ground.as_chunks_mut::<4>().0.iter_mut();
         for (i, (px, hole)) in pixels.zip(mask.as_chunks_mut::<4>().0).enumerate() {
-            let (x, y) = (i as u32 % w / PX, i as u32 / w / PX);
-            let wall = yard.walls.contains(&[x as i32, y as i32]);
+            let (x, y) = (i as u32 % w, i as u32 / w);
+            let wall = yard.walls.contains(&[(x / PX) as i32, (y / PX) as i32]);
             hole[3] = if wall { 255 } else { 0 };
-            *px = if wall {
-                [70, 62, 58, 255]
-            } else if (x + y).is_multiple_of(2) {
-                [150, 150, 140, 255]
+            let tile = if wall {
+                &look.wall
             } else {
-                [135, 135, 126, 255]
+                &look.floor[((x / PX + y / PX) % 2) as usize]
             };
+            let at = ((y % PX * PX + x % PX) * 4) as usize;
+            px.copy_from_slice(&tile[at..at + 4]);
         }
         let mut lights = LightStore::new();
         // Guards in name order, as the simulation counts them.
@@ -187,6 +263,7 @@ impl<'d> View<'d> {
             lamps,
             canvas: ground.clone(),
             ground,
+            look,
             size: (w, h),
         })
     }
@@ -201,31 +278,23 @@ impl<'d> View<'d> {
         let (w, h) = (self.size.0 as i32, self.size.1 as i32);
         self.canvas.copy_from_slice(&self.ground);
         let canvas = &mut self.canvas;
-        let mut disc = |at: Vec2, colour: [u8; 4]| {
-            // The disc's bounding box in pixels, clipped to the picture.
-            let (x0, x1) = (
-                ((at.x - 0.5) * PX as f32) as i32,
-                ((at.x + 0.5) * PX as f32) as i32,
-            );
-            let (y0, y1) = (
-                ((at.y - 0.5) * PX as f32) as i32,
-                ((at.y + 0.5) * PX as f32) as i32,
-            );
-            for y in y0.clamp(0, h)..y1.clamp(0, h) {
-                for x in x0.clamp(0, w)..x1.clamp(0, w) {
-                    let dx = (x as f32 + 0.5) / PX as f32 - at.x;
-                    let dy = (y as f32 + 0.5) / PX as f32 - at.y;
-                    if dx * dx + dy * dy < 0.4 * 0.4 {
-                        let i = ((y * w + x) * 4) as usize;
-                        canvas[i..i + 4].copy_from_slice(&colour);
-                    }
+        let mut sprite = |at: Vec2, sprite: &[u8]| {
+            // Top-left pixel of the cell-sized sprite centred on `at`; rows and columns
+            // outside the picture are skipped.
+            let x0 = ((at.x - 0.5) * PX as f32) as i32;
+            let y0 = ((at.y - 0.5) * PX as f32) as i32;
+            for (i, px) in sprite.as_chunks::<4>().0.iter().enumerate() {
+                let (x, y) = (x0 + (i as u32 % PX) as i32, y0 + (i as u32 / PX) as i32);
+                if px[3] > 0 && (0..w).contains(&x) && (0..h).contains(&y) {
+                    let at = ((y * w + x) * 4) as usize;
+                    canvas[at..at + 4].copy_from_slice(px);
                 }
             }
         };
         for &(at, _) in &pose.guards {
-            disc(at, [60, 110, 210, 255]);
+            sprite(at, &self.look.guard);
         }
-        disc(pose.intruder, [200, 60, 50, 255]);
+        sprite(pose.intruder, &self.look.intruder);
     }
 
     /// A guard's lamp: a cone from the guard along its heading.

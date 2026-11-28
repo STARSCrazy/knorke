@@ -1,7 +1,8 @@
 //! Profile `stealth`: a yard with walls, guards and an intruder, built from a scene and run
 //! by the runtime (ADR 0018).
 //!
-//! Authoring side: the component types [`Yard`], [`Guard`], [`Intruder`] and [`Lamp`] with
+//! Authoring side: the component types [`Yard`], [`Guard`], [`Intruder`], [`Lamp`] and
+//! [`Assets`] with
 //! their rules ([`registry`]). Runtime side: [`build`] turns a valid scene into a [`Sim`],
 //! a `Simulation` whose tick runs the table [`SYSTEMS`]: the intruder walks (navigation),
 //! every guard looks (perception), decides (state machine) and walks (navigation). The only
@@ -223,6 +224,33 @@ impl Component for Lamp {
     }
 }
 
+/// Asset ids of the yard's pictures and sounds (ADR 0023): the scene names them, the game
+/// loads them and hands finished data to picture and sound. The simulation never reads this.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Assets {
+    /// Floor tiles, alternating like a chessboard: `[light, dark]`.
+    pub floor: [String; 2],
+    /// Wall tile.
+    pub wall: String,
+    /// Guard sprite.
+    pub guard: String,
+    /// Intruder sprite.
+    pub intruder: String,
+    /// Looping wind.
+    pub wind: String,
+    /// One step.
+    pub step: String,
+    /// A guard spots the intruder.
+    pub alarm: String,
+    /// A guard catches the intruder.
+    pub catch: String,
+}
+
+impl Component for Assets {
+    const ID: &'static str = "knorke.stealth.assets/1";
+}
+
 /// One yard, one intruder, and every actor on a free cell of the yard.
 fn placement(scene: &Scene, out: &mut Vec<Diagnostic>) {
     let yards: Vec<_> = scene.each::<Yard>().collect();
@@ -263,6 +291,7 @@ pub fn registry() -> Registry {
         .register::<Guard>()
         .register::<Intruder>()
         .register::<Lamp>()
+        .register::<Assets>()
         .rule(placement);
     r
 }

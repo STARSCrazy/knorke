@@ -30,6 +30,19 @@
       }
     },
     "yard": {
+      "knorke.stealth.assets/1": {
+        "alarm": "sounds/alarm",
+        "catch": "sounds/catch",
+        "floor": [
+          "tiles/floor_light",
+          "tiles/floor_dark"
+        ],
+        "guard": "sprites/guard",
+        "intruder": "sprites/intruder",
+        "step": "sounds/step",
+        "wall": "tiles/wall",
+        "wind": "sounds/wind"
+      },
       "knorke.stealth.yard/1": {
         "height": 10,
         "walls": [

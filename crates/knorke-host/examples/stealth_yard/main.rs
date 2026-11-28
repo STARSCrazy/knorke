@@ -16,7 +16,10 @@
 //! swapchain texture → the host presents. Real time never reaches the simulation, only
 //! commands per tick do.
 
-// Shared with `tests/stealth_session.rs`; its `pub` items are its face there.
+// Shared with `tests/stealth_session.rs` and `tests/yard_assets.rs`; their `pub` items are
+// their face there.
+#[allow(unreachable_pub)]
+mod assets;
 #[allow(unreachable_pub)]
 mod session;
 #[cfg(feature = "audio")]
@@ -28,7 +31,7 @@ use knorke_gpu::kpak::source_checksum;
 use knorke_host::{Host, HostConfig, ShaderPackSpec};
 use knorke_input::{Button, InputEvent, Scancode};
 use knorke_integration::stealth::{Command, build, read_replay, replay_header};
-use knorke_integration::stealth_view::{PX, Pose, View};
+use knorke_integration::stealth_view::{Look, PX, Pose, View};
 use knorke_replay::{ReplayLog, verify};
 use knorke_scene::Scene;
 use knorke_types::Diagnostic;
@@ -127,6 +130,15 @@ fn main() -> Result<(), String> {
     }
 
     let sim = build(&scene).map_err(|found| format!("invalid scene: {found:#?}"))?;
+    // Before the window opens: a missing file ends the game here.
+    let files = assets::load(&assets::folder(), &scene).map_err(shown)?;
+    let [floor_light, floor_dark, wall, guard, intruder] = files.images.map(|i| i.rgba);
+    let look = Look {
+        floor: [floor_light, floor_dark],
+        wall,
+        guard,
+        intruder,
+    };
     let (w, h) = sim.world.size();
     let host = Host::new(&HostConfig {
         title: "knorke stealth yard - arrow keys walk, Escape ends".into(),
@@ -137,12 +149,12 @@ fn main() -> Result<(), String> {
     })
     .map_err(shown)?;
     let pack = host.shader_pack().unwrap_or_default().to_vec();
-    let mut view = View::new(host.gpu(), pack, &scene).map_err(shown)?;
+    let mut view = View::with_look(host.gpu(), pack, &scene, look).map_err(shown)?;
 
     let mut game = Session::new(sim, args.record.is_some().then(|| replay_header(&scene)));
     #[cfg(feature = "audio")]
     let mut sound = {
-        let (cfg, clips) = sound::Sound::device();
+        let (cfg, clips) = sound::Sound::device(files.sounds);
         sound::Sound::new(host.open_audio(cfg, clips).map_err(shown)?, &game.rt.sim)
     };
     let mut before = Pose::of(&game.rt.sim.world.actors);

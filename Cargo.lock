@@ -224,7 +224,7 @@ dependencies = [
 name = "knorke-host"
 version = "0.0.1"
 dependencies = [
- "knorke-audio",
+ "knorke-assets",
  "knorke-audio-sdl",
  "knorke-gpu",
  "knorke-input",

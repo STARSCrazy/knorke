@@ -3,19 +3,19 @@
 //! into the simulation, so a recording replays with or without it.
 //!
 //! The listener is the intruder. Its own steps sound unplaced and soft; a guard's steps,
-//! its alarm and the catch come from where the guard stands. All clips are made in code; alarm and catch with the retro synthesizer
-//! (`knorke_audio::chip`) in NES and C64 style.
+//! its alarm and the catch come from where the guard stands. The clips are files the scene
+//! names (`assets.rs`); they were rendered once from noise and the retro synthesizer
+//! (`knorke_audio::chip`, NES alarm, C64 catch).
 
-use std::f32::consts::TAU;
-
-use knorke_audio::chip::{self, Chip, Instrument, Note};
+use knorke_assets::Sound as File;
 use knorke_host::audio::{Bus, Clip, Command, Config, Listener, Output, Play, SoundId, VoiceId};
 use knorke_integration::prelude::Cell;
 use knorke_integration::stealth::{CAUGHT, Event, Sim};
-use knorke_math::{At, Vec2, World2, det};
+use knorke_math::{At, Vec2, World2};
 use knorke_types::EventCursor;
 
 const RATE: u32 = 48_000;
+/// Slots of `clips` in [`Sound::device`]: the order of `assets::Loaded::sounds`.
 const WIND: SoundId = SoundId(0);
 const STEP: SoundId = SoundId(1);
 const ALARM: SoundId = SoundId(2);
@@ -33,13 +33,19 @@ pub(crate) struct Sound {
 }
 
 impl Sound {
-    /// The mixer settings and clips the host opens the device with.
-    pub(crate) fn device() -> (Config, Vec<Clip>) {
+    /// The mixer settings and clips the host opens the device with; `files` are wind, step,
+    /// alarm and catch.
+    pub(crate) fn device(files: [File; 4]) -> (Config, Vec<Clip>) {
         let cfg = Config {
             rate: RATE,
             ..Config::default()
         };
-        (cfg, vec![wind(), step(), alarm(), catch()])
+        let clips = files.map(|f| Clip {
+            samples: f.samples,
+            rate: f.rate,
+            stereo: f.stereo,
+        });
+        (cfg, clips.into())
     }
 
     /// Starts the wind; `out` is the device the host opened with [`Sound::device`].
@@ -130,102 +136,4 @@ impl Sound {
 
 fn at(c: Cell) -> At<World2, Vec2> {
     At::new(Vec2::new(c.x as f32, c.y as f32))
-}
-
-/// Deterministic white noise in `-1..=1`.
-struct Noise(u32);
-
-impl Noise {
-    fn next(&mut self) -> f32 {
-        self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        (self.0 >> 8) as f32 / (1u32 << 23) as f32 - 1.0
-    }
-}
-
-fn mono(samples: Vec<f32>) -> Clip {
-    Clip {
-        samples,
-        rate: RATE,
-        stereo: false,
-    }
-}
-
-/// Four seconds of night wind: heavily smoothed noise that swells twice, as a loop.
-fn wind() -> Clip {
-    let n = 4 * RATE as usize;
-    let (mut noise, mut lp) = (Noise(3), 0.0f32);
-    mono(
-        (0..n)
-            .map(|i| {
-                lp += 0.02 * (noise.next() - lp);
-                let swell = 0.6 + 0.4 * det::sin(TAU * 2.0 * i as f32 / n as f32);
-                3.0 * lp * swell
-            })
-            .collect(),
-    )
-}
-
-/// A soft step on gravel: a short burst of dull noise.
-fn step() -> Clip {
-    let n = RATE as usize / 12;
-    let (mut noise, mut lp, mut env) = (Noise(11), 0.0f32, 1.0f32);
-    mono(
-        (0..n)
-            .map(|_| {
-                lp += 0.3 * (noise.next() - lp);
-                env *= 0.9992;
-                lp * env
-            })
-            .collect(),
-    )
-}
-
-/// The guard has seen you: a fast rising NES arpeggio, played twice (pulse 12.5 %).
-fn alarm() -> Clip {
-    let e = RATE / 10;
-    let notes = [0, 1].map(|k| Note {
-        at: k * 2 * e,
-        len: e,
-        key: 81,
-        instrument: 0,
-        gain: 1.0,
-    });
-    let inst = Instrument {
-        arp: [0, 4, 7, 12],
-        arp_hz: 60.0,
-        ..Instrument::pulse(0.125)
-    };
-    clip(&Chip::NES, &[inst], &notes, 4 * e)
-}
-
-/// Caught: a C64 saw bass that slides down, under a short noise hit.
-fn catch() -> Clip {
-    let notes = [
-        Note {
-            at: 0,
-            len: RATE * 3 / 4,
-            key: 52,
-            instrument: 0,
-            gain: 1.0,
-        },
-        Note {
-            at: 0,
-            len: RATE / 10,
-            key: 60,
-            instrument: 1,
-            gain: 1.0,
-        },
-    ];
-    let slide = Instrument {
-        slide: -14.0,
-        gain: 0.6,
-        ..Instrument::sid_bass()
-    };
-    clip(&Chip::C64, &[slide, Instrument::noise(false)], &notes, RATE)
-}
-
-fn clip(style: &Chip, insts: &[Instrument], notes: &[Note], frames: u32) -> Clip {
-    let mut samples = vec![0.0; frames as usize];
-    chip::render(style, insts, notes, RATE, &mut samples);
-    mono(samples)
 }

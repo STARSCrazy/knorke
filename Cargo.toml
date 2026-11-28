@@ -67,6 +67,7 @@ knorke-audio = { path = "crates/knorke-audio", version = "0.0.1" }
 knorke-input = { path = "crates/knorke-input", version = "0.0.1" }
 knorke-audio-sdl = { path = "crates/knorke-audio-sdl", version = "0.0.1" }
 png = "0.17"
+knorke-assets = { path = "crates/knorke-assets", version = "0.0.1" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

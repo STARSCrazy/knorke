@@ -1,6 +1,6 @@
 # ADR 0023: Kleines Asset-System – Bilder und Klänge über IDs aus einem Ordner
 
-Status: angenommen, Schritte 1–3 umgesetzt (2026-11-28), Schritt 4 offen · Datum: 2026-11-28 · Bezug: ADR 0001, 0003, 0010, 0020, 0022, Plan 17.2 (Dateipfade/Assets), Plan 17 (Asset-System), Einschätzung 2026-11-28 Punkt A2
+Status: angenommen, umgesetzt (2026-11-28) · Datum: 2026-11-28 · Bezug: ADR 0001, 0003, 0010, 0020, 0022, Plan 17.2 (Dateipfade/Assets), Plan 17 (Asset-System), Einschätzung 2026-11-28 Punkt A2
 
 ## Kontext
 
@@ -35,6 +35,12 @@ Hinweis: Parallel überarbeitet ein anderer Chat den Ton (`knorke-audio`, Chip-K
 4. **Stealth-Hof nutzt Dateien.** Ein Ordner `knorke-integration/assets/` mit mindestens einem Bild und den Klängen des Hofs; das Beispiel lädt sie über IDs statt sie im Code zu rechnen. Erst nach dem Ton-Chat, weil dieselbe Datei betroffen ist.
    Fertig, wenn: die Szene ihre Bilder und Klänge über IDs aus dem Ordner bekommt und das Beispiel bei einem umbenannten Asset mit `knorke.assets.missing` abbricht statt still weiterzulaufen.
 5. **Abschluss.** Volle Prüfliste aus `CLAUDE.md`, Plan 16 und 17 nachtragen, ADR auf „angenommen“.
+
+## Umsetzung (2026-11-28)
+
+- Schritte 1–3: `knorke-assets` mit `AssetId`, `Folder`, PNG und eigenem WAV-Leser; Regeln in `xtask/src/deps.rs`.
+- Schritt 4: Komponente `knorke.stealth.assets/1` (am Entity `yard`) nennt fünf Bilder und vier Klänge. `stealth_view::Look` hält die Kacheln; `View::with_look` nimmt sie, `View::new` nimmt `Look::plain()` (Werkzeuge ohne Asset-Ordner, z. B. das Bild der Agenten-Kommandozeile). Die Dateien in `knorke-integration/assets/` wurden einmal aus dem bisherigen Code erzeugt: Bild bitgleich (alle Referenzbilder unverändert), Klang als 16-Bit-PCM. Das Beispiel `stealth_yard` lädt sie vor dem Öffnen des Fensters; Test `knorke-host/tests/yard_assets.rs` (umbenannte Datei → `missing`), von Hand geprüft: `Wall.png` → `knorke.assets.case`, Abbruch.
+- Nicht gemacht: Prüfregel im Profil für fehlende IDs (Entscheidung 6 sagt „kann“); die Simulation bleibt ohne Assets.
 
 ## Entschiedene Fragen (Manuel, 2026-11-28)
 
