@@ -150,6 +150,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "knorke-assets"
+version = "0.0.1"
+dependencies = [
+ "knorke-types",
+ "png",
+]
+
+[[package]]
 name = "knorke-audio"
 version = "0.0.1"
 dependencies = [

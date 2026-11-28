@@ -1,6 +1,6 @@
 # ADR 0023: Kleines Asset-System – Bilder und Klänge über IDs aus einem Ordner
 
-Status: Vorschlag · Datum: 2026-11-28 · Bezug: ADR 0001, 0003, 0010, 0020, 0022, Plan 17.2 (Dateipfade/Assets), Plan 17 (Asset-System), Einschätzung 2026-11-28 Punkt A2
+Status: angenommen, Schritte 1–3 umgesetzt (2026-11-28), Schritt 4 offen · Datum: 2026-11-28 · Bezug: ADR 0001, 0003, 0010, 0020, 0022, Plan 17.2 (Dateipfade/Assets), Plan 17 (Asset-System), Einschätzung 2026-11-28 Punkt A2
 
 ## Kontext
 

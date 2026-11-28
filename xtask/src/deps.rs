@@ -300,6 +300,21 @@ const RULES: &[Rule] = &[
         through: &[],
         why: "the host reaches the GPU only through knorke-gpu; SDL3 is allowed for window and events (ADR 0022)",
     },
+    // ADR 0023: games, examples, tests and tools load assets; modules get finished data.
+    Rule {
+        from: &["knorke-*"],
+        to: &["knorke-assets"],
+        except: &["knorke-assets"],
+        through: &[],
+        why: "no module loads files; games hand finished images and sounds over (ADR 0023)",
+    },
+    Rule {
+        from: &["knorke-assets"],
+        to: &["*"],
+        except: &["knorke-assets", "knorke-types", "png"],
+        through: &["png"],
+        why: "the asset folder fits foreign projects: knorke-types and png only (ADR 0023)",
+    },
     // Foundation crates: every module depends on them, so their dependency trees are
     // closed lists (ADR 0006). Adding an entry needs an ADR change.
     Rule {
@@ -876,6 +891,34 @@ mod tests {
             ],
         );
         assert!(violations(&ok).is_empty(), "{:?}", violations(&ok));
+    }
+
+    #[test]
+    fn assets_stay_outside_modules() {
+        // knorke-ai -> knorke-assets and knorke-assets -> serde are forbidden; png's own
+        // dependencies (miniz_oxide) are png's business.
+        let m = meta(
+            &["knorke-ai", "knorke-assets"],
+            vec![
+                node("knorke-ai", &[("knorke-assets", "normal")]),
+                node("knorke-assets", &[("png", "normal"), ("serde", "normal")]),
+                node("png", &[("miniz_oxide", "normal")]),
+                node("miniz_oxide", &[]),
+                node("serde", &[]),
+            ],
+            &["knorke-ai", "knorke-assets", "png", "miniz_oxide", "serde"],
+        );
+        let v = violations(&m);
+        assert!(
+            v.iter()
+                .any(|l| l.starts_with("knorke-ai -> knorke-assets")),
+            "{v:?}"
+        );
+        assert!(
+            v.iter().any(|l| l.starts_with("knorke-assets -> serde")),
+            "{v:?}"
+        );
+        assert!(!v.iter().any(|l| l.contains("miniz_oxide")), "{v:?}");
     }
 
     #[test]
