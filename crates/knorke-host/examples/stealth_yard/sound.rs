@@ -3,10 +3,12 @@
 //! into the simulation, so a recording replays with or without it.
 //!
 //! The listener is the intruder. Its own steps sound unplaced and soft; a guard's steps,
-//! its alarm and the catch come from where the guard stands. All clips are made in code.
+//! its alarm and the catch come from where the guard stands. All clips are made in code; alarm and catch with the retro synthesizer
+//! (`knorke_audio::chip`) in NES and C64 style.
 
 use std::f32::consts::TAU;
 
+use knorke_audio::chip::{self, Chip, Instrument, Note};
 use knorke_host::audio::{Bus, Clip, Command, Config, Listener, Output, Play, SoundId, VoiceId};
 use knorke_integration::prelude::Cell;
 use knorke_integration::stealth::{CAUGHT, Event, Sim};
@@ -178,36 +180,52 @@ fn step() -> Clip {
     )
 }
 
-/// Two quick high beeps: the guard has seen you.
+/// The guard has seen you: a fast rising NES arpeggio, played twice (pulse 12.5 %).
 fn alarm() -> Clip {
-    let beep = RATE as usize / 8;
-    mono(
-        (0..3 * beep)
-            .map(|i| {
-                let on = i < beep || i >= 2 * beep;
-                let f = if i < beep { 880.0 } else { 1175.0 };
-                if on {
-                    0.5 * det::sin(TAU * f * i as f32 / RATE as f32)
-                } else {
-                    0.0
-                }
-            })
-            .collect(),
-    )
+    let e = RATE / 10;
+    let notes = [0, 1].map(|k| Note {
+        at: k * 2 * e,
+        len: e,
+        key: 81,
+        instrument: 0,
+        gain: 1.0,
+    });
+    let inst = Instrument {
+        arp: [0, 4, 7, 12],
+        arp_hz: 60.0,
+        ..Instrument::pulse(0.125)
+    };
+    clip(&Chip::NES, &[inst], &notes, 4 * e)
 }
 
-/// A low falling tone: caught.
+/// Caught: a C64 saw bass that slides down, under a short noise hit.
 fn catch() -> Clip {
-    let n = RATE as usize;
-    let (mut phase, mut env) = (0.0f32, 1.0f32);
-    mono(
-        (0..n)
-            .map(|i| {
-                let f = 330.0 - 200.0 * (i as f32 / n as f32);
-                phase = (phase + TAU * f / RATE as f32) % TAU;
-                env *= 0.99995;
-                0.7 * env * (det::sin(phase) + 0.3 * det::sin(3.0 * phase))
-            })
-            .collect(),
-    )
+    let notes = [
+        Note {
+            at: 0,
+            len: RATE * 3 / 4,
+            key: 52,
+            instrument: 0,
+            gain: 1.0,
+        },
+        Note {
+            at: 0,
+            len: RATE / 10,
+            key: 60,
+            instrument: 1,
+            gain: 1.0,
+        },
+    ];
+    let slide = Instrument {
+        slide: -14.0,
+        gain: 0.6,
+        ..Instrument::sid_bass()
+    };
+    clip(&Chip::C64, &[slide, Instrument::noise(false)], &notes, RATE)
+}
+
+fn clip(style: &Chip, insts: &[Instrument], notes: &[Note], frames: u32) -> Clip {
+    let mut samples = vec![0.0; frames as usize];
+    chip::render(style, insts, notes, RATE, &mut samples);
+    mono(samples)
 }

@@ -154,6 +154,7 @@ name = "knorke-audio"
 version = "0.0.1"
 dependencies = [
  "knorke-math",
+ "oplon",
 ]
 
 [[package]]
@@ -215,6 +216,7 @@ dependencies = [
 name = "knorke-host"
 version = "0.0.1"
 dependencies = [
+ "knorke-audio",
  "knorke-audio-sdl",
  "knorke-gpu",
  "knorke-input",
@@ -405,6 +407,12 @@ name = "mint"
 version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e53debba6bda7a793e5f99b8dacf19e626084f525f7829104ba9898f367d85ff"
+
+[[package]]
+name = "oplon"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0df1044d4a29bc6db30e653b263b80599bcb4f15c0c0e2c61f9ac32f71d58de3"
 
 [[package]]
 name = "png"

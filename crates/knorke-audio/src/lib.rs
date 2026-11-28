@@ -23,6 +23,7 @@
 //! ([`Command::Filter`]) and a bus that ducks under another one by itself ([`Command::Duck`]).
 
 mod bus;
+pub mod chip;
 mod echo;
 mod mixer;
 mod ramp;

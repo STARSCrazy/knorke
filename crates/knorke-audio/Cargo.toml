@@ -7,8 +7,17 @@ license.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# Real AdLib/Sound Blaster sound: the OPL2/OPL3 emulator `oplon` (MIT, no_std, integer only).
+opl = ["dep:oplon"]
+
 [dependencies]
 knorke-math = { workspace = true }
+oplon = { workspace = true, optional = true }
+
+[[example]]
+name = "chiptune"
+required-features = ["opl"]
 
 [lints]
 workspace = true

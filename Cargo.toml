@@ -61,6 +61,7 @@ sdl3-sys = { version = "0.7.3", default-features = false, features = ["debug-imp
 knorke-light2d = { path = "crates/knorke-light2d", version = "0.0.1" }
 knorke-integration = { path = "crates/knorke-integration", version = "0.0.1" }
 knorke-post = { path = "crates/knorke-post", version = "0.0.1" }
+oplon = { version = "1.0.0", default-features = false }
 knorke-audio = { path = "crates/knorke-audio", version = "0.0.1" }
 knorke-input = { path = "crates/knorke-input", version = "0.0.1" }
 knorke-audio-sdl = { path = "crates/knorke-audio-sdl", version = "0.0.1" }

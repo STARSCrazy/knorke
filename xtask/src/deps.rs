@@ -128,9 +128,10 @@ const RULES: &[Rule] = &[
             "bytemuck",
             "mint",
             "libm",
+            "oplon",
         ],
         through: &[],
-        why: "knorke-audio is a device-free mixer on knorke-math only; device, thread and queue are the host's (ADR 0020)",
+        why: "knorke-audio is a device-free mixer on knorke-math only (plus the optional, dependency-free OPL emulator oplon); device, thread and queue are the host's (ADR 0020)",
     },
     // ADR 0020: the host side of audio knows no engine crate beyond the mixer.
     Rule {
