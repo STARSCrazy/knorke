@@ -27,6 +27,8 @@
 //! from flow fields; [`debug`] holds
 //! everything trace related.
 
+#[cfg(feature = "pixel")]
+pub mod daylight;
 #[cfg(feature = "gpu")]
 pub mod layers;
 #[cfg(feature = "gpu")]

@@ -41,6 +41,40 @@ impl Default for Camera {
     }
 }
 
+impl Camera {
+    /// Where `p` lies seen from above: (depth ahead along the turn, offset to the right). Pitch is
+    /// ignored, so a tilting camera does not change which upright things (sprites, wall pictures)
+    /// count as "too near" or "beside the view"; the host picks the limits.
+    pub fn ground_offset(&self, p: Vec3) -> (f32, f32) {
+        let (sy, cy) = self.yaw.sin_cos();
+        let (dx, dz) = (p.x - self.position.x, p.z - self.position.z);
+        (dx * sy - dz * cy, dx * cy + dz * sy)
+    }
+
+    /// The camera between `from` (t = 0) and `to` (t = 1), eased out (fast start, soft stop), for a
+    /// step or a turn shown over a few frames. Yaw takes the short way round; field of view, near
+    /// plane and lens shift come from `to`. The host owns the frame count and the timing.
+    pub fn glide(from: &Camera, to: &Camera, t: f32) -> Camera {
+        use core::f32::consts::{PI, TAU};
+        let t = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        let k = 1.0 - (1.0 - t) * (1.0 - t);
+        let mut turn = (to.yaw - from.yaw).rem_euclid(TAU);
+        if turn > PI {
+            turn -= TAU;
+        }
+        Camera {
+            position: from.position + (to.position - from.position) * k,
+            yaw: from.yaw + turn * k,
+            pitch: from.pitch + (to.pitch - from.pitch) * k,
+            ..*to
+        }
+    }
+}
+
 /// Camera basis and projection for one frame.
 #[derive(Clone, Copy, Debug)]
 pub struct View {
@@ -133,5 +167,54 @@ impl View {
         let sx = (x as f32 + 0.5 - self.cx) / self.focal;
         let sy = (self.cy - (y as f32 + 0.5)) / self.focal;
         (self.forward + self.right * sx + self.up * sy).normalized()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::f32::consts::{FRAC_PI_2, PI};
+
+    fn near(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn ground_offset_follows_the_turn() {
+        // Yaw 0 looks north (-z): a point to the north is ahead, one to the east is on the right.
+        let cam = Camera::default();
+        let (d, l) = cam.ground_offset(Vec3::new(0.0, 5.0, -2.0));
+        assert!(near(d, 2.0) && near(l, 0.0));
+        let (d, l) = cam.ground_offset(Vec3::new(3.0, 0.0, 0.0));
+        assert!(near(d, 0.0) && near(l, 3.0));
+        // Turned right to face east: east is ahead, south on the right; pitch changes nothing.
+        let cam = Camera {
+            yaw: FRAC_PI_2,
+            pitch: 0.7,
+            ..cam
+        };
+        let (d, l) = cam.ground_offset(Vec3::new(3.0, 0.0, 1.0));
+        assert!(near(d, 3.0) && near(l, 1.0));
+    }
+
+    #[test]
+    fn glide_ends_on_target_eases_out_and_turns_the_short_way() {
+        let from = Camera {
+            yaw: PI - 0.1,
+            ..Camera::default()
+        };
+        let to = Camera {
+            position: Vec3::new(2.0, 0.0, 0.0),
+            yaw: -PI + 0.1,
+            fov_y: 90.0,
+            ..Camera::default()
+        };
+        let start = Camera::glide(&from, &to, 0.0);
+        assert!(near(start.position.x, 0.0) && near(start.yaw, from.yaw) && start.fov_y == 90.0);
+        let end = Camera::glide(&from, &to, 1.0);
+        assert!(near(end.position.x, 2.0) && near(end.yaw, PI + 0.1));
+        // Halfway in time is three quarters of the way: fast start, soft stop.
+        assert!(near(Camera::glide(&from, &to, 0.5).position.x, 1.5));
+        assert!(near(Camera::glide(&from, &to, f32::NAN).position.x, 2.0));
     }
 }
