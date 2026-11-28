@@ -1072,7 +1072,7 @@ Ziel (Manuel, 2026-11-27): pixelraum (`knorke-render` + `knorke-lighting`) wird 
 | 3D-1 | Szenenmodell aus `knorke-render` herauslösen, Meshes gleichberechtigt | läuft (Entwurf) |
 | 3D-2 | GPU-Raster derselben Szene, danach `knorke-post`, Vergleich gegen CPU-Goldens | offen |
 | 3D-3 | GPU-Licht mit Schattenkarten, Materialien, Nebel, Pixel-Look auf der GPU | offen |
-| 3D-4 | Wizardry 7 auf Knorke (C-ABI `knorke-abi`, 17.1) | offen |
+| 3D-4 | Wizardry 7 auf Knorke (C-ABI `knorke-abi`, 17.1) | erledigt 2026-11-28 über `knorke-pixel-c` (ADR 0024); `knorke-abi` offen |
 | 3D-5 | Shooter-Grundlagen (Kollision 17.8, Sichtbarkeit, Animation 17.4, Maus), Demo | offen |
 | – | CPU-Bild an `knorke-post` geben | verworfen 2026-11-27 – Post braucht ohnehin die GPU, also gleich alles auf der GPU (ADR 0021) |
 | – | Lichtzeilen (ADR 0019) als Sonderweg für reine Gitter-Welten | offen – nur nach Messung |
@@ -1090,7 +1090,8 @@ Ziel (Manuel, 2026-11-27): pixelraum (`knorke-render` + `knorke-lighting`) wird 
 | Einzelne auffällige Texel glätten (`despeckle`), Farbangleich ferner Detailstufen | offen – erst bei einem zweiten Nutzer |
 | Türen, Tore, Türrahmen, Bögen, Bäume/Gras, Himmel, Abgreifen der Originalgrafik | verworfen für die Engine: Gestaltung des Spiels |
 | C-Schnittstelle als Ersatz für `pixelraum.h` (ADR 0024): `bindings/knorke-pixel-c`, gleiche `pr_*`-API; ohne Licht/Nebel/Mischung bytegleich zu pixelraum (`tests/parity.rs`), mit Licht anders (lineares Licht, ADR 0013), von Manuel 2026-11-28 angenommen | erledigt 2026-11-28 |
-| Wizardry-Build auf `knorke-pixel-c` umstellen, danach pixelraum archivieren; `pr_emitter_set` ist noch ohne Wirkung | geplant (Wizardry-Sitzung) |
+| Wizardry-Build auf `knorke-pixel-c` umgestellt (wizardry7 `9e1f82c0`, Fackel an lineares Licht angepasst), pixelraum nach `D:\Entwicklung\_Archiv\pixelraum` | erledigt 2026-11-28 |
+| `pr_emitter_set` ohne Wirkung (`Renderer::set_emitter` fehlt in `knorke-render`); einzelne `// SAFETY:`-Kommentare in `knorke-pixel-c` fehlen | offen |
 
 ### 17.15 Einschätzung und Arbeitsliste (2026-11-28)
 
