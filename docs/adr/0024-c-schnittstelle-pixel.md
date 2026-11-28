@@ -14,7 +14,7 @@ ADR 0005 Punkt 6 sagt: Bindings sind Randpakete, sie werden neu entworfen und ni
 
 1. **Neues Randpaket `knorke-pixel-c`** unter `bindings/knorke-pixel-c/`, also nicht unter `crates/`. Es ist ein Workspace-Mitglied mit `crate-type = ["staticlib", "rlib"]` und baut auf `knorke-integration` (Feature `pixel`) auf.
 2. **Erst kompatibel, dann neu entwerfen.** Die erste Fassung bietet dieselbe C-API wie pixelraum: gleiche Namen (`pr_*`), gleiche Strukturen, gleicher Header `include/pixelraum.h`, gleiche Versionsprüfung. Wizardry stellt damit nur den Pfad im Build um. Das ist eine bewusste Ausnahme von ADR 0005 Punkt 6, weil es mit Wizardry einen echten Nutzer gibt. Ein Neuentwurf (`knorke-abi`, Plan 17.1) folgt erst, wenn ein zweiter Nutzer da ist.
-3. **Nachweis:** Die Tests aus `capi.rs` werden mit übernommen. Zusätzlich gibt es einen Vergleich: Wizardry-Szenen sollen mit Knorke dieselben Pixel liefern wie mit pixelraum.
+3. **Nachweis:** Die Tests aus `capi.rs` werden mit übernommen. Ohne Licht, Nebel und Mischung sind die Bilder bytegleich zu pixelraum (`tests/parity.rs`). Mit Licht rechnet Knorke in linearem Licht (ADR 0013), deshalb weichen die Bilder dann ab. Manuel hat das am 2026-11-28 angenommen und beurteilt es an Vorher-nachher-Bildern aus Wizardry.
 4. **`unsafe`** ist nur in diesem Paket erlaubt (FFI-Grenze, ADR 0005): Lint-Tabelle mit `deny`, lokales `allow` am FFI-Modul, jede Stelle mit `// SAFETY:`.
 5. **Abhängigkeitsregel:** Kein Workspace-Paket hängt von `knorke-pixel-c` ab (`xtask deps`).
 
