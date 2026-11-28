@@ -219,6 +219,7 @@ dependencies = [
  "knorke-gpu",
  "knorke-input",
  "knorke-integration",
+ "knorke-math",
  "knorke-replay",
  "knorke-runtime",
  "knorke-scene",
