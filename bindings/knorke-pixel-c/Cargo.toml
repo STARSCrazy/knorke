@@ -1,0 +1,24 @@
+[package]
+name = "knorke-pixel-c"
+description = "C interface of the pixel renderer (knorke-integration::pixel), drop-in for pixelraum's pixelraum.h (ADR 0024). Edge package: nothing in the workspace depends on it."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+knorke-integration = { workspace = true, default-features = false, features = ["pixel"] }
+
+# Own lint table instead of `workspace = true`: identical, except that `unsafe_code` is
+# `deny` (FFI boundary, ADR 0005/0024); the FFI module allows it locally.
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

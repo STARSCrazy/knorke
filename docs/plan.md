@@ -1089,7 +1089,8 @@ Ziel (Manuel, 2026-11-27): pixelraum (`knorke-render` + `knorke-lighting`) wird 
 | Gruben, Leitern, Treppen: allgemeiner Teil (Stockwerke, Boden-/Deckenhöhen, Stufen, Türarten) | war schon da (`GridMap::with_levels`, `Span`, `DOOR_*`) |
 | Einzelne auffällige Texel glätten (`despeckle`), Farbangleich ferner Detailstufen | offen – erst bei einem zweiten Nutzer |
 | Türen, Tore, Türrahmen, Bögen, Bäume/Gras, Himmel, Abgreifen der Originalgrafik | verworfen für die Engine: Gestaltung des Spiels |
-| C-Schnittstelle als Ersatz für `pixelraum.h`, dann Wizardry-Build umstellen und pixelraum archivieren | geplant (3D-4, `knorke-abi`) |
+| C-Schnittstelle als Ersatz für `pixelraum.h` (ADR 0024): `bindings/knorke-pixel-c`, gleiche `pr_*`-API; ohne Licht/Nebel/Mischung bytegleich zu pixelraum (`tests/parity.rs`), mit Licht anders (lineares Licht, ADR 0013), von Manuel 2026-11-28 angenommen | erledigt 2026-11-28 |
+| Wizardry-Build auf `knorke-pixel-c` umstellen, danach pixelraum archivieren; `pr_emitter_set` ist noch ohne Wirkung | geplant (Wizardry-Sitzung) |
 
 ### 17.15 Einschätzung und Arbeitsliste (2026-11-28)
 

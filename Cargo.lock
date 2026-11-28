@@ -326,6 +326,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "knorke-pixel-c"
+version = "0.0.1"
+dependencies = [
+ "knorke-integration",
+]
+
+[[package]]
 name = "knorke-post"
 version = "0.0.1"
 dependencies = [

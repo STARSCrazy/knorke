@@ -315,6 +315,14 @@ const RULES: &[Rule] = &[
         through: &["png"],
         why: "the asset folder fits foreign projects: knorke-types and png only (ADR 0023)",
     },
+    // ADR 0024: the C interface is an edge package; Rust code uses knorke-integration directly.
+    Rule {
+        from: &["*"],
+        to: &["knorke-pixel-c"],
+        except: &["knorke-pixel-c"],
+        through: &[],
+        why: "the C interface is an edge package for C hosts; nothing in the workspace depends on it (ADR 0024)",
+    },
     // Foundation crates: every module depends on them, so their dependency trees are
     // closed lists (ADR 0006). Adding an entry needs an ADR change.
     Rule {
@@ -437,7 +445,8 @@ pub(crate) fn workspace_libraries(meta: &Value) -> Vec<String> {
                     .as_array()
                     .into_iter()
                     .flatten()
-                    .any(|k| k.as_str() == Some("lib"))
+                    // "rlib": bindings declare crate-type ["staticlib", "rlib"]
+                    .any(|k| matches!(k.as_str(), Some("lib" | "rlib")))
             })
         })
         .filter_map(|p| p["name"].as_str().map(str::to_owned))
@@ -919,6 +928,30 @@ mod tests {
             "{v:?}"
         );
         assert!(!v.iter().any(|l| l.contains("miniz_oxide")), "{v:?}");
+    }
+
+    #[test]
+    fn nothing_depends_on_the_c_interface() {
+        // knorke-host -> knorke-pixel-c is forbidden; knorke-pixel-c -> knorke-integration is fine.
+        let m = meta(
+            &["knorke-host", "knorke-pixel-c", "knorke-integration"],
+            vec![
+                node("knorke-host", &[("knorke-pixel-c", "normal")]),
+                node("knorke-pixel-c", &[("knorke-integration", "normal")]),
+                node("knorke-integration", &[]),
+            ],
+            &["knorke-host", "knorke-pixel-c", "knorke-integration"],
+        );
+        let v = violations(&m);
+        assert!(
+            v.iter()
+                .any(|l| l.starts_with("knorke-host -> knorke-pixel-c")),
+            "{v:?}"
+        );
+        assert!(
+            !v.iter().any(|l| l.starts_with("knorke-pixel-c ->")),
+            "{v:?}"
+        );
     }
 
     #[test]
