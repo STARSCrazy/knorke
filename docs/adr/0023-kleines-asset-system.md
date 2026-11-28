@@ -36,7 +36,7 @@ Hinweis: Parallel überarbeitet ein anderer Chat den Ton (`knorke-audio`, Chip-K
    Fertig, wenn: die Szene ihre Bilder und Klänge über IDs aus dem Ordner bekommt und das Beispiel bei einem umbenannten Asset mit `knorke.assets.missing` abbricht statt still weiterzulaufen.
 5. **Abschluss.** Volle Prüfliste aus `CLAUDE.md`, Plan 16 und 17 nachtragen, ADR auf „angenommen“.
 
-## Offene Fragen an Manuel
+## Entschiedene Fragen (Manuel, 2026-11-28)
 
-1. **WAV selbst lesen oder Crate `hound`?** Vorschlag: selbst lesen. Das sind etwa 100 Zeilen, PCM ist einfach, und es kommt keine Abhängigkeit dazu. Mit `hound` wäre es weniger eigener Code, dafür eine Abhängigkeit mehr.
-2. **IDs aus Dateinamen oder aus einer Liste (`assets.json`)?** Vorschlag: aus Dateinamen (Entscheidung 2). Das ist einfacher und hat nichts, was veralten kann. Eine Liste lohnt erst, wenn Assets Zusatzdaten brauchen (z. B. Sprite-Raster, Lautstärke).
+1. **WAV wird selbst gelesen**, ohne die Crate `hound`. Das sind etwa 100 Zeilen, PCM ist einfach, und es kommt keine Abhängigkeit dazu.
+2. **IDs kommen aus den Dateinamen** (Entscheidung 2), es gibt keine Liste (`assets.json`). Das ist einfacher, und nichts kann veralten. Eine Liste lohnt erst, wenn Assets Zusatzdaten brauchen (z. B. Sprite-Raster, Lautstärke).

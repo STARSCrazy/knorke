@@ -653,7 +653,7 @@ Entscheidungen aus Gesprächen:
 | **GPU-Timings** | offen | SDL3-GPU-Möglichkeiten prüfen (ADR 0007) |
 | **Hot-Reload** von Assets, Shadern, Parametern | geplant | mit `knorke-scene`, Anwendung an Sync-Punkten |
 | **Entity-Relationen** („Kind von“, „zielt auf“) als eigene Struktur | offen | bei Bedarf in KI/Szenengraph |
-| **Kleines Asset-System** (Einschätzung A2): PNG und WAV über Asset-IDs aus einem Ordner, genaue Schreibweise auf allen Systemen, synchron beim Start, Diagnosen `knorke.assets.*` | vorbereitet (ADR 0023, Vorschlag, 2026-11-28); zwei offene Fragen an Manuel (eigener WAV-Leser oder `hound`; IDs aus Dateinamen oder Liste) | nächster Schritt nach ADR 0022; Schritt 4 erst nach dem laufenden Ton-Chat |
+| **Kleines Asset-System** (Einschätzung A2): PNG und WAV über Asset-IDs aus einem Ordner, genaue Schreibweise auf allen Systemen, synchron beim Start, Diagnosen `knorke.assets.*` | vorbereitet (ADR 0023, Vorschlag, 2026-11-28); entschieden: eigener WAV-Leser, IDs aus Dateinamen | nächster Schritt nach ADR 0022; Schritt 4 erst nach dem laufenden Ton-Chat |
 | **Asset-System** (asynchrones Laden, Referenzzählung, Streaming) | geplant | Phase 3 mit `knorke-scene`, baut auf den IDs aus ADR 0023 auf |
 | **Frame-Scratch-Allocator** | offen | nur wenn Messungen zeigen, dass Host-Puffer nicht reichen |
 | **`knorke-abi`** (`repr(C)`-Slice-/Strided-Views für C/C#/WASM) | offen | erster FFI-Verbraucher |
