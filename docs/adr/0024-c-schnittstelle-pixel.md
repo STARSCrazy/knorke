@@ -22,4 +22,5 @@ ADR 0005 Punkt 6 sagt: Bindings sind Randpakete, sie werden neu entworfen und ni
 
 - Nach der Umstellung von Wizardry wird pixelraum nach `D:\Entwicklung\_Archiv` verschoben.
 - Die C-API ist eingefroren, bis `knorke-abi` kommt. Neue Funktionen bekommt sie nur, wenn Wizardry sie braucht.
+- **Linken unter Windows (MinGW):** Neben der Bibliothek muss der C-Host auch `synchronization` linken, denn die Rust-Standardbibliothek braucht `WaitOnAddress`/`WakeByAddress*`. Pixelraum brauchte das nicht. Festgestellt bei der Umstellung von Wizardry am 2026-11-28.
 - Herkunft im Code: pixelraum @ `81927d8`, `src/capi.rs`, `include/pixelraum.h` (MIT).
