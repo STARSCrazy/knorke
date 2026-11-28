@@ -1,6 +1,6 @@
 # ADR 0022: Fenster, Echtzeit-Schleife und Eingabe auf SDL3 – der Host als oberste, abnehmbare Schicht
 
-Status: Vorschlag · Datum: 2026-11-28 · Bezug: ADR 0001, 0002, 0003, 0008, 0009, 0010, 0014, 0020, 0021, Plan 17.1, Einschätzung 2026-11-28 Punkt A1
+Status: angenommen (umgesetzt 2026-11-28, Schritte 1–8) · Datum: 2026-11-28 · Bezug: ADR 0001, 0002, 0003, 0008, 0009, 0010, 0014, 0020, 0021, Plan 17.1, Einschätzung 2026-11-28 Punkt A1
 
 ## Kontext
 
@@ -103,7 +103,7 @@ Dazu `cargo xtask standalone`: `knorke-input` (ohne Features) und `knorke-host` 
    Fertig, wenn: ein Beispiel ein Fenster öffnet, Tasten als `InputEvent` protokolliert und sich sauber schließt. Ein Test ohne Video-Treiber (`SDL_VIDEO_DRIVER=dummy`) prüft die Übersetzung.
 4. **Gerät, Swapchain, Shader-Paket.** Gerät am Fenster, Paket aus `KNORKE_SHADER_DIR` bzw. neben der Binary, Prüfsumme, Diagnostics mit den Codes aus Entscheidung 6. Präsentieren nur im Host.
    Fertig, wenn: das Fenster eine Löschfarbe zeigt (linear, sRGB einmal am Ende), ein fehlendes oder veraltetes Paket die passende `Diagnostic` liefert und kein Programm `test_support` einschaltet (Regel 7 grün).
-5. **Stealth-Hof im Fenster.** `stealth_view` zeichnet in ein geliehenes Ziel. Das Stealth-Profil bekommt ein semantisches `Command::Step(Dir)`. Das Beispiel `knorke-host/examples/stealth_yard.rs` (Dev-Abhängigkeiten auf `knorke-integration`, `knorke-runtime`) besitzt die Schleife: Pfeiltasten → `Bindings` → `Step` → `Runtime::frame`.
+5. **Stealth-Hof im Fenster.** `stealth_view` zeichnet in ein geliehenes Ziel. Das Stealth-Profil bekommt ein semantisches `Command::Step(Dir)`. Das Beispiel `knorke-host/examples/stealth_yard/` (Schleife ohne Fenster in `session.rs`) (Dev-Abhängigkeiten auf `knorke-integration`, `knorke-runtime`) besitzt die Schleife: Pfeiltasten → `Bindings` → `Step` → `Runtime::frame`.
    Fertig, wenn: die Wachmann-Szene im Fenster läuft und sich der Eindringling mit den Pfeiltasten bewegen lässt. Der PNG-Weg und seine Tests bleiben grün.
 6. **Sitzung aufzeichnen und prüfen.** `Recorder` als Treiber (Schalter `--record`). Am Ende `verify` im Speicher, Ergebnis auf stderr. Ein Test spielt eine synthetische Eingabefolge mit wechselnden `elapsed_nanos` durch Host-Logik ohne Fenster und prüft mit `verify`.
    Fertig, wenn: eine von Hand gespielte Sitzung `verify` besteht und derselbe Command-Strom bei 30 und 144 Bildern pro Sekunde dieselben Prüfsummen ergibt.

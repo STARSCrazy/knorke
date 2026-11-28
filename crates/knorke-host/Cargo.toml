@@ -41,6 +41,8 @@ knorke-integration = { workspace = true, default-features = false, features = ["
 knorke-runtime = { workspace = true }
 knorke-replay = { workspace = true }
 knorke-scene = { workspace = true }
+# Positions and the platform-independent sine for the clips of the example's sound.
+knorke-math = { workspace = true }
 
 # Own lint table instead of `workspace = true`: identical, except that `unsafe_code` is
 # `deny` so that the FFI boundary to SDL3 can opt in locally (ADR 0005).

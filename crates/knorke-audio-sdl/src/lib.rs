@@ -18,4 +18,4 @@ mod output;
 pub use output::{Clip, Output, SendError};
 
 #[cfg(feature = "sdl")]
-pub use knorke_audio::{Command, Config, Mixer};
+pub use knorke_audio::{Bus, Command, Config, Listener, Mixer, Play, SoundId, VoiceId};

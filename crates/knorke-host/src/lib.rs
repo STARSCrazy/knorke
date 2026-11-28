@@ -40,6 +40,24 @@ pub const SHADER_PACK_STALE: DiagnosticCode = DiagnosticCode::new("knorke.host.s
 pub const DEVICE_UNAVAILABLE: DiagnosticCode =
     DiagnosticCode::new("knorke.host.device.unavailable");
 
+/// No audio device could be opened (ADR 0022 step 7).
+#[cfg(feature = "audio")]
+pub const AUDIO_UNAVAILABLE: DiagnosticCode = DiagnosticCode::new("knorke.host.audio.unavailable");
+
+#[cfg(feature = "audio")]
+impl Host {
+    /// Opens the default playback device with a mixer at `cfg.rate` over `clips`; the game
+    /// sends the sounds as mixer commands. Dropping the output closes the device.
+    pub fn open_audio(
+        &self,
+        cfg: audio::Config,
+        clips: Vec<audio::Clip>,
+    ) -> Result<audio::Output, Diagnostic> {
+        audio::Output::open(cfg, clips)
+            .map_err(|e| Diagnostic::error(AUDIO_UNAVAILABLE, format!("audio device: {e}")))
+    }
+}
+
 /// Default cap for one frame's time step: a dragged window or a debugger halt must not turn
 /// into seconds of catch-up; `FixedStep::max_ticks` handles the rest.
 pub const DEFAULT_MAX_FRAME_NANOS: u64 = 250_000_000;

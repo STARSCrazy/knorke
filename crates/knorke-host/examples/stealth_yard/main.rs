@@ -3,6 +3,8 @@
 //!
 //! `KNORKE_SHADER_DIR=target/shaders cargo run -p knorke-host --features sdl-build-static --example stealth_yard -- [seconds] [--record <file>] [--replay <file>]`
 //!
+//! - `--features audio` adds the yard's sound (wind, steps, alarm, catch; see `sound.rs`).
+//!   Without it, neither `knorke-audio-sdl` is built nor an audio device opened.
 //! - `seconds` ends the run after that long (for smoke runs).
 //! - `--record <file>` records the session; at the end it is replayed in memory with
 //!   `verify` (result on stderr) and written to the file.
@@ -17,6 +19,8 @@
 // Shared with `tests/stealth_session.rs`; its `pub` items are its face there.
 #[allow(unreachable_pub)]
 mod session;
+#[cfg(feature = "audio")]
+mod sound;
 
 use std::path::{Path, PathBuf};
 
@@ -136,6 +140,11 @@ fn main() -> Result<(), String> {
     let mut view = View::new(host.gpu(), pack, &scene).map_err(shown)?;
 
     let mut game = Session::new(sim, args.record.is_some().then(|| replay_header(&scene)));
+    #[cfg(feature = "audio")]
+    let mut sound = {
+        let (cfg, clips) = sound::Sound::device();
+        sound::Sound::new(host.open_audio(cfg, clips).map_err(shown)?, &game.rt.sim)
+    };
     let mut before = Pose::of(&game.rt.sim.world.actors);
     let mut total = 0u64;
     loop {
@@ -153,6 +162,8 @@ fn main() -> Result<(), String> {
         let due = game.frame(frame.input(), elapsed);
         if due.ticks > 0 {
             before = now;
+            #[cfg(feature = "audio")]
+            sound.update(&game.rt.sim);
         }
         let pose = Pose::blend(&before, &Pose::of(&game.rt.sim.world.actors), due.alpha);
         if let Some(target) = frame.target() {
@@ -164,6 +175,8 @@ fn main() -> Result<(), String> {
             break;
         }
     }
+    #[cfg(feature = "audio")]
+    drop(sound);
     drop(view);
     drop(host);
 
