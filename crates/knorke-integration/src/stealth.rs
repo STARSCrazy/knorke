@@ -13,11 +13,11 @@ use knorke_ai::group::heading;
 use knorke_ai::state::{StateMachine, Transition};
 use knorke_observe::{NoProbe, Probe, Scope};
 use knorke_perception::{Attention, Budget as SightBudget, PerceptKind, World as SenseWorld};
-use knorke_replay::Simulation;
+use knorke_replay::{ReplayHeader, ReplayLog, Simulation};
 use knorke_runtime::{System, run_systems};
 use knorke_scene::{Component, Registry, Scene, component_path, has_errors};
 use knorke_types::{
-    Diagnostic, DiagnosticCode, EventQueue, Reader, Snapshot, SnapshotBuf, SnapshotError,
+    Checksum, Diagnostic, DiagnosticCode, EventQueue, Reader, Snapshot, SnapshotBuf, SnapshotError,
     SnapshotValue, Tick, Writer, by_tag, restore,
 };
 use schemars::JsonSchema;
@@ -38,6 +38,11 @@ pub const OFF_GRID: DiagnosticCode = DiagnosticCode::new("knorke.stealth.off_gri
 pub const IN_WALL: DiagnosticCode = DiagnosticCode::new("knorke.stealth.in_wall");
 /// A lamp value out of range.
 pub const LAMP_RANGE: DiagnosticCode = DiagnosticCode::new("knorke.stealth.lamp_range");
+
+/// A replay file that cannot be read.
+pub const REPLAY_FILE: DiagnosticCode = DiagnosticCode::new("knorke.stealth.replay_file");
+/// A replay file recorded on another scene.
+pub const REPLAY_SCENE: DiagnosticCode = DiagnosticCode::new("knorke.stealth.replay_scene");
 
 /// The longest side of a yard, in cells.
 pub const MAX_SIDE: i32 = 256;
@@ -592,6 +597,38 @@ pub struct Sim<P = NoProbe> {
     pub world: World,
     /// Sees every system of every tick.
     pub probe: P,
+}
+
+/// The head of a recording of a run on `scene` (ADR 0022 step 6). It names the scene by a
+/// checksum of its canonical text, so formatting does not matter but any change of content
+/// does: a snapshot only fits the scene its simulation was built from (plan 17.1).
+pub fn replay_header(scene: &Scene) -> ReplayHeader {
+    ReplayHeader {
+        app: format!(
+            "knorke.stealth scene {:016x}",
+            Checksum::of(scene.to_text().as_bytes()).0
+        ),
+        ..ReplayHeader::default()
+    }
+}
+
+/// Reads a recording written with [`ReplayLog::write`] and checks that it was made on
+/// `scene`.
+///
+/// # Errors
+/// [`REPLAY_FILE`] for bytes that are no replay of this format, [`REPLAY_SCENE`] for a
+/// replay of another scene.
+pub fn read_replay(bytes: &[u8], scene: &Scene) -> Result<ReplayLog<Command>, Diagnostic> {
+    let log = ReplayLog::<Command>::read(bytes)
+        .map_err(|e| Diagnostic::error(REPLAY_FILE, format!("not a readable replay: {e:?}")))?;
+    let want = replay_header(scene).app;
+    if log.header.app != want {
+        return Err(Diagnostic::error(
+            REPLAY_SCENE,
+            format!("recorded on '{}', this scene is '{want}'", log.header.app),
+        ));
+    }
+    Ok(log)
 }
 
 /// Builds the start of a run from `scene`, with [`NoProbe`].
