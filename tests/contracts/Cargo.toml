@@ -30,6 +30,7 @@ knorke-scene = { workspace = true }
 knorke-light2d = { workspace = true }
 knorke-post = { workspace = true }
 knorke-audio = { workspace = true }
+knorke-input = { workspace = true }
 knorke-gpu = { workspace = true, features = ["test-support"] }
 
 # Own lint table: the allocation counter needs `unsafe impl GlobalAlloc`.

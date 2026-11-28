@@ -45,12 +45,14 @@ const RULES: &[Rule] = &[
             "knorke-agent",
             "knorke-cli",
             "knorke-mcp",
+            "knorke-host",
+            "knorke-input",
             "sdl3*",
             "wgpu*",
         ],
         except: &[],
         through: &[],
-        why: "AI, navigation and perception run headless without graphics, runtime or agent plane",
+        why: "AI, navigation and perception run headless without graphics, runtime, input or agent plane",
     },
     // ADR 0014: the Chiaro port is split into knorke-gpu, knorke-post and knorke-light2d.
     Rule {
@@ -69,6 +71,8 @@ const RULES: &[Rule] = &[
             "knorke-agent",
             "knorke-cli",
             "knorke-mcp",
+            "knorke-host",
+            "knorke-input",
             "sdl3*",
             "wgpu*",
         ],
@@ -225,10 +229,75 @@ const RULES: &[Rule] = &[
             "knorke-perception",
             "knorke-grid",
         ],
-        to: &["knorke-integration"],
+        to: &["knorke-integration", "knorke-host"],
         except: &[],
         through: &[],
         why: "domain modules never import their adapters back",
+    },
+    // ADR 0022: the host is the topmost, detachable layer; games, examples and tests bind it
+    // as a dev-dependency or own binary, which this check ignores.
+    Rule {
+        from: &["knorke-*"],
+        to: &["knorke-host"],
+        except: &["knorke-host"],
+        through: &[],
+        why: "nothing depends on the window host; it is the topmost, detachable layer (ADR 0022)",
+    },
+    Rule {
+        from: &[
+            "knorke-types",
+            "knorke-math",
+            "knorke-observe",
+            "knorke-replay",
+            "knorke-runtime",
+            "knorke-exec",
+            "knorke-grid",
+            "knorke-ai",
+            "knorke-navigation",
+            "knorke-perception",
+            "knorke-render",
+            "knorke-lighting",
+            "knorke-light2d",
+            "knorke-post",
+            "knorke-gpu",
+            "knorke-audio",
+            "knorke-audio-sdl",
+            "knorke-scene",
+            "knorke-integration",
+        ],
+        to: &["knorke-input"],
+        except: &[],
+        through: &[],
+        why: "modules see commands, not keys; input maps to actions only in games (ADR 0010, ADR 0022)",
+    },
+    Rule {
+        from: &["knorke-input"],
+        to: &["*"],
+        except: &["knorke-input", "knorke-types"],
+        through: &[],
+        why: "input bindings fit foreign projects without SDL or engine modules: knorke-types only (ADR 0022)",
+    },
+    Rule {
+        from: &["knorke-host"],
+        to: &["knorke-*"],
+        except: &[
+            "knorke-host",
+            "knorke-types",
+            "knorke-input",
+            "knorke-gpu",
+            "knorke-audio-sdl",
+            "knorke-audio",
+            "knorke-math",
+        ],
+        through: &[],
+        why: "the host knows no AI, navigation, light, scene, profile or runtime; time leaves it as a number (ADR 0022)",
+    },
+    Rule {
+        from: &["knorke-host"],
+        to: &["wgpu*"],
+        except: &[],
+        through: &[],
+        why: "the host reaches the GPU only through knorke-gpu; SDL3 is allowed for window and events (ADR 0022)",
     },
     // Foundation crates: every module depends on them, so their dependency trees are
     // closed lists (ADR 0006). Adding an entry needs an ADR change.
@@ -431,6 +500,42 @@ fn forbidden_path(
     None
 }
 
+/// ADR 0022 rule 7, a feature edge the package graph cannot show: no normal or build
+/// dependency switches on `knorke-gpu/test-support`. Programs get device and shader pack
+/// from the host; the test helpers lock the device process-wide and skip silently.
+fn test_support_leaks(meta: &Value, members: &[&str]) -> Vec<String> {
+    let arr = |v: &Value| v.as_array().cloned().unwrap_or_default();
+    let mut out = Vec::new();
+    for p in arr(&meta["packages"]) {
+        let name = p["name"].as_str().unwrap_or_default();
+        if name == "knorke-gpu" || !p["id"].as_str().is_some_and(|id| members.contains(&id)) {
+            continue;
+        }
+        let gpu_deps: Vec<Value> = arr(&p["dependencies"])
+            .into_iter()
+            .filter(|d| d["name"] == "knorke-gpu" && d["kind"] != "dev")
+            .collect();
+        if gpu_deps.is_empty() {
+            continue;
+        }
+        let in_dep = gpu_deps
+            .iter()
+            .any(|d| arr(&d["features"]).iter().any(|f| f == "test-support"));
+        // A feature naming a dependency feature applies to the normal dependency once one exists.
+        let in_feature = p["features"].as_object().is_some_and(|fs| {
+            fs.values()
+                .flat_map(arr)
+                .any(|f| f == "knorke-gpu/test-support" || f == "knorke-gpu?/test-support")
+        });
+        if in_dep || in_feature {
+            out.push(format!(
+                "{name} -> knorke-gpu[test-support]\n    rule: test helpers only in dev-dependencies; programs get device and shader pack from the host (ADR 0022)"
+            ));
+        }
+    }
+    out
+}
+
 fn violations(meta: &Value) -> Vec<String> {
     let g = graph(meta);
     let members: Vec<&str> = meta["workspace_members"]
@@ -439,7 +544,7 @@ fn violations(meta: &Value) -> Vec<String> {
         .flatten()
         .filter_map(Value::as_str)
         .collect();
-    let mut out = Vec::new();
+    let mut out = test_support_leaks(meta, &members);
     for id in members {
         let Some((name, _)) = g.get(id) else { continue };
         for rule in RULES.iter().filter(|r| matches_any(r.from, name)) {
@@ -710,6 +815,85 @@ mod tests {
                 .any(|l| l.starts_with("knorke-integration -> knorke-gpu -> sdl3-sys")),
             "{v:?}"
         );
+    }
+
+    #[test]
+    fn input_and_host_stay_on_top() {
+        // knorke-ai -> knorke-input, knorke-runtime -> knorke-host, knorke-input -> sdl3-sys,
+        // knorke-host -> knorke-runtime: all four are forbidden.
+        let m = meta(
+            &["knorke-ai", "knorke-runtime", "knorke-input", "knorke-host"],
+            vec![
+                node("knorke-ai", &[("knorke-input", "normal")]),
+                node("knorke-runtime", &[("knorke-host", "normal")]),
+                node("knorke-input", &[("sdl3-sys", "normal")]),
+                node("knorke-host", &[("knorke-runtime", "normal")]),
+                node("sdl3-sys", &[]),
+            ],
+            &[
+                "knorke-ai",
+                "knorke-runtime",
+                "knorke-input",
+                "knorke-host",
+                "sdl3-sys",
+            ],
+        );
+        let v = violations(&m);
+        for start in [
+            "knorke-ai -> knorke-input",
+            "knorke-runtime -> knorke-host",
+            "knorke-input -> sdl3-sys",
+            "knorke-host -> knorke-runtime",
+        ] {
+            assert!(v.iter().any(|l| l.starts_with(start)), "{start}: {v:?}");
+        }
+        let ok = meta(
+            &["knorke-host"],
+            vec![
+                node(
+                    "knorke-host",
+                    &[
+                        ("knorke-input", "normal"),
+                        ("knorke-gpu", "normal"),
+                        ("sdl3-sys", "normal"),
+                        ("knorke-runtime", "dev"),
+                    ],
+                ),
+                node("knorke-input", &[("knorke-types", "normal")]),
+                node("knorke-gpu", &[]),
+                node("knorke-types", &[]),
+                node("sdl3-sys", &[]),
+                node("knorke-runtime", &[]),
+            ],
+            &[
+                "knorke-host",
+                "knorke-input",
+                "knorke-gpu",
+                "knorke-types",
+                "sdl3-sys",
+                "knorke-runtime",
+            ],
+        );
+        assert!(violations(&ok).is_empty(), "{:?}", violations(&ok));
+    }
+
+    #[test]
+    fn test_support_only_in_dev_dependencies() {
+        let with = |kind: Value, features: Value| {
+            let mut m = meta(&["app"], vec![node("app", &[])], &["app"]);
+            m["packages"][0]["dependencies"] =
+                json!([{ "name": "knorke-gpu", "kind": kind, "features": features }]);
+            m
+        };
+        assert!(violations(&with(json!("dev"), json!(["test-support"]))).is_empty());
+        assert!(violations(&with(Value::Null, json!(["sdl"]))).is_empty());
+        assert_eq!(
+            violations(&with(Value::Null, json!(["test-support"]))).len(),
+            1
+        );
+        let mut via_feature = with(Value::Null, json!([]));
+        via_feature["packages"][0]["features"] = json!({ "x": ["knorke-gpu/test-support"] });
+        assert_eq!(violations(&via_feature).len(), 1);
     }
 
     #[test]

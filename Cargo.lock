@@ -172,6 +172,7 @@ dependencies = [
  "knorke-audio",
  "knorke-exec",
  "knorke-gpu",
+ "knorke-input",
  "knorke-integration",
  "knorke-light2d",
  "knorke-math",
@@ -205,6 +206,13 @@ dependencies = [
 
 [[package]]
 name = "knorke-grid"
+version = "0.0.1"
+dependencies = [
+ "knorke-types",
+]
+
+[[package]]
+name = "knorke-input"
 version = "0.0.1"
 dependencies = [
  "knorke-types",

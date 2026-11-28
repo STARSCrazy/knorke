@@ -34,20 +34,31 @@ fn standalone() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Feature sets checked on top of "none", for crates whose optional layers must each build
+    // alone (ADR 0022). Entries for crates not in the workspace yet are skipped.
+    const EXTRA: &[(&str, &[&str])] = &[("knorke-host", &["sdl", "sdl,audio"])];
     let mut failed = Vec::new();
     for name in deps::workspace_libraries(&meta) {
-        eprintln!("== {name}");
-        let status = std::process::Command::new(env!("CARGO"))
-            .args([
-                "check",
-                "--package",
-                &name,
-                "--no-default-features",
-                "--lib",
-            ])
-            .status();
-        if !matches!(status, Ok(s) if s.success()) {
-            failed.push(name);
+        let extra = EXTRA
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map_or(&[][..], |e| e.1);
+        for features in std::iter::once("").chain(extra.iter().copied()) {
+            eprintln!("== {name} [{features}]");
+            let status = std::process::Command::new(env!("CARGO"))
+                .args([
+                    "check",
+                    "--package",
+                    &name,
+                    "--no-default-features",
+                    "--features",
+                    features,
+                    "--lib",
+                ])
+                .status();
+            if !matches!(status, Ok(s) if s.success()) {
+                failed.push(format!("{name} [{features}]"));
+            }
         }
     }
     if failed.is_empty() {
