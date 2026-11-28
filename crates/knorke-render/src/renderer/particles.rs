@@ -11,6 +11,18 @@ impl Renderer {
         id
     }
 
+    /// Replaces an emitter (rate, place, colour, ...) and keeps its id; false for an unknown or
+    /// destroyed id.
+    pub fn set_emitter(&mut self, id: u32, e: Emitter) -> bool {
+        match self.emitters.get_mut(&id) {
+            Some(slot) => {
+                *slot = e;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Removes an emitter; false for an unknown or destroyed id.
     pub fn destroy_emitter(&mut self, id: u32) -> bool {
         self.emitters.remove(&id).is_some()

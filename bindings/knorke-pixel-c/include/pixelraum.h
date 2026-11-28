@@ -313,6 +313,37 @@ PR_API void pr_end(PR_Renderer *r);
 PR_API void pr_set_sun(PR_Renderer *r, const PR_Sun *sun);              /* NULL = no sun */
 PR_API void pr_set_ambient(PR_Renderer *r, uint32_t color, float strength);
 PR_API void pr_set_sky_tint(PR_Renderer *r, uint32_t color, float strength); /* tints the sky texture */
+
+/* Light by time of day: sun by day, moon by night, ambient light fading between night and day.
+ * The host owns the clock. sunrise and day_length in minutes; max_elevation in radians; noon_side +1 = the
+ * sun passes the south (+z) at noon, -1 = the north. Colours 0xRRGGBB. pr_default_day_cycle fills a plain day
+ * (6:00 to 18:00). */
+typedef struct PR_DayCycle {
+    float sunrise, day_length, twilight, max_elevation, noon_side;
+    uint32_t sun_low, sun_high;      /* sun colour near the horizon / high up */
+    float sun_strength;
+    uint32_t moon;
+    float moon_strength;
+    uint32_t ambient_night;
+    float ambient_night_strength;
+    uint32_t ambient_day;
+    float ambient_day_strength;
+    int32_t shadows;                 /* 1 = sun and moon cast shadows */
+} PR_DayCycle;
+PR_API void pr_default_day_cycle(PR_DayCycle *out);
+/* sets sun and ambient for minute after midnight (wraps); returns 0 at night .. 1 by full day for own
+ * lights such as a torch, -1 for a bad pointer */
+PR_API float pr_set_daylight(PR_Renderer *r, const PR_DayCycle *c, float minute);
+
+/* Near fade for upright things (sprites, wall pictures): hidden closer than near (depth ahead, seen from
+ * above), fully shown from near + fade on. flank_slope > 0: also hidden closer than flank_depth when further
+ * to the side than depth * flank_slope. All zero = nothing hidden. */
+typedef struct PR_NearFade {
+    float near, fade, flank_slope, flank_depth;
+} PR_NearFade;
+/* opacity 0..1 of a thing at (x, y, z); 1 for a bad pointer */
+PR_API float pr_near_fade(const PR_Camera *cam, const PR_NearFade *f, float x, float y, float z);
+
 PR_API void pr_set_time(PR_Renderer *r, double time);                   /* seconds, drives torch flicker */
 /* Persistent point lights. Ids are >= 0 and never reused. Any number may exist; each frame uses at most 16:
  * those whose sphere reaches the visible area, nearest to the camera first (ties by lower id). */

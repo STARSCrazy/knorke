@@ -17,9 +17,10 @@
     unsafe_op_in_unsafe_fn
 )]
 
+use knorke_integration::daylight::DayCycle;
 use knorke_integration::pixel::prelude::{
-    self as px, Camera, Cell, GridMap, Options, PointLight, Renderer, Sprite, Sun, Texture, Vec3,
-    Vertex, Wall,
+    self as px, Camera, Cell, GridMap, NearFade, Options, PointLight, Renderer, Sprite, Sun,
+    Texture, Vec3, Vertex, Wall,
     particles::{Emitter, Particle},
 };
 use std::slice;
@@ -662,6 +663,128 @@ pub unsafe extern "C" fn pr_set_ambient(p: *mut PR_Renderer, color: u32, strengt
     }
 }
 
+/// Parameters of a day for `pr_set_daylight`; see `knorke_integration::daylight::DayCycle`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PR_DayCycle {
+    pub sunrise: f32,
+    pub day_length: f32,
+    pub twilight: f32,
+    pub max_elevation: f32,
+    pub noon_side: f32,
+    pub sun_low: u32,
+    pub sun_high: u32,
+    pub sun_strength: f32,
+    pub moon: u32,
+    pub moon_strength: f32,
+    pub ambient_night: u32,
+    pub ambient_night_strength: f32,
+    pub ambient_day: u32,
+    pub ambient_day_strength: f32,
+    pub shadows: i32,
+}
+
+impl From<DayCycle> for PR_DayCycle {
+    fn from(c: DayCycle) -> Self {
+        PR_DayCycle {
+            sunrise: c.sunrise,
+            day_length: c.day_length,
+            twilight: c.twilight,
+            max_elevation: c.max_elevation,
+            noon_side: c.noon_side,
+            sun_low: c.sun_low,
+            sun_high: c.sun_high,
+            sun_strength: c.sun_strength,
+            moon: c.moon,
+            moon_strength: c.moon_strength,
+            ambient_night: c.ambient_night.0,
+            ambient_night_strength: c.ambient_night.1,
+            ambient_day: c.ambient_day.0,
+            ambient_day_strength: c.ambient_day.1,
+            shadows: c.shadows as i32,
+        }
+    }
+}
+
+impl From<&PR_DayCycle> for DayCycle {
+    fn from(c: &PR_DayCycle) -> Self {
+        DayCycle {
+            sunrise: c.sunrise,
+            day_length: c.day_length,
+            twilight: c.twilight,
+            max_elevation: c.max_elevation,
+            noon_side: c.noon_side,
+            sun_low: c.sun_low,
+            sun_high: c.sun_high,
+            sun_strength: c.sun_strength,
+            moon: c.moon,
+            moon_strength: c.moon_strength,
+            ambient_night: (c.ambient_night, c.ambient_night_strength),
+            ambient_day: (c.ambient_day, c.ambient_day_strength),
+            shadows: c.shadows != 0,
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pr_default_day_cycle(out: *mut PR_DayCycle) {
+    if let Some(o) = out.as_mut() {
+        *o = DayCycle::default().into();
+    }
+}
+
+/// Sets sun (or moon) and ambient light for `minute` after midnight. Returns 0 at night .. 1 by
+/// full day (for the host's own lights, e.g. a torch), or -1 for a bad pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pr_set_daylight(
+    p: *mut PR_Renderer,
+    c: *const PR_DayCycle,
+    minute: f32,
+) -> f32 {
+    let (Some(x), Some(c)) = (r(p), c.as_ref()) else {
+        return -1.0;
+    };
+    let light = DayCycle::from(c).at(minute);
+    light.apply(x);
+    light.day
+}
+
+/// Near fade for `pr_near_fade`; see `knorke_render::NearFade`. All zero = nothing hidden.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct PR_NearFade {
+    pub near: f32,
+    pub fade: f32,
+    pub flank_slope: f32,
+    pub flank_depth: f32,
+}
+
+/// Opacity 0..1 of an upright thing at (x, y, z) seen from `cam`; 1 for a bad pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn pr_near_fade(
+    cam: *const PR_Camera,
+    f: *const PR_NearFade,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> f32 {
+    let (Some(c), Some(f)) = (cam.as_ref(), f.as_ref()) else {
+        return 1.0;
+    };
+    let cam = Camera {
+        position: Vec3::new(c.x, c.y, c.z),
+        yaw: c.yaw,
+        ..Camera::default()
+    };
+    let fade = NearFade {
+        near: f.near,
+        fade: f.fade,
+        flank_slope: f.flank_slope,
+        flank_depth: f.flank_depth,
+    };
+    fade.alpha(&cam, Vec3::new(x, y, z))
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pr_set_sky_tint(p: *mut PR_Renderer, color: u32, strength: f32) {
     if let Some(x) = r(p) {
@@ -765,17 +888,12 @@ pub unsafe extern "C" fn pr_emitter_create(p: *mut PR_Renderer, e: *const PR_Emi
 }
 
 /// 1 = changed, 0 = unknown id or bad pointer.
-///
-/// Not supported yet: knorke-render has no `Renderer::set_emitter` (pixelraum had one), so this
-/// always returns 0 and the emitter stays as it was. Kept for link compatibility; Wizardry does
-/// not call it. Destroy and create again instead (the id changes).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pr_emitter_set(
-    _p: *mut PR_Renderer,
-    _id: i32,
-    _e: *const PR_Emitter,
-) -> i32 {
-    0
+pub unsafe extern "C" fn pr_emitter_set(p: *mut PR_Renderer, id: i32, e: *const PR_Emitter) -> i32 {
+    let (Some(x), Some(e)) = (r(p), e.as_ref()) else {
+        return 0;
+    };
+    (id >= 0 && x.set_emitter(id as u32, emitter_from_c(e))) as i32
 }
 
 /// 1 = removed, 0 = unknown id or bad pointer.
@@ -1419,10 +1537,10 @@ mod tests {
             let sparks = draw(ptr::null());
             assert_ne!(sparks, base);
             assert_eq!(draw(g), sparks, "sparks are not culled by the grid");
-            // pixelraum: pr_emitter_set(rate 0) == 1 and the frame is `base` again. knorke-render
-            // has no set_emitter yet, so the call reports 0 and nothing changes.
-            assert_eq!(pr_emitter_set(r, id, &PR_Emitter { rate: 0.0, ..e }), 0);
-            assert_eq!(draw(g), sparks, "unchanged emitter");
+            assert_eq!(pr_emitter_set(r, id, &PR_Emitter { rate: 0.0, ..e }), 1);
+            assert_eq!(draw(g), base, "rate 0 draws nothing");
+            assert_eq!(pr_emitter_set(ptr::null_mut(), id, &e), 0);
+            assert_eq!(pr_emitter_set(r, id, ptr::null()), 0);
             assert_eq!(pr_emitter_destroy(r, id), 1);
             assert_eq!(pr_emitter_destroy(r, id), 0);
             assert_eq!(pr_emitter_set(r, id, &e), 0);
@@ -1817,6 +1935,34 @@ mod tests {
             assert_eq!(std::mem::size_of::<PR_Backdrop>(), 44);
             assert_eq!(std::mem::offset_of!(PR_Backdrop, alpha), 40);
             pr_renderer_destroy(r);
+        }
+    }
+
+    #[test]
+    fn daylight_and_near_fade_through_c() {
+        unsafe {
+            let mut c = std::mem::zeroed::<PR_DayCycle>();
+            pr_default_day_cycle(&mut c);
+            assert_eq!(c.sunrise, 360.0);
+            let r = pr_renderer_create(VERSION, 8, 8);
+            assert_eq!(pr_set_daylight(r, &c, 720.0), 1.0);
+            assert_eq!(pr_set_daylight(r, &c, 0.0), 0.0);
+            assert_eq!(pr_set_daylight(ptr::null_mut(), &c, 0.0), -1.0);
+            pr_renderer_destroy(r);
+            let f = PR_NearFade {
+                near: 0.5,
+                fade: 0.0,
+                flank_slope: 0.0,
+                flank_depth: 0.0,
+            };
+            // yaw 0 looks north (-z)
+            let cam = PR_Camera { yaw: 0.0, ..cam() };
+            let ahead = |d: f32| (cam.x, cam.z - d);
+            let (x, z) = ahead(0.2);
+            assert_eq!(pr_near_fade(&cam, &f, x, 0.0, z), 0.0);
+            let (x, z) = ahead(2.0);
+            assert_eq!(pr_near_fade(&cam, &f, x, 0.0, z), 1.0);
+            assert_eq!(pr_near_fade(ptr::null(), &f, x, 0.0, z), 1.0);
         }
     }
 }

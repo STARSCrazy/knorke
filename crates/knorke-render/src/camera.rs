@@ -75,6 +75,44 @@ impl Camera {
     }
 }
 
+/// Fades upright things (sprites, wall pictures) out near the camera, so nothing stands hugely
+/// enlarged in the view. Hidden closer than `near` (depth ahead, seen from above), fully shown from
+/// `near + fade` on, linear in between. With `flank_slope` > 0 things closer than `flank_depth`
+/// are also hidden when they lie further to the side than `depth * flank_slope` (a wide lens that
+/// sees beside the camera). `Default` hides nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct NearFade {
+    /// Depth below which a thing is hidden.
+    pub near: f32,
+    /// Depth over which it fades in after `near`; 0 = hard cut.
+    pub fade: f32,
+    /// Side limit as side offset per depth; 0 = off.
+    pub flank_slope: f32,
+    /// The side limit applies only closer than this depth.
+    pub flank_depth: f32,
+}
+
+impl NearFade {
+    /// Opacity 0..1 of a thing at `p` seen from `cam`; the host multiplies it into the alpha or
+    /// leaves the thing out at 0.
+    pub fn alpha(&self, cam: &Camera, p: Vec3) -> f32 {
+        let (depth, side) = cam.ground_offset(p);
+        if self.flank_slope > 0.0
+            && depth < self.flank_depth
+            && side.abs() > depth * self.flank_slope
+        {
+            return 0.0;
+        }
+        if self.fade > 0.0 {
+            ((depth - self.near) / self.fade).clamp(0.0, 1.0)
+        } else if depth < self.near {
+            0.0
+        } else {
+            1.0
+        }
+    }
+}
+
 /// Camera basis and projection for one frame.
 #[derive(Clone, Copy, Debug)]
 pub struct View {
@@ -195,6 +233,32 @@ mod tests {
         };
         let (d, l) = cam.ground_offset(Vec3::new(3.0, 0.0, 1.0));
         assert!(near(d, 3.0) && near(l, 1.0));
+    }
+
+    #[test]
+    fn near_fade_hides_close_and_flank_and_fades_in() {
+        let cam = Camera::default(); // looks north (-z)
+        assert_eq!(
+            NearFade::default().alpha(&cam, Vec3::new(0.0, 0.0, 0.0)),
+            1.0
+        );
+        let f = NearFade {
+            near: 0.5,
+            fade: 1.0,
+            flank_slope: 1.0,
+            flank_depth: 2.0,
+        };
+        assert_eq!(f.alpha(&cam, Vec3::new(0.0, 0.0, -0.2)), 0.0);
+        assert!(near(f.alpha(&cam, Vec3::new(0.0, 0.0, -1.0)), 0.5));
+        assert_eq!(f.alpha(&cam, Vec3::new(0.0, 0.0, -3.0)), 1.0);
+        // 1.8 ahead but 1.9 to the side: beyond the flank slope
+        assert_eq!(f.alpha(&cam, Vec3::new(1.9, 0.0, -1.8)), 0.0);
+        let hard = NearFade {
+            near: 0.5,
+            ..NearFade::default()
+        };
+        assert_eq!(hard.alpha(&cam, Vec3::new(0.0, 0.0, -0.4)), 0.0);
+        assert_eq!(hard.alpha(&cam, Vec3::new(0.0, 0.0, -0.6)), 1.0);
     }
 
     #[test]

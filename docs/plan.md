@@ -1091,7 +1091,8 @@ Ziel (Manuel, 2026-11-27): pixelraum (`knorke-render` + `knorke-lighting`) wird 
 | Türen, Tore, Türrahmen, Bögen, Bäume/Gras, Himmel, Abgreifen der Originalgrafik | verworfen für die Engine: Gestaltung des Spiels |
 | C-Schnittstelle als Ersatz für `pixelraum.h` (ADR 0024): `bindings/knorke-pixel-c`, gleiche `pr_*`-API; ohne Licht/Nebel/Mischung bytegleich zu pixelraum (`tests/parity.rs`), mit Licht anders (lineares Licht, ADR 0013), von Manuel 2026-11-28 angenommen | erledigt 2026-11-28 |
 | Wizardry-Build auf `knorke-pixel-c` umgestellt (wizardry7 `9e1f82c0`, Fackel an lineares Licht angepasst), pixelraum nach `D:\Entwicklung\_Archiv\pixelraum` | erledigt 2026-11-28 |
-| `pr_emitter_set` ohne Wirkung (`Renderer::set_emitter` fehlt in `knorke-render`); einzelne `// SAFETY:`-Kommentare in `knorke-pixel-c` fehlen | offen |
+| Wünsche von Wizardry (2026-11-28): `pr_emitter_set` wirkt (`Renderer::set_emitter`); Tageszeit-Licht über C (`pr_default_day_cycle`, `pr_set_daylight`); Nah-Ausblendung `NearFade` / `pr_near_fade` | erledigt 2026-11-28 |
+| Einzelne `// SAFETY:`-Kommentare in `knorke-pixel-c` fehlen; `DayCycle` ohne Mindesthöhe der Sonne am Horizont (Wizardry hatte eine) | offen |
 
 ### 17.15 Einschätzung und Arbeitsliste (2026-11-28)
 

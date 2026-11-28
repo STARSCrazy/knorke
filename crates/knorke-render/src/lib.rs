@@ -37,7 +37,7 @@ pub use backdrop::{
     BACKDROP_TINT, Backdrop,
 };
 pub use blend::{BLEND_ADD, BLEND_ALPHA, BLEND_NONE};
-pub use camera::Camera;
+pub use camera::{Camera, NearFade};
 pub use grid::{Cell, GridMap, Wall};
 pub use knorke_math::Vec3;
 pub use pick::Pick;
