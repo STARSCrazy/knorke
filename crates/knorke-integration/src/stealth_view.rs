@@ -7,14 +7,20 @@
 //! walls also into the occlusion mask, and the 2D light adds every guard's lamp (component
 //! `knorke.stealth.lamp/1`), which turns with the guard and stops at a wall.
 //!
-//! [`View`] plays the host (ADR 0002): it owns its textures, submits and reads back. The
-//! simulation knows nothing of this module.
+//! Two ways out: [`View::draw_into`] records the whole frame into a command buffer and target
+//! the host lends (a window's swapchain texture); the host submits and presents, nothing is
+//! read back (ADR 0002, ADR 0021). [`View::draw`] plays the host itself for tests and PNGs:
+//! its own target, submit, read back. The simulation knows nothing of this module.
 
+use knorke_gpu::sys::gpu::SDL_GPUBufferUsageFlags;
 use knorke_gpu::sys::gpu::{
     SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM, SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
     SDL_GPU_TEXTUREUSAGE_SAMPLER, SDL_GPUTextureUsageFlags,
 };
-use knorke_gpu::{CommandBuffer, DownloadBuffer, Gpu, Texture, TextureDesc, upload_pixels};
+use knorke_gpu::{
+    CommandBuffer, DownloadBuffer, Gpu, Texture, TextureDesc, TextureRef, UploadBuffer,
+    upload_pixels,
+};
 use knorke_grid::Cell;
 use knorke_light2d::light::{Height, LightDesc, LightId, LightType};
 use knorke_light2d::pass_plan::SceneStores;
@@ -118,6 +124,8 @@ pub struct View<'d> {
     colour: Texture<'d>,
     occlusion: Texture<'d>,
     target: Texture<'d>,
+    /// Stages the painted canvas for the copy into `colour` on the host's command buffer.
+    upload: UploadBuffer<'d>,
     lights: LightStore,
     /// Per guard, in the order of the simulation: its lamp, if the scene gives it one.
     lamps: Vec<Option<(LightId, Lamp)>>,
@@ -166,8 +174,11 @@ impl<'d> View<'d> {
                 None => None,
             });
         }
+        let mut upload = UploadBuffer::new(gpu, SDL_GPUBufferUsageFlags(0), 0, "stealth canvas");
+        upload.reserve(ground.len() as u64)?;
         Ok(Self {
             gpu,
+            upload,
             renderer: Light2dRenderer::new(gpu, pack)?,
             colour: rgba8(gpu, (w, h), SDL_GPU_TEXTUREUSAGE_SAMPLER, Some(&ground))?,
             occlusion: rgba8(gpu, (w, h), SDL_GPU_TEXTUREUSAGE_SAMPLER, Some(&mask))?,
@@ -232,14 +243,48 @@ impl<'d> View<'d> {
         d
     }
 
-    /// Draws one frame and returns it as RGBA8 ([`size`](Self::size)). Submits and reads
-    /// back: this is the host (ADR 0002).
+    /// Records one frame into `cmd`, ending in `target` (any size and colour format the
+    /// post pass takes, e.g. the window's sRGB swapchain texture: the picture is scaled to
+    /// it). Neither submits nor reads back: that is the host's (ADR 0002).
+    ///
+    /// # Errors
+    /// What the GPU reports; nothing is recorded then.
+    pub fn draw_into(
+        &mut self,
+        cmd: &mut CommandBuffer<'_>,
+        target: TextureRef<'_>,
+        pose: &Pose,
+    ) -> Result<(), Diagnostic> {
+        self.record(cmd, Some(target), pose)
+    }
+
+    /// Draws one frame into the view's own target and returns it as RGBA8
+    /// ([`size`](Self::size)). Submits and reads back: this is the host (ADR 0002), for
+    /// tests and pictures.
     ///
     /// # Errors
     /// What the GPU reports.
     pub fn draw(&mut self, pose: &Pose) -> Result<Vec<u8>, Diagnostic> {
+        let mut cmd = CommandBuffer::acquire(self.gpu.device())?;
+        self.record(&mut cmd, None, pose)?;
+        let bytes = self.size.0 * self.size.1 * 4;
+        let mut download = DownloadBuffer::new(self.gpu, bytes)?;
+        cmd.copy_pass()?
+            .download_texture(self.target.texture_ref(), &download)?;
+        cmd.submit_and_wait()?;
+        let mut pixels = vec![0u8; bytes as usize];
+        download.read(&mut pixels)?;
+        Ok(pixels)
+    }
+
+    /// The frame into `target`, or into the view's own target for `None`.
+    fn record(
+        &mut self,
+        cmd: &mut CommandBuffer<'_>,
+        target: Option<TextureRef<'_>>,
+        pose: &Pose,
+    ) -> Result<(), Diagnostic> {
         self.paint(pose);
-        upload_pixels(self.gpu, &self.colour, &self.canvas)?;
         for (lamp, &(at, facing)) in self.lamps.iter().zip(&pose.guards) {
             if let Some((id, lamp)) = lamp {
                 let desc = Self::lamp(lamp, at, facing);
@@ -259,7 +304,7 @@ impl<'d> View<'d> {
             occlusion: Some(self.occlusion.texture_ref()),
             ..Light2dFrame::new(
                 self.colour.texture_ref(),
-                self.target.texture_ref(),
+                target.unwrap_or_else(|| self.target.texture_ref()),
                 &projection,
             )
         };
@@ -273,15 +318,11 @@ impl<'d> View<'d> {
         let obstacles = ObstacleStore::new();
         let stores = SceneStores::new(&self.lights, &obstacles);
         let prepared = self.renderer.prepare(&frame, &stores, &settings)?;
-        let mut cmd = CommandBuffer::acquire(self.gpu.device())?;
-        self.renderer
-            .record(&mut cmd, &frame, &settings, prepared)?;
-        let bytes = self.size.0 * self.size.1 * 4;
-        let mut download = DownloadBuffer::new(self.gpu, bytes)?;
-        cmd.copy_pass()?.download_texture(frame.target, &download)?;
-        cmd.submit_and_wait()?;
-        let mut pixels = vec![0u8; bytes as usize];
-        download.read(&mut pixels)?;
-        Ok(pixels)
+        // Everything that can fail has failed by now; record the canvas copy, then the light.
+        self.upload.map()?.bytes()[..self.canvas.len()].copy_from_slice(&self.canvas);
+        cmd.copy_pass()?
+            .upload_to_texture(&self.upload, frame.scene, true)?;
+        self.renderer.record(cmd, &frame, &settings, prepared)?;
+        Ok(())
     }
 }

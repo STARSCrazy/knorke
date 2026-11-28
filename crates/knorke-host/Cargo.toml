@@ -10,8 +10,9 @@ publish.workspace = true
 [features]
 default = []
 # Window, events, device and swapchain over SDL3. Links the SDL3 library the host provides,
-# as in knorke-gpu.
-sdl = ["dep:sdl3-sys", "knorke-gpu/sdl"]
+# as in knorke-gpu. Also switches the picture of the dev-dependency knorke-integration on, for
+# the example `stealth_yard`; without `sdl` nothing of the GPU is built.
+sdl = ["dep:sdl3-sys", "knorke-gpu/sdl", "knorke-integration/stealth-view"]
 # Builds SDL3 from the bundled source and links it statically (needs CMake), as in knorke-gpu.
 sdl-build-static = ["sdl", "sdl3-sys/build-from-source-static", "knorke-gpu/sdl-build-static"]
 # Audio device over knorke-audio-sdl (ADR 0022 step 7).
@@ -28,6 +29,18 @@ sdl3-sys = { workspace = true, optional = true }
 [[example]]
 name = "clear"
 required-features = ["sdl"]
+
+[[example]]
+name = "stealth_yard"
+required-features = ["sdl"]
+
+[dev-dependencies]
+# The stealth yard in a window (example `stealth_yard`): profile, its picture and the runtime.
+# Dev-dependencies only: no library depends on the host (ADR 0022, rule 1).
+knorke-integration = { workspace = true, default-features = false, features = ["stealth"] }
+knorke-runtime = { workspace = true }
+knorke-replay = { workspace = true }
+knorke-scene = { workspace = true }
 
 # Own lint table instead of `workspace = true`: identical, except that `unsafe_code` is
 # `deny` so that the FFI boundary to SDL3 can opt in locally (ADR 0005).

@@ -125,6 +125,14 @@ impl<S: Simulation, D: TickDriver<S>> Runtime<S, D> {
         self.next = self.next.next();
     }
 
+    /// The ticks [`frame`](Self::frame) would run for `elapsed_nanos`, without running them.
+    /// A real-time host samples its input only in a frame with a due tick, so a held key
+    /// gives one command per tick, not one per frame (ADR 0022).
+    pub fn ticks_due(&self, elapsed_nanos: u64) -> u32 {
+        let mut step = self.step;
+        step.advance(elapsed_nanos)
+    }
+
     /// Runs the ticks that are due after `elapsed_nanos` of host time. Submitted commands
     /// go into the first of them and wait if none is due.
     pub fn frame(&mut self, elapsed_nanos: u64) -> Frame {

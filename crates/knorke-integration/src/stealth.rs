@@ -5,7 +5,7 @@
 //! their rules ([`registry`]). Runtime side: [`build`] turns a valid scene into a [`Sim`],
 //! a `Simulation` whose tick runs the table [`SYSTEMS`]: the intruder walks (navigation),
 //! every guard looks (perception), decides (state machine) and walks (navigation). The only
-//! input from outside is [`Command::Goto`]; what happened goes into an `EventQueue`.
+//! input from outside is a [`Command`] ([`Command::Goto`], [`Command::Step`]); what happened goes into an `EventQueue`.
 //!
 //! The scene is read once, in [`build`]. A tick never touches it.
 
@@ -270,11 +270,50 @@ pub enum Command {
     /// The intruder walks to this cell, one cell per tick. Ignored for a cell it cannot
     /// stand on.
     Goto(Cell),
+    /// The intruder steps to the neighbouring cell in this direction (a player's arrow key,
+    /// ADR 0022). Ignored for a cell it cannot stand on.
+    Step(Dir),
 }
 
-by_tag! { Command, SnapshotError::Invalid("stealth command tag") => {
-    0 => Goto(cell),
-} }
+/// One of the four directions of a step; `+y` is south.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Dir {
+    /// `-y`.
+    North,
+    /// `+x`.
+    East,
+    /// `+y`.
+    South,
+    /// `-x`.
+    West,
+}
+
+impl Dir {
+    /// The neighbour of `c` in this direction.
+    pub fn from(self, c: Cell) -> Cell {
+        let (dx, dy) = match self {
+            Dir::North => (0, -1),
+            Dir::East => (1, 0),
+            Dir::South => (0, 1),
+            Dir::West => (-1, 0),
+        };
+        Cell::new(c.x + dx, c.y + dy, c.level)
+    }
+}
+
+// New tags only append: tag 0 keeps the bytes of recorded `Goto` commands.
+by_tag! {
+    Command, SnapshotError::Invalid("stealth command tag") => {
+        0 => Goto(cell),
+        1 => Step(dir),
+    };
+    Dir, SnapshotError::Invalid("stealth direction tag") => {
+        0 => North,
+        1 => East,
+        2 => South,
+        3 => West,
+    };
+}
 
 /// What happened in a tick. `guard` counts the guards in the order of their entity names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -661,7 +700,11 @@ impl<P: Probe> Simulation for Sim<P> {
 
     fn step(&mut self, tick: Tick, commands: &[Command]) {
         // Sync point: outside input changes the world here and nowhere else.
-        for &Command::Goto(goal) in commands {
+        for &command in commands {
+            let goal = match command {
+                Command::Goto(goal) => goal,
+                Command::Step(dir) => dir.from(self.world.actors.intruder),
+            };
             if self.world.open(goal) {
                 self.world.actors.goal = goal;
             }

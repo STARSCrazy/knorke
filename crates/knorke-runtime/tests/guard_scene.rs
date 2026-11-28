@@ -114,6 +114,26 @@ fn a_goal_inside_the_wall_is_ignored() {
     assert_eq!(rt.sim.world.actors.intruder, HIDEOUT);
 }
 
+#[test]
+fn a_step_moves_one_cell_and_stops_at_the_edge() {
+    use knorke_integration::stealth::Dir;
+    let mut rt = fresh();
+    let at = |rt: &Runtime<Sim>| rt.sim.world.actors.intruder;
+    rt.submit(Command::Step(Dir::North));
+    rt.tick();
+    assert_eq!(at(&rt), Cell::new(13, 7, 0));
+    // A held key gives one step per tick, never two.
+    for _ in 0..3 {
+        rt.submit(Command::Step(Dir::South));
+        rt.tick();
+    }
+    // (13, 10) is off the 16 x 10 yard: the last step is ignored.
+    assert_eq!(at(&rt), Cell::new(13, 9, 0));
+    // Without a new step the intruder stays.
+    rt.tick();
+    assert_eq!(at(&rt), Cell::new(13, 9, 0));
+}
+
 /// Remembers the scopes it was told to enter and checks that each one is left again.
 #[derive(Default)]
 struct Names {
@@ -164,6 +184,9 @@ fn frames_from_host_time_match_single_ticks() {
     );
     assert_eq!(rt.next_tick(), Tick(0));
     // Uneven frames: half a tick is still pending, so 2.6 ticks of time give 3 ticks.
+    // Asking first runs nothing.
+    assert_eq!(rt.ticks_due(TICK * 26 / 10), 3);
+    assert_eq!(rt.next_tick(), Tick(0));
     let frame = rt.frame(TICK * 26 / 10);
     assert_eq!(frame.ticks, 3);
     assert!((frame.alpha - 0.1).abs() < 1e-3, "alpha {}", frame.alpha);

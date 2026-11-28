@@ -218,6 +218,10 @@ dependencies = [
  "knorke-audio-sdl",
  "knorke-gpu",
  "knorke-input",
+ "knorke-integration",
+ "knorke-replay",
+ "knorke-runtime",
+ "knorke-scene",
  "knorke-types",
  "sdl3-sys",
 ]
