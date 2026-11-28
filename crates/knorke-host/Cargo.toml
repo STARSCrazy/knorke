@@ -1,0 +1,40 @@
+[package]
+name = "knorke-host"
+description = "Window host of the Knorke Engine on SDL3: window, event loop, clock, GPU device, swapchain and shader pack. The topmost, detachable layer; the game owns the loop (ADR 0022)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+default = []
+# Window, events, device and swapchain over SDL3. Links the SDL3 library the host provides,
+# as in knorke-gpu.
+sdl = ["dep:sdl3-sys", "knorke-gpu/sdl"]
+# Builds SDL3 from the bundled source and links it statically (needs CMake), as in knorke-gpu.
+sdl-build-static = ["sdl", "sdl3-sys/build-from-source-static", "knorke-gpu/sdl-build-static"]
+# Audio device over knorke-audio-sdl (ADR 0022 step 7).
+audio = ["sdl", "dep:knorke-audio-sdl", "knorke-audio-sdl/sdl"]
+
+[dependencies]
+knorke-types = { workspace = true }
+knorke-input = { workspace = true }
+# Without `sdl` only the shader pack format (`kpak`) is used, which needs no SDL.
+knorke-gpu = { workspace = true }
+knorke-audio-sdl = { workspace = true, optional = true }
+sdl3-sys = { workspace = true, optional = true }
+
+[[example]]
+name = "clear"
+required-features = ["sdl"]
+
+# Own lint table instead of `workspace = true`: identical, except that `unsafe_code` is
+# `deny` so that the FFI boundary to SDL3 can opt in locally (ADR 0005).
+[lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

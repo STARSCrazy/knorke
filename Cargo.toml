@@ -22,6 +22,7 @@ members = [
     "crates/knorke-audio",
     "crates/knorke-audio-sdl",
     "crates/knorke-input",
+    "crates/knorke-host",
     "tests/contracts",
     "xtask",
 ]
@@ -62,6 +63,7 @@ knorke-integration = { path = "crates/knorke-integration", version = "0.0.1" }
 knorke-post = { path = "crates/knorke-post", version = "0.0.1" }
 knorke-audio = { path = "crates/knorke-audio", version = "0.0.1" }
 knorke-input = { path = "crates/knorke-input", version = "0.0.1" }
+knorke-audio-sdl = { path = "crates/knorke-audio-sdl", version = "0.0.1" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
